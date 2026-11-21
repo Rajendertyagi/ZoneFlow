@@ -23,7 +23,7 @@ It is **not** a general-purpose window manager. It does not implement triggers, 
 | **Active profile** | The profile currently applied to Windows (windows positioned, hotkeys registered). | Runtime state |
 | **Editor state (draft)** | The configuration currently being modified. May contain unsaved changes. | In-memory until saved |
 
-**Rule:** Saving, editing, and applying are three separate verbs. The UI must never combine them into one ambiguous action. This is the single most important product decision in this document.
+**Rule:** Saving, editing, and applying are three separate verbs. The UI must never combine them into one ambiguous action. This is the single most important product decision in this document. *(One documented exception exists: auto-save of a dirty draft on Exit via the existing close dialog — see §2a. It is disclosed in the dialog copy, not hidden.)*
 
 ### Verbs (distinct, never merged)
 
@@ -75,16 +75,16 @@ It is **not** a general-purpose window manager. It does not implement triggers, 
 ## 2. User journeys
 
 ### Journey A — First run
-1. Open ZoneFlow. The Home view shows the active profile (`Website`, empty by default), monitor/work-area info, and status "No layout applied".
+1. Open ZoneFlow. The Home view shows the **selected** profile (`Website`, empty by default), monitor/work-area info, and status "Not applied" (no profile has been applied yet on first run). The selected profile is not the same as an applied profile — see §1 state dimensions.
 2. The user clicks **New profile**, names it, and is taken to the Layout Editor.
 3. The editor shows a large canvas with a starter template (e.g. Duo) or an empty canvas with a "Create your first zone" prompt.
 4. The user creates/splits/resizes zones, assigns apps by dragging from the library or using the picker, and configures per-app rules contextually.
 5. The user clicks **Save** (draft → profile on disk). The unsaved badge clears.
-6. The user clicks **Apply**. Windows are positioned/launched; the Home view now shows this profile as active.
+6. The user clicks **Apply** to arrange already-running apps, or **Launch & Arrange** to also launch missing apps (D1). The Home view now shows this profile as **Applied**.
 
 ### Journey B — Daily use
 1. Open ZoneFlow (or use the tray). Home shows the active profile and its status.
-2. Switch profiles from the tray menu (one click, no window needed) — the new profile becomes active.
+2. Switch profiles from the tray menu (one click, no window needed) — the new profile is applied immediately when layout is enabled; when disabled, selection changes only (D6).
 3. Use global hotkeys (`Ctrl+Shift+1..9`) to launch/focus apps by zone index; `Ctrl+Alt+arrows` to move the active window between zones; `Ctrl+drag` a title bar to snap into a zone.
 4. If the layout is in the way, use **Disable layout** from the tray; re-enable from the same menu.
 
@@ -115,12 +115,15 @@ These are **decisions** for the intended workflow. Each must be implemented cons
 | **Saving without applying** | Draft is written to disk for that profile. Unsaved badge clears. Windows are **not** repositioned; active profile status is unchanged. |
 | **Applying with unsaved changes** | **(D2 — APPROVED)** **Disable Apply while the draft has unsaved changes.** Show the explanation: "Save or revert your changes before applying." Never silently apply an old saved version when the user expects their edits to be applied. The same rule applies to **Launch & Arrange**. |
 | **Switching profiles with unsaved changes** | **(D2 — APPROVED)** Requires explicit **Discard** or **Cancel**. Never silently lose draft changes. Switching loads the target profile's own zones/rules. |
-| **Apply failure / partial application** | Apply is best-effort per zone. Each zone reports success/failure in the console. A summary shows "Applied 2/3 zones; 1 failed (app not found)". The profile is still marked active (it was selected), but the status shows "Applied with errors". No silent partial success. |
-| **Reverting changes** | Reload the draft from disk for the current profile; clear unsaved badge; reset selection and transient drag/merge state; re-register hotkeys from the saved config. Does not change the active profile on Windows. |
+| **Apply failure / partial application** | Apply is best-effort per zone. Each zone reports success/failure in the console. A summary shows "Applied 2/3 zones; 1 failed (app not found)". The **Applied** dimension records the profile that was attempted with status "Applied with errors" (a valid Applied value — see GUI state model); the **Selected** dimension is independent. No silent partial success. |
+| **Reverting changes** | Reload the draft from disk for the current profile; clear unsaved badge; reset selection and transient drag/merge state. Re-register hotkeys from the **applied profile's** saved config (not the edited profile's), so reverting an edit never replaces the applied profile's hotkeys. Does not change the applied profile on Windows. |
 | **Replacing an application assignment** | **(D3 — APPROVED)** Preserve zone geometry, ID and position. Replace application identity (label, exe, path). Reset application-specific rules (launch mode, URL, title, tab, macro) to defaults. Show confirmation before resetting non-default rules. Do **not** delete the application from the global library. |
 | **Removing an assignment** | Clears the zone's app fields (label/exe/path) and rules; the zone remains as an empty region. The application entry stays in the global library. Never deletes the library entry. |
 | **Same app in multiple zones within one profile** | See §3b — backend limitation documented; safest initial behavior defined. Different profiles may freely assign the same app to different zones. |
-| **Closing with unsaved changes** | Existing close dialog preserved: Minimize to tray / Exit / Cancel + Remember choice. If Exit is chosen with unsaved changes, the draft is auto-saved by `on_exit` (existing behavior) — document this clearly in the dialog copy. |
+| **Closing with unsaved changes** | Existing close dialog preserved: Minimize to tray / Exit / Cancel + Remember choice. **Exception to verb separation:** if Exit is chosen with unsaved changes, the draft is auto-saved by `on_exit` (existing behavior, `mod.rs:1213-1221`). This is a documented exception — the dialog copy must state "Unsaved changes will be saved on exit." |
+| **Apply / Launch & Arrange while layout is Disabled** | Explicit Apply/Launch & Arrange buttons are **inactive while disabled** (D4 suspends all automation). Show "Layout is disabled — enable it to apply" with an **Enable layout** action. Profile selection remains available (select-only). |
+| **Save failure (disk write error)** | Report the error in the console and a toast; keep the draft and unsaved badge intact (nothing is silently lost). Do not change the applied profile. |
+| **Delete / Rename / Duplicate the active or applied profile** | Allowed. Deleting the applied profile clears the Applied dimension (status "Not applied") and selects another profile; renaming keeps the same profile identity (zones/bindings intact); duplicating creates a separate copy. If the draft is dirty, apply the D2 Discard/Cancel rule before destructive operations. |
 
 ---
 
@@ -193,7 +196,7 @@ The canvas stays primary; assignment is a deliberate gesture, not a permanent pa
 ## 4. Main workflows — detailed
 
 ### 4.1 Home / Overview
-- Active profile name + status (Applied / Not applied / Disabled).
+- Active profile name + **independent** status indicators: Applied (profile name / Not applied) and Enabled (Enabled / Disabled) — never one merged badge (see GUI state model).
 - Monitor/work-area information (primary monitor only, clearly labeled).
 - List of saved profiles with **Apply**, **Edit**, **Duplicate**, **Rename**, **Delete** actions.
 - Clear saved-vs-unsaved indicator (draft badge belongs to the editor, not Home).
@@ -266,7 +269,7 @@ Exit
 - Per-zone Launch/Attach: a zone in `Attach` mode must not launch; it only attaches if running (existing `LaunchMode` semantics, `config.rs:90`).
 - Failures are reported per zone (e.g. "Chrome: launched, positioned" / "Obsidian: not running, Attach mode — skipped" / "VS Code: launch failed").
 
-**Current source reality:** `save_apply` (`mod.rs:312-327`) only saves + re-tiles + re-registers hotkeys — it does **not** launch apps. Real launching happens via hotkeys (`Action::LaunchApp`) and the opt-in startup auto-launch worker. So today's Apply is effectively Mode B. **Launch & Arrange** is a new explicit action built on the existing `execute_zone_with_config` path.
+**Current source reality:** `save_apply` (`mod.rs:312-327`) only saves + re-tiles + re-registers hotkeys — it does **not** launch apps. Real launching happens via hotkeys (`Action::LaunchApp`) and the opt-in startup auto-launch worker. So today's Apply already behaves as the **arrange-running-only** action. **Launch & Arrange** is a new explicit action built on the existing `execute_zone_with_config` path.
 
 ---
 
@@ -320,5 +323,5 @@ Currently absent from both the Rust app and the AHK original. Required by the in
 
 ### Remaining genuinely unresolved technical questions (not product decisions)
 1. **Same app in multiple zones within one profile** (§3b): backend returns a single HWND per exe/path — document the limitation and warn in the editor; proper multi-window matching is a deferred capability. No product decision needed — the safe behavior is defined.
-2. **Responsive breakpoints vs minimum window size** (GUI architecture §2.3): must be reconciled before implementation — see that document for the resolution.
+2. **Responsive breakpoints vs minimum window size** (GUI architecture §2.3): **resolved** — minimum window size lowered to 700pt so the 700–799pt breakpoint is reachable. No decision needed.
 3. **Repository default branch** (see final report): `main` is empty and default; `master` holds the project. Recommendation to make `master` default requires authorization — no change made.

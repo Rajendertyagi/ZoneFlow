@@ -12,12 +12,12 @@
 
 | Workstream | Scope | Can start | Integrates at |
 |---|---|---|---|
-| **WS-A — Backend correctness & engine reliability** | Engine bugs (B1–B4, B9–B12); config consistency (B6/B7); dead wrappers. **No GUI functionality.** | Immediately | Checkpoint 1 |
+| **WS-A — Backend correctness & engine reliability** | Engine bugs (B1–B4, B10–B12); config snapshot (B7); atomic config writes (B11 code fix); dead wrappers. **No GUI functionality.** | Immediately | Checkpoint 1 |
 | **WS-B — GUI shell, layout ownership & navigation** | Shell rect ownership, status bar, min window size, Home view, state indicators, responsive breakpoints | Immediately (independent of WS-A) | Checkpoint 2 |
-| **WS-C — Profile management, assignments, Apply/Disable & tray workflows** | Save/Apply split, Launch & Arrange, Disable, tray switching, assignment UI, workflow rules (D1–D6) | Immediately (decisions D1–D6 are APPROVED) | Checkpoint 3 |
+| **WS-C — Profile management, assignments, Apply/Disable & tray workflows** | Save/Apply split, Launch & Arrange, Disable, tray switching, assignment UI, config-source unification (B6), workflow rules (D1–D6) | Start immediately; integrates at Checkpoint 3 (decisions D1–D6 are APPROVED) | Checkpoint 3 |
 | **WS-D — Integration, performance & regression verification** | Performance baseline, automated tests, manual Windows journeys | Baseline immediately; full testing after each checkpoint | Continuous |
 
-**Ownership correction:** GUI functionality must not be hidden inside the backend workstream. B5 (Launch button), B8 (profile switch apply) and the docs fix are GUI/workflow tasks owned by WS-B/WS-C, not WS-A. WS-A owns only engine/config correctness.
+**Ownership correction:** GUI functionality must not be hidden inside the backend workstream. B5 (Launch button), B6 (config-source unification — all disk reloads are in `editor/mod.rs`/`system.rs`, not `engine.rs`), B8 (tray profile apply), and the docs fix are GUI/workflow tasks owned by WS-C, not WS-A. B9 is **not** a bug to fix in this plan (see §2) — current "by zone index" behavior matches the approved product spec. WS-A owns only engine/config correctness.
 
 ### Integration checkpoints
 
@@ -40,20 +40,22 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 |---|---|---|
 | Fix SendInput text injection (B1) | `engine.rs` | Replace ASCII-as-VK with `KEYEVENTF_UNICODE` for text; map `^X` to real VK; support common tokens. URLs and macros must type correctly. |
 | Fix path-based launching (B2) | `engine.rs` | Launch with `zone.path` when non-empty (fallback to `zone.exe`); add `CREATE_NO_WINDOW`; keep 8s wait. |
-| Fix drag-to-snap HWND (B3/B4) | `engine.rs` | Walk to top-level window (`GetAncestor(GA_ROOT)`); add AHK guards: class exclusion, title-bar region, 8px threshold. Engine-side only. |
-| Unify config source (B6) | `config.rs`, `engine.rs` | Provide a single in-memory config source for engine operations; remove engine-side disk reloads. GUI call sites updated by WS-C. |
-| Fix `LOADED_SETTINGS` (B7) | `config.rs` | Pass `&Settings` explicitly or refresh snapshot on save/revert. |
-| Fix `LaunchApp(i)` zone id (B9) | `engine.rs` / `system.rs` | Map hotkey index to zone id, not list position (engine action layer). |
-| Fix `restore_active` parity (B10) | `engine.rs` | Only re-snap when window is maximized (AHK parity). |
+| Fix drag-to-snap HWND (B3) | `engine.rs` | Walk to top-level window (`GetAncestor(GA_ROOT)`) in `window_at`. Engine-side only. |
+| Fix drag guards (B4) — engine helpers | `engine.rs` | Provide engine helpers for class exclusion, title-bar region and 8px threshold. **Call sites are in `Editor::poll_drag` (`mod.rs:400-444`) and must be wired by WS-B/WS-C** — pure "engine-side only" is not achievable. |
+| Fix `LOADED_SETTINGS` (B7) | `config.rs` | Pass `&Settings` explicitly or refresh snapshot on save/revert; verify a runtime tunable edit propagates. |
+| Fix `restore_active` parity (B10) | `engine.rs` | Re-snap only when the window is maximized; when **not** maximized, **minimize** it (AHK `Win+Down` parity, `ScreenLayout.ahk:283-284`). Both branches required. |
 | Wire config retries into drag | `engine.rs` | Drag path must use `settings.dwm_snap_retries`. |
-| Fix `is_auto_start()` (B12) | `autostart.rs` | Wire or remove dead helper with false doc comment. |
+| Fix atomic config writes (B11 code) | `config.rs` | Replace remove-then-rename (`config.rs:390-402`) with a crash-safe write (write temp → flush → atomic rename without deleting the original first). Docs correction is WS-D. |
+| Fix `is_auto_start()` (B12) | `autostart.rs` | **Remove** the dead helper and its false doc comment (wiring it would touch GUI `views.rs`, which is not WS-A scope). |
 
 **Moved out of WS-A (GUI/workflow ownership):**
 - B5 (Launch button real execution + Preview) → **WS-C** (D5).
-- B8 (profile switch apply) → **WS-C** (D6).
+- B6 (config-source unification) → **WS-C** — all disk reloads are in `editor/mod.rs:356-385` and `system.rs:47`, not `engine.rs`.
+- B8 (tray profile apply) → **WS-C** (D6). Rail switching stays draft-load-only per D6.
+- B9 (`LaunchApp(i)`) → **no change in this plan** — current "by zone index" behavior matches the approved product spec (`product-workflow.md:88`); switching to stable zone IDs is a separate future decision.
 - Docs on atomicity (B11) → **WS-D** (docs sync at Checkpoint 4).
 
-**Acceptance criteria:** each bug has a regression test where feasible (key mapping, path selection, zone-id mapping); manual Windows test for drag-to-snap and launching; `cargo test` ≥ 30 pass; clippy/fmt clean.
+**Acceptance criteria:** each bug has a regression test where feasible (key mapping, path selection, B7 propagation, atomic write); manual Windows test for drag-to-snap and launching; `cargo test` ≥ 30 pass; clippy/fmt clean.
 
 ---
 
@@ -67,12 +69,20 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 | Hand rects to children | `canvas.rs`, `rail.rs`, `inspector.rs`, `action_bar.rs` | Children receive their rect; remove `stage_lower_h`, `available_height()-56`, `48.0` guessing. |
 | Canvas-focused layout | `shell.rs`, `canvas.rs` | Canvas gets max space; right aside appears only when a zone is selected or explicitly opened — no forced 3-column. |
 | Library accessibility | `shell.rs`, `rail.rs` | Left rail toggleable/collapsible; library one click away. |
-| Add min window size | `main.rs` | `ViewportBuilder::with_min_inner_size([700,500])` — lowered from 900 so the defined 700–799px responsive breakpoint is reachable (contradiction resolved). |
+| Add min window size | `main.rs` | `ViewportBuilder::with_min_inner_size([700,500])` (logical points) — lowered from 900 so the defined 700–799pt responsive breakpoint is reachable (contradiction resolved). |
 | Add status bar | NEW `editor/status_bar.rs`, `mod.rs` | Engine state, active profile, zone count, version. Move "Engine ready" out of top bar. |
 | State indicators | `top_bar.rs`, `home.rs`, `status_bar.rs` | Four **independent** dimensions: Saved, Applied, Enabled, Selected/Editing — distinct indicators, never one ambiguous badge. |
 | Add Home view | NEW `editor/home.rs`, `state.rs`, `mod.rs` | Active profile status, profile list with Apply/Edit/Duplicate/Rename/Delete, New profile, Disable layout. |
 
-**Acceptance criteria:** screenshots at 1280×720 / 1920×1080 / maximized show no clipping; canvas is primary; library accessible; inspector contextual; status bar visible; `cargo test` pass.
+**Acceptance criteria (measurable):**
+- Screenshots at 1280×720 / 1920×1080 / maximized show no clipping; verify all three responsive breakpoints (≥1100pt, 800–1099pt, 700–799pt) render without overlap.
+- Rect-containment assertions: canvas rect lies within the CentralPanel rect and does not overlap the footer/status bar; rail and aside rects do not overlap the canvas.
+- Library reachable in ≤1 click from any breakpoint (rail toggle or icon-only rail).
+- Inspector appears only when a zone is selected or explicitly opened (no forced 3-column).
+- Status bar visible with engine state, active profile, zone count, version; "Engine ready" removed from top bar.
+- `cargo test` pass.
+
+**Sequencing note:** the Applied and Enabled indicators (and the Home "Disable layout" button) depend on state fields (`applied_profile`, `layout_enabled`) introduced by WS-C (D4). At Checkpoint 2 these fields do not yet exist. WS-B must either add placeholder state or defer those two indicators and the Disable button to Checkpoint 3 — do not block Checkpoint 2 on WS-C state.
 
 ---
 
@@ -95,7 +105,7 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 
 **Acceptance criteria:** full user journey passes manually (Open → Home → Edit → Assign → Save → Apply → Launch & Arrange → Tray switch → Disable → Enable); no data loss; D1–D6 behaviors verified; unsaved-change rules honored; `cargo test` pass.
 
-**Depends on:** WS-B shell hosting Home/tray. Product decisions are approved — no blocking decisions.
+**Start / dependency:** WS-C can **start immediately** (decisions D1–D6 are approved, no blocking decisions) and works against the current backend. It **integrates at Checkpoint 3** on top of WS-A + WS-B, and its Home/tray UI needs the WS-B shell to be hosted. "Immediately" (start) and "Depends on WS-B" (integrate) are not contradictory — they refer to start vs. integration.
 
 ---
 
@@ -108,12 +118,12 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 
 | Metric | How to measure | Baseline (record before work starts) |
 |---|---|---|
-| Idle RAM | Task Manager "Memory (private working set)" after 30s idle | Record actual (earlier claim ~49 MB with glow — verify) |
-| Idle CPU | Task Manager CPU % after 30s idle (should be near 0) | Record actual |
-| Startup time | Launch → window interactive (stopwatch / `Measure-Command`) | Record actual |
+| Idle RAM | `Get-Process screenlayout \| Select-Object -ExpandProperty WorkingSet64` after 30s idle (repeatable; Task Manager "private working set" as cross-check) | Record actual (earlier claim ~49 MB with glow — verify) |
+| Idle CPU | Sample `Get-Process screenlayout` CPU-time delta over a fixed 30s window (Task Manager % is low-precision for a near-zero idle app) | Record actual |
+| Startup time | `Stopwatch` around process start, with an explicit readiness signal (poll for main window visibility) — **not** `Measure-Command`, which only times the launch call, not GUI readiness | Record actual |
 | Release binary size | `Get-Item target/release/screenlayout.exe` | Known: 14,857,216 bytes (~14.17 MiB) — verify |
 
-Rules: measure current build first; re-measure at each checkpoint; record deltas; no new dependencies without measuring impact; no numeric targets until ≥2 measurements exist.
+Rules: measure current build first; re-measure at each checkpoint; record deltas; no new dependencies without measuring impact; no numeric targets until ≥2 measurements exist. Store results in a dated table so deltas are comparable.
 
 ### Automated (every checkpoint)
 - `cargo fmt --check`
@@ -121,17 +131,22 @@ Rules: measure current build first; re-measure at each checkpoint; record deltas
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo build --release`
 
-### Regression tests to add (WS-A)
-- Key mapping: `^e` → Ctrl+E, URL text → correct characters (unit-testable mapping function).
-- Path selection: launch uses `zone.path` when set.
-- Zone-id mapping: hotkey index → zone id after splits/deletes.
-- Config round-trip with new fields (extend `tests/config_file_roundtrip.rs`).
+### Regression tests to add
+- Key mapping (WS-A): `^e` → Ctrl+E, URL text → correct characters (unit-testable mapping function).
+- Path selection (WS-A): launch uses `zone.path` when set (requires a test seam in `execute_zone_inner` so it can be checked without spawning a process).
+- B7 propagation (WS-A): change a runtime tunable → verify it is observed after save/revert.
+- Atomic write (WS-A): config write leaves the original intact if the process is interrupted mid-write.
+- Config round-trip with new fields (WS-A): extend `tests/config_file_roundtrip.rs`.
+- Same-app warning (WS-C): duplicate exe/path within one profile triggers the editor warning; no multi-window claim.
+- B9 is intentionally **not** tested/changed — "by zone index" is the approved behavior.
 
 ### Manual Windows testing (per checkpoint)
 - **Checkpoint 1 (WS-A):** launch an app by full path; type a URL via rules; drag a window by its client area; Ctrl+drag near taskbar; Win+Down on maximized/non-maximized window.
 - **Checkpoint 2 (WS-B):** resize to 1280×720 / 1920×1080 / maximized; verify no clipping; canvas primary; status bar visible; library toggle works.
-- **Checkpoint 3 (WS-C):** full journey (Open → Home → Edit → Assign → Save → Apply → Tray switch → Disable → Enable); unsaved-change prompts; apply-failure reporting.
+- **Checkpoint 3 (WS-C):** full journey (Open → Home → Edit → Assign → Save → Apply → **Launch & Arrange** → Preview → Tray switch → Disable → Enable); unsaved-change prompts; apply-failure reporting; same-app warning.
 - **Checkpoint 4:** repeat all manual tests; verify docs against binary size and behavior; performance measurements recorded.
+
+**WS-D acceptance criteria:** all automated commands pass at every checkpoint; every manual journey in the checkpoint list completes without data loss or clipping; performance baseline recorded before work starts and re-measured at each checkpoint with deltas logged; binary size and RAM show no unexplained regression; docs match the shipped binary (size, atomicity, test count). Any failing criterion blocks integration at that checkpoint.
 
 ---
 
@@ -141,7 +156,7 @@ Rules: measure current build first; re-measure at each checkpoint; record deltas
 |---|---|---|
 | Dead code cleanup | `engine.rs`, `engine_core.rs`, `autostart.rs`, `system.rs` | Remove or wire dead wrappers only after call sites confirmed. |
 | Duplicated defaults | `engine.rs`, `engine_core.rs`, `config.rs` | Single source of truth for snap points, min window, DWM retries. |
-| Docs sync | `README.md`, `CHANGELOG.md`, plan files | Fix exe size (~14.2 MiB), remove stale Tauri language, correct test counts, edition rationale, icon claim. |
+| Docs sync | `README.md`, `CHANGELOG.md`, plan files | Fix the two genuinely stale claims: exe size (~10 MB → ~14.2 MiB) and "atomic writes" (B11 — now actually fixed in code). Other items (Tauri negation, test counts 30 = 27+3, edition rationale, icon claim) are already correct — do not churn them. |
 | Repo hygiene | `.gitignore`, `.gitattributes` | Ignore audit screenshots; add line-ending rules; keep tree clean. |
 
 ---
@@ -157,7 +172,7 @@ Rules: measure current build first; re-measure at each checkpoint; record deltas
 | Workstreams diverge | Integration checkpoints with explicit acceptance criteria; no unfinished integration |
 | Multi-monitor scope creep | Explicitly out of scope — do not implement or plan |
 | Same app in multiple zones within one profile moves the same HWND twice (`engine.rs:315-334`, `:522-534`) | Warn in editor (product §3b); do not claim multi-window support; proper multi-window matching deferred |
-| Responsive breakpoints unreachable | Minimum window size lowered to 700px so 700–799px breakpoint is reachable (GUI §2.3) |
+| Responsive breakpoints unreachable | Minimum window size lowered to 700pt so 700–799pt breakpoint is reachable (GUI §2.3) |
 | Repository default branch is empty `main` while `master` holds the project | See final report — recommendation to make `master` default requires authorization; no change made |
 
 ---

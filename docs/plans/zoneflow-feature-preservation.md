@@ -30,7 +30,7 @@ Legend: ✅ implemented · ⚠️ partial/degraded · ❌ absent
 | 14 | System tray | ⚠️ no profile switching | `system.rs:56-72` (Settings/Re-tile/Reload/Exit), `:161-169`; close-to-tray `dialogs.rs:588-674`. |
 | 15 | Startup/autostart | ✅ (auto-launch opt-in) | `autostart.rs:7-62`; `system.rs:78`; `views.rs:71-81`; auto-launch `config.rs:229` default false, worker `mod.rs:1115-1181`. |
 | 16 | Console/execution logs | ✅ (simulation) | `mod.rs:74-76`, `:276-284`, `:446-465`, `:777-889`; file log `main.rs:12-38`. `run_sequence` is simulation only. |
-| 17 | Settings | ⚠️ most config-only | `config.rs:179-213` (21 fields); UI exposes only auto_start, auto_launch, close_action, gap, grid cols/rows, key_delay, hotkeys. |
+| 17 | Settings | ⚠️ most config-only | `config.rs:179-213` (19 fields); UI exposes only auto_start, auto_launch, close_action, gap, grid cols/rows, key_delay, hotkeys. |
 | 18 | Views/tabs | ✅ | `state.rs:97-117`, `:210-215`; `mod.rs:947-960`; `rail.rs:578-590`; `inspector.rs:120-135`; `dialogs.rs:255-272`. |
 | 19 | Profiles (CRUD/switch) | ✅ | `config.rs:150-156`; `dialogs.rs:545-578`; `mod.rs:962-997`; `rail.rs:736-758`. |
 | 20 | Apply / disable layout | ⚠️ apply yes, disable ❌ | Save & Apply `action_bar.rs:46-61` → `mod.rs:312-327`. No disable concept anywhere (grep: only `autostart.rs:14` comment). |
@@ -68,7 +68,7 @@ Consequences:
 | Process matching | `engine.rs` exe/path | App rules (contextual inspector) | Keep; fix launch to use path (bug) |
 | Browser/URL rules | `engine.rs:413-425` | App rules (Browser tab) | **Fix SendInput text injection** (bug) |
 | Macros | `engine.rs:427-520` | App rules (Automation tab) | **Fix SendInput**; expand parser (bug) |
-| Hotkeys | `system.rs` + `config.rs` | Settings view + tray + global | Keep; fix `LaunchApp(i)` to use zone id not list index |
+| Hotkeys | `system.rs` + `config.rs` | Settings view + tray + global | Keep; `LaunchApp(i)` stays **by zone index** (approved spec, B9 — no change). Zone-id semantics would be a separate future decision. |
 | Drag-to-snap | `overlay.rs` + `mod.rs:400-444` | Global gesture | **Fix HWND selection** (GetAncestor) + add AHK guards |
 | Window snapping | `engine.rs:69-159` | Apply/retile/hotkeys | Keep; wire config retries into drag path |
 | App launching | `engine.rs:387-403` | Apply / hotkeys / auto-launch | **Fix path-based launch** (bug); add CREATE_NO_WINDOW |
@@ -87,6 +87,9 @@ Consequences:
 | Launch button | Console simulation (`run_sequence`) | **(D5)** real execution + separate Preview | Replace simulation with real execution; add Preview action |
 | Disable layout | Absent | **(D4)** runtime-only flag, suspends all automation | New feature; resets to enabled on restart |
 | Same app in multiple zones (one profile) | Backend returns single HWND per exe/path (`engine.rs:315-334`); `retile` moves same window twice (`engine.rs:522-534`) | Warn in editor; no reliable multi-window support | Document limitation (product §3b); proper multi-window matching deferred |
+| **(D2)** Unsaved changes | No dirty guard on Apply | Disable Apply while dirty; Discard/Cancel on profile switch | Add dirty guard + explicit prompts |
+| **(D3)** Replace assignment | `attach_app` overwrites identity, leaves old rules | Preserve geometry/ID, replace identity, reset rules with confirmation | Add confirmation for non-default rules |
+| **(D6)** Profile switching | Rail switch only sets `active_profile` (`rail.rs:748`) | rail=edit / Home=select-only / tray=apply-when-enabled, select-only-when-disabled | Wire tray apply; keep rail as draft load |
 
 ---
 
@@ -98,12 +101,12 @@ Consequences:
 | B2 | Path-based launching broken — path used for matching, not launching | `engine.rs:392` vs `:397` | Apps not on PATH fail to launch |
 | B3 | Drag-to-snap grabs child HWND via `WindowFromPoint` | `engine.rs:675-687` | Wrong window may be moved |
 | B4 | Drag lacks AHK guards (title-bar, class, threshold) | `mod.rs:400-444` vs AHK `:328-350` | Triggers on taskbar/client clicks |
-| B5 | Launch button is console simulation only | `mod.rs:777-889` | Misleading; must perform or be renamed |
+| B5 | Launch button is console simulation only | `mod.rs:777-889` | **(D5)** Replace with real execution; add separate Preview (no simulated success) |
 | B6 | Hotkeys read disk config; auto-launch reads draft | `mod.rs:356-385` vs `:1118` | Inconsistent behavior with unsaved edits |
 | B7 | `LOADED_SETTINGS` frozen at first load | `config.rs:252`, `:359` | Runtime setting edits never propagate |
-| B8 | Profile switch doesn't apply layout | `rail.rs:748` | Active layout lags selection |
-| B9 | `LaunchApp(i)` uses list index, not zone id | `mod.rs:357` | Hotkey targets wrong zone after edits |
-| B10 | `restore_active` ignores maximized state | `engine.rs:547-570` vs AHK `:283-284` | Win+Down parity gap |
+| B8 | Tray profile switch doesn't apply layout | `rail.rs:748` | Tray selection must apply when enabled (D6). **Rail** switching is intentionally draft-load-only per D6 — not a bug. Fix = wire the tray path to Apply; keep rail as select/edit. |
+| B9 | `LaunchApp(i)` uses list index, not zone id | `mod.rs:357`, `system.rs:181` | Product spec says hotkeys launch **by zone index** (`product-workflow.md:88`), which matches current behavior. The "zone id" framing was a mischaracterization — not an unconditional bug. Switching to stable zone IDs would be a separate future decision; do not change semantics in this plan. |
+| B10 | `restore_active` ignores maximized state | `engine.rs:547-570` vs AHK `:283-284` | Win+Down parity gap. Fix must cover **both** branches: re-snap only when the window is maximized; when it is **not** maximized, **minimize** it (AHK `Win+Down` behavior). The else-branch is currently undefined in the plan. |
 | B11 | Config writes not atomic (docs overstate) | `config.rs:396-401` | Crash window; docs wrong |
 | B12 | `is_auto_start()` dead with false doc comment | `autostart.rs:64-92` | UI can misreport state |
 
