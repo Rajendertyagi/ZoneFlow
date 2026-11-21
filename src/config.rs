@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 
 /// Current on-disk schema version. Bump when the structure changes incompatibly.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -246,19 +246,35 @@ impl Default for Settings {
 
 /* ---- Settings snapshot for free functions without an Editor ---------- */
 
-/// Snapshot of the settings loaded at startup. Editor-free helpers (the
-/// resolution selector and app enumeration) read their tunables from here so
-/// the values live in config rather than as literals in those modules.
-static LOADED_SETTINGS: OnceLock<Settings> = OnceLock::new();
+/// Snapshot of the settings for editor-free helpers (resolution selector and
+/// app enumeration). Wrapped in an RwLock so it can be refreshed on load/save;
+/// the outer OnceLock only guards one-time allocation of the lock itself.
+static LOADED_SETTINGS: OnceLock<RwLock<Settings>> = OnceLock::new();
 
-/// The loaded settings, or defaults if no config has been loaded yet (tests).
-pub fn loaded_settings() -> &'static Settings {
-    LOADED_SETTINGS.get_or_init(Settings::default)
+fn settings_cell() -> &'static RwLock<Settings> {
+    LOADED_SETTINGS.get_or_init(|| RwLock::new(Settings::default()))
 }
 
-/// Resolution presets used by `editor::state::ResKey`.
-pub fn resolutions() -> &'static [ResolutionPreset] {
-    &loaded_settings().resolutions
+/// Refresh the snapshot from a config's settings. Called after load and save
+/// so runtime setting edits propagate (fixes bug B7).
+pub fn refresh_loaded_settings(settings: &Settings) {
+    match settings_cell().write() {
+        Ok(mut guard) => *guard = settings.clone(),
+        Err(e) => tracing::warn!(error = %e, "settings snapshot lock poisoned; refresh skipped"),
+    }
+}
+
+/// Current settings snapshot (owned clone).
+pub fn loaded_settings() -> Settings {
+    settings_cell()
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_else(|_| Settings::default())
+}
+
+/// Resolution presets used by `editor::state::ResKey` (owned clone).
+pub fn resolutions() -> Vec<ResolutionPreset> {
+    loaded_settings().resolutions
 }
 
 /* ============================ AppConfig ============================ */
@@ -356,7 +372,7 @@ pub fn load_config() -> AppConfig {
     let cfg = load_config_inner();
     // Publish the loaded settings for editor-free helpers (resolution selector,
     // app enumeration) that have no `Editor` instance to read from.
-    let _ = LOADED_SETTINGS.set(cfg.settings.clone());
+    refresh_loaded_settings(&cfg.settings);
     cfg
 }
 
@@ -387,18 +403,23 @@ fn load_config_inner() -> AppConfig {
     migrate(cfg)
 }
 
-pub fn save_config(cfg: &AppConfig) -> std::io::Result<()> {
-    let path = config_path();
+/// Write `cfg` to `path` via temp file + atomic rename. On Windows
+/// `std::fs::rename` uses MoveFileExW(MOVEFILE_REPLACE_EXISTING), which replaces
+/// an existing destination atomically — no remove-first crash window (bug B11).
+fn write_config_to(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(cfg)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, text)?;
-    // On Windows, rename fails if the destination exists. Remove first, then rename.
-    // (Small crash window; the app keeps config in memory and rewrites on next save.)
-    if path.exists() {
-        fs::remove_file(&path)?;
-    }
-    fs::rename(&tmp, &path)
+    fs::rename(&tmp, path)
+}
+
+pub fn save_config(cfg: &AppConfig) -> std::io::Result<()> {
+    let path = config_path();
+    write_config_to(&path, cfg)?;
+    // Keep the editor-free snapshot in sync with what was just saved (bug B7).
+    refresh_loaded_settings(&cfg.settings);
+    Ok(())
 }
 
 /* ============================ AppConfig helpers ============================ */
@@ -569,5 +590,41 @@ mod tests {
         assert_eq!(cfg.settings.resolutions.len(), 3);
         assert_eq!(cfg.settings.resolutions[2].width, 1920);
         assert_eq!(cfg.settings.resolutions[2].work_height, 1032);
+    }
+
+    #[test]
+    fn refresh_loaded_settings_propagates_runtime_edits() {
+        // Bug B7: the snapshot must reflect a changed setting after refresh.
+        let s = Settings {
+            app_list_cap: 999,
+            grid_cols: 7,
+            ..Default::default()
+        };
+        refresh_loaded_settings(&s);
+        let snap = loaded_settings();
+        assert_eq!(snap.app_list_cap, 999);
+        assert_eq!(snap.grid_cols, 7);
+        // Restore defaults so this test does not leak state into others.
+        refresh_loaded_settings(&Settings::default());
+    }
+
+    #[test]
+    fn write_config_to_replaces_existing_file_atomically() {
+        // Bug B11: an existing destination must be replaced with new content
+        // and no .tmp file left behind (no remove-first crash window).
+        let dir = std::env::temp_dir().join(format!("zoneflow_atomic_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("ScreenLayout.json");
+        let mut cfg = default_config();
+        cfg.gap = 3;
+        write_config_to(&path, &cfg).unwrap();
+        // Second write over an existing destination must succeed (rename replaces).
+        cfg.gap = 42;
+        write_config_to(&path, &cfg).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.gap, 42);
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

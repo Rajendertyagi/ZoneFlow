@@ -22,7 +22,8 @@ impl Editor {
             ui_label(ui, &profile);
 
             let mut res_idx = self.res.idx();
-            let opts: Vec<&str> = ResKey::all().iter().map(|r| r.label()).collect();
+            let labels: Vec<String> = ResKey::all().iter().map(|r| r.label()).collect();
+            let opts: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
             if ui
                 .add(Select::new("res_preset", &mut res_idx, &opts).width(SELECT_W))
                 .changed()

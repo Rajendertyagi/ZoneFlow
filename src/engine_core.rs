@@ -322,6 +322,87 @@ pub fn compensate_rect(zone: Rect, borders: (i32, i32, i32, i32)) -> Rect {
     }
 }
 
+/// A single keyboard injection instruction, decoupled from Win32 so it can be
+/// unit-tested. `send_text`/`send_keys` in `engine.rs` turn these into SendInput.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyEvent {
+    /// Inject a UTF-16 code unit via KEYEVENTF_UNICODE (text, layout-independent).
+    Unicode(u16),
+    /// Tap a virtual-key code (special keys like ENTER/F5).
+    Vk(u16),
+    /// Press modifier VK, tap key VK, release modifier (e.g. Ctrl+T).
+    Chord(u16, u16),
+}
+
+/// Map arbitrary text to Unicode key events (one per UTF-16 code unit).
+/// Unlike the old ASCII-as-VK approach this preserves case, punctuation and
+/// non-ASCII characters and is independent of the keyboard layout.
+pub fn text_to_events(text: &str) -> Vec<KeyEvent> {
+    text.encode_utf16().map(KeyEvent::Unicode).collect()
+}
+
+/// Map an AHK-style token string to key events.
+/// Recognised tokens: ^t, ^l, {ENTER}, {F5}, and generic ^X (X an ASCII letter/digit).
+/// Unrecognised tokens are ignored (preserving the old parser's behavior).
+pub fn keys_to_events(keys: &str) -> Vec<KeyEvent> {
+    const VK_CONTROL: u16 = 0x11;
+    const VK_RETURN: u16 = 0x0D;
+    const VK_F5: u16 = 0x74;
+    keys.split_whitespace()
+        .filter_map(|token| match token {
+            "^t" => Some(KeyEvent::Chord(VK_CONTROL, b'T' as u16)),
+            "^l" => Some(KeyEvent::Chord(VK_CONTROL, b'L' as u16)),
+            "{ENTER}" => Some(KeyEvent::Vk(VK_RETURN)),
+            "{F5}" => Some(KeyEvent::Vk(VK_F5)),
+            _ if token.starts_with('^') && token.chars().count() == 2 => token
+                .chars()
+                .nth(1)
+                .and_then(|c| {
+                    if c.is_ascii() {
+                        Some(c.to_ascii_uppercase() as u16)
+                    } else {
+                        None
+                    }
+                })
+                .map(|vk| KeyEvent::Chord(VK_CONTROL, vk)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Choose the executable to launch: the stored full path when present,
+/// otherwise the exe name (resolved via PATH). AHK parity (§2c).
+pub fn launch_target(zone: &Zone) -> &str {
+    if zone.path.trim().is_empty() {
+        &zone.exe
+    } else {
+        &zone.path
+    }
+}
+
+/// Return groups of zone ids in `profile` that share the same app identity
+/// (case-insensitive exe name, or normalized full path when present).
+/// Used to warn about ambiguous duplicate assignments; changes no runtime behavior.
+pub fn duplicate_app_assignments(profile: &Profile) -> Vec<(String, Vec<i32>)> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, Vec<i32>> = BTreeMap::new();
+    for z in &profile.zones {
+        if z.exe.trim().is_empty() {
+            continue;
+        }
+        let key = if z.path.trim().is_empty() {
+            z.exe.trim().to_lowercase()
+        } else {
+            z.path.trim().replace('/', "\\").to_lowercase()
+        };
+        groups.entry(key).or_default().push(z.id);
+    }
+    groups
+        .into_iter()
+        .filter(|(_, ids)| ids.len() > 1)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,5 +689,84 @@ mod tests {
             zone(3, 50.0, 50.0, 50.0, 50.0),
         ];
         assert_eq!(nearest_zone_in_direction(&zones, 0, 1, 0), Some(1));
+    }
+
+    // --- WS-A regression tests ---
+
+    #[test]
+    fn text_to_events_uses_unicode_not_ascii_as_vk() {
+        // Lowercase 'a' (0x61) must be a Unicode code unit, never VK 0x61
+        // (which is VK_NUMPAD1). This is the core of bug B1.
+        assert_eq!(text_to_events("a"), vec![KeyEvent::Unicode(0x61)]);
+        // Uppercase and punctuation are preserved as their code units.
+        assert_eq!(
+            text_to_events("A!"),
+            vec![KeyEvent::Unicode(0x41), KeyEvent::Unicode(0x21)]
+        );
+    }
+
+    #[test]
+    fn text_to_events_preserves_non_ascii() {
+        // Non-ASCII was silently dropped by the old `if c.is_ascii()` filter.
+        let events = text_to_events("é中");
+        assert_eq!(
+            events,
+            vec![KeyEvent::Unicode(0x00E9), KeyEvent::Unicode(0x4E2D)]
+        );
+    }
+
+    #[test]
+    fn keys_to_events_maps_lowercase_chord_to_uppercase_vk() {
+        // `^a` must produce Ctrl+VK_A (0x41), not Ctrl+0x61. Bug B1 chord half.
+        assert_eq!(keys_to_events("^a"), vec![KeyEvent::Chord(0x11, 0x41)]);
+        assert_eq!(keys_to_events("^t"), vec![KeyEvent::Chord(0x11, 0x54)]);
+        assert_eq!(keys_to_events("{ENTER}"), vec![KeyEvent::Vk(0x0D)]);
+        assert_eq!(keys_to_events("{F5}"), vec![KeyEvent::Vk(0x74)]);
+    }
+
+    #[test]
+    fn keys_to_events_ignores_unrecognised_tokens() {
+        assert!(keys_to_events("not a token").is_empty());
+        assert!(keys_to_events("^é").is_empty()); // non-ASCII chord ignored
+    }
+
+    #[test]
+    fn launch_target_prefers_full_path_then_falls_back_to_exe() {
+        let mut z = Zone::new(1, "", "app.exe", 0.0, 0.0, 50.0, 100.0);
+        assert_eq!(launch_target(&z), "app.exe");
+        z.path = r"C:\Program Files\Vendor\app.exe".into();
+        assert_eq!(launch_target(&z), r"C:\Program Files\Vendor\app.exe");
+        z.path = "   ".into(); // whitespace-only treated as empty
+        assert_eq!(launch_target(&z), "app.exe");
+    }
+
+    #[test]
+    fn duplicate_app_assignments_groups_same_exe_and_path() {
+        let profile = Profile {
+            name: "test".into(),
+            hotkey: String::new(),
+            zones: vec![
+                Zone::new(1, "", "chrome.exe", 0.0, 0.0, 50.0, 100.0),
+                Zone::new(2, "", "CHROME.EXE", 50.0, 0.0, 50.0, 100.0), // case-insensitive dup
+                Zone::new(3, "", "code.exe", 0.0, 0.0, 50.0, 100.0),
+            ],
+        };
+        let dups = duplicate_app_assignments(&profile);
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].0, "chrome.exe");
+        assert_eq!(dups[0].1, vec![1, 2]);
+    }
+
+    #[test]
+    fn duplicate_app_assignments_empty_for_distinct_apps() {
+        let profile = Profile {
+            name: "test".into(),
+            hotkey: String::new(),
+            zones: vec![
+                Zone::new(1, "", "chrome.exe", 0.0, 0.0, 50.0, 100.0),
+                Zone::new(2, "", "code.exe", 50.0, 0.0, 50.0, 100.0),
+            ],
+        };
+        assert!(duplicate_app_assignments(&profile).is_empty());
     }
 }

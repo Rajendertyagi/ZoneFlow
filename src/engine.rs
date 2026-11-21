@@ -1,6 +1,7 @@
 use crate::config::{AppConfig, TabBehavior, Zone};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use std::os::windows::process::CommandExt;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
@@ -10,17 +11,22 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, WindowFromPoint, GWL_EXSTYLE, SET_WINDOW_POS_FLAGS, SPI_GETWORKAREA,
-    SW_MAXIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW,
+    EnumWindows, GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+    ShowWindow, SystemParametersInfoW, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, SET_WINDOW_POS_FLAGS,
+    SPI_GETWORKAREA, SW_MAXIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW,
 };
 
 // Pure geometry lives in `engine_core`. Re-exporting keeps the exact `engine::*`
 // API that `editor.rs` and `overlay.rs` already call.
-use crate::engine_core::{border_offsets, compensate_rect};
+use crate::engine_core::{
+    border_offsets, compensate_rect, duplicate_app_assignments, keys_to_events, launch_target,
+    text_to_events, KeyEvent,
+};
 pub use crate::engine_core::{compute_zones, zone_at, zone_by_id, zone_pixels, Rect};
 
 /// Default number of times a window position is applied to work around DWM's
@@ -389,8 +395,14 @@ fn execute_zone_inner(
         if matches!(zone.launch_mode, crate::config::LaunchMode::Attach) {
             return Err(format!("{} not running (attach mode)", zone.exe));
         }
-        if std::process::Command::new(&zone.exe).spawn().is_err() {
-            return Err(format!("failed to launch {}", zone.exe));
+        // Launch the exact stored path when present (AHK parity), falling back
+        // to the exe name resolved via PATH. CREATE_NO_WINDOW avoids a console
+        // flash for console-subsystem executables.
+        let target = launch_target(zone);
+        let mut cmd = std::process::Command::new(target);
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        if cmd.spawn().is_err() {
+            return Err(format!("failed to launch {}", target));
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         while std::time::Instant::now() < deadline {
@@ -438,28 +450,49 @@ fn execute_zone_inner(
 }
 
 fn send_keys(keys: &str) {
-    // Minimal SendInput implementation for common AHK-style tokens
-    for token in keys.split_whitespace() {
-        match token {
-            "^t" => chord(0x11, 0x54),
-            "^l" => chord(0x11, 0x4C),
-            "{ENTER}" => tap(0x0D),
-            "{F5}" => tap(0x74),
-            _ => {
-                if token.starts_with('^') && token.len() == 2 {
-                    if let Some(c) = token.chars().nth(1) {
-                        chord(0x11, c as u16);
-                    }
-                }
-            }
-        }
+    // Pure token mapping lives in engine_core (unit-tested); this function only
+    // turns the resulting KeyEvents into SendInput calls.
+    for event in keys_to_events(keys) {
+        inject_event(event);
     }
 }
 
 fn send_text(text: &str) {
-    for c in text.chars() {
-        if c.is_ascii() {
-            tap(c as u16);
+    // Unicode injection: preserves case, punctuation and non-ASCII, and is
+    // independent of the keyboard layout. Replaces the broken ASCII-as-VK path.
+    for event in text_to_events(text) {
+        inject_event(event);
+    }
+}
+
+fn inject_event(event: KeyEvent) {
+    match event {
+        KeyEvent::Unicode(unit) => send_unicode(unit),
+        KeyEvent::Vk(vk) => tap(vk),
+        KeyEvent::Chord(mod_vk, key_vk) => chord(mod_vk, key_vk),
+    }
+}
+
+/// Inject one UTF-16 code unit via KEYEVENTF_UNICODE (down + up).
+fn send_unicode(unit: u16) {
+    // SAFETY: `input` is a local, correctly initialized keyboard INPUT with
+    // wVk = 0 and wScan = the code unit; KEYEVENTF_UNICODE makes Windows read
+    // wScan. The one-element slice is contiguous and lives for the call.
+    unsafe {
+        let size = std::mem::size_of::<windows::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32;
+        let mut input = windows::Win32::UI::Input::KeyboardAndMouse::INPUT {
+            r#type: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_KEYBOARD,
+            ..Default::default()
+        };
+        input.Anonymous.ki.wVk = windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(0);
+        input.Anonymous.ki.wScan = unit;
+        input.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE;
+        if windows::Win32::UI::Input::KeyboardAndMouse::SendInput(&[input], size) == 0 {
+            tracing::warn!("SendInput failed to inject Unicode key-down");
+        }
+        input.Anonymous.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        if windows::Win32::UI::Input::KeyboardAndMouse::SendInput(&[input], size) == 0 {
+            tracing::warn!("SendInput failed to inject Unicode key-up");
         }
     }
 }
@@ -524,6 +557,15 @@ pub fn retile(cfg: &AppConfig) {
     let zones = compute_zones(cfg.active(), area, cfg.gap);
     let retries = cfg.settings.dwm_snap_retries;
     let min_px = cfg.settings.min_window_px;
+    // Report ambiguous duplicate assignments rather than silently moving the
+    // same HWND twice (last zone wins). No behavior change — warning only.
+    for (app, ids) in duplicate_app_assignments(cfg.active()) {
+        tracing::warn!(
+            app = %app,
+            zone_ids = ?ids,
+            "app assigned to multiple zones in one profile; only one window can be placed, last zone wins"
+        );
+    }
     for z in cfg.active().zones.iter() {
         if let Some(r) = zone_by_id(&zones, z.id) {
             if let Some(h) = find_window_by_path_min(&z.exe, &z.path, min_px) {
@@ -673,16 +715,18 @@ pub fn cursor_pos() -> (i32, i32) {
 }
 
 pub fn window_at(x: i32, y: i32) -> Option<HWND> {
-    // SAFETY: `WindowFromPoint` takes a `POINT` by value and returns an `HWND`; it
-    // reads no caller memory and has no pointer preconditions. The returned handle
-    // is null-checked before being wrapped in `Some`.
+    // SAFETY: `WindowFromPoint` takes a `POINT` by value and returns an `HWND`;
+    // `GetAncestor` walks that handle to its root with a valid flag. Neither
+    // reads caller memory. Handles are null-checked before use. Walking to the
+    // GA_ROOT fixes bug B3: WindowFromPoint can return a child control, and
+    // moving that child instead of the top-level app window displaces a subcontrol.
     unsafe {
         let h = WindowFromPoint(POINT { x, y });
-        if !h.0.is_null() {
-            Some(h)
-        } else {
-            None
+        if h.0.is_null() {
+            return None;
         }
+        let root = GetAncestor(h, GA_ROOT);
+        Some(if root.0.is_null() { h } else { root })
     }
 }
 

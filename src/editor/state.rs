@@ -27,11 +27,13 @@ impl ResKey {
             Self::Fhd => 2,
         }
     }
-    fn preset(self) -> Option<&'static crate::config::ResolutionPreset> {
-        crate::config::resolutions().get(self.idx())
+    fn preset(self) -> Option<crate::config::ResolutionPreset> {
+        crate::config::resolutions().into_iter().nth(self.idx())
     }
-    pub(super) fn label(self) -> &'static str {
-        self.preset().map(|p| p.label.as_str()).unwrap_or("Unknown")
+    pub(super) fn label(self) -> String {
+        self.preset()
+            .map(|p| p.label)
+            .unwrap_or_else(|| "Unknown".into())
     }
     pub(super) fn width(self) -> i32 {
         self.preset().map(|p| p.width as i32).unwrap_or(1920)
