@@ -1,7 +1,7 @@
 # ZoneFlow — Rust + Axum + Svelte: Detailed Implementation Plan
 
 **Status:** Implementation-ready companion to the architecture plan. **No implementation is authorized by this file.**
-**Finalized:** 2026-11-22 · **Branch:** `main` at `5e74e85`.
+**Finalized:** 2026-11-22 · **Plan commit:** `fb5f8d4` (this finalization) · **Source baseline:** `5e74e85` (pre-finalization state; tests below were executed there).
 **Relationship:** Implements `zoneflow-rust-axum-svelte-architecture.md`, which is the **single authoritative source** for architecture decisions (thread ownership, startup/shutdown, message mechanism, API contracts, D1–D6). This document contains code-level API details, task breakdown, test classification and acceptance criteria. It must not restate architecture decisions differently — if they disagree, the architecture document wins.
 
 ---
@@ -71,11 +71,43 @@ impl IntoResponse for ApiError {
 
 Token is per-launch; "expired" means the process restarted (old cookie no longer matches).
 
-**SSE:** `Sse::new(BroadcastStream::new(rx).filter_map(...)).keep_alive(KeepAlive::default())` (15 s default). One `EventSource` per client. `tokio-stream` needs feature `sync`.
+**SSE:** `Sse::new(BroadcastStream::new(rx).filter_map(...)).keep_alive(KeepAlive::default())` (15 s default). One `EventSource` per client. `tokio-stream` needs feature `sync`. Each handler must end its stream on shutdown so graceful shutdown cannot hang:
+
+```rust
+use futures_util::stream::StreamExt;
+use tokio::sync::watch;
+async fn events(State(mut stop): State<watch::Receiver<bool>>, State(tx): State<broadcast::Sender<String>>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let rx = tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|r| async move { r.ok().map(|s| Event::default().data(s)) });
+    let stopper = async move { let _ = stop.changed().await; }; // Err (sender dropped) also ends it
+    Sse::new(stream.take_until(stopper)).keep_alive(KeepAlive::default())
+}
+```
+
+`take_until` is `futures_util::StreamExt` (no extra feature); `watch` needs tokio `sync`. The handler holds only a shutdown receiver and a broadcast receiver — it never awaits the command worker, so closing SSE cannot deadlock shutdown.
 
 **Static assets:** `#[derive(Embed)] #[folder = "dist/"] struct Assets;` — `Assets::get(path)` returns `EmbeddedFile { data: Cow<'static,[u8]>, metadata }`. `Metadata` has **no `mimetype()`** — derive Content-Type from the suffix. SPA fallback to `index.html` for extensionless paths; 404 for missing assets. Debug builds read from disk; release embeds.
 
-**Ephemeral port + shutdown:** `TcpListener::bind("127.0.0.1:0")`, read `local_addr().port()` before `serve`. `axum::serve(listener, app).with_graceful_shutdown(async { let _ = shutdown_rx.await; })`.
+**Tokio runtime construction (verified):** build the `current_thread` runtime explicitly with both drivers enabled, on the dedicated server thread. `Handle::block_on` cannot drive I/O/timers on a current-thread runtime — only `Runtime::block_on` can.
+
+```rust
+use tokio::runtime::Builder;
+let server = std::thread::spawn(move || {
+    let rt = Builder::new_current_thread().enable_all().build().unwrap(); // enable_all = enable_io + enable_time
+    rt.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();   // read BEFORE serve moves the listener
+        bound_tx.send(Bound { port, token }).unwrap();
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async { let _ = axum_shutdown_rx.await; })
+            .await.unwrap();
+    });
+});
+```
+
+The declared features `["rt","macros","net","sync","time"]` support every API used: `enable_io()` (via `net`), `enable_time()` (via `time`), `spawn_blocking` (`rt`), `TcpListener` (`net`), `watch`/`broadcast`/`oneshot` (`sync`), SSE keep-alive (`time`). `io-util` and `signal` are **not** needed.
+
+**Graceful shutdown (verified from axum 0.8.9 source):** `with_graceful_shutdown` stops accepting connections, then awaits `close_tx.closed()` — i.e. **all** connection tasks. An endless SSE stream hangs that await forever; there is no built-in timeout. Therefore each SSE handler selects on a `watch` shutdown receiver via `StreamExt::take_until`, and shutdown fires `sse_tx.send_replace(true)` **before** the Axum signal (architecture §3.6 steps 2–3). `axum::serve` drops the listener itself; you cannot drop it externally (it is moved into `Serve`).
 
 **Handler tests:** `Router` implements `tower::Service`; use `ServiceExt::oneshot` + `http_body_util::BodyExt::collect`. No server needed.
 
@@ -93,25 +125,30 @@ use windows::{core::{w, PCWSTR}, Win32::{
 const CLASS: PCWSTR = w!("ZoneFlow.MsgHost.7f3a9b7c");
 const WM_WAKE: u32 = WM_APP + 1;
 const WM_STOP: u32 = WM_APP + 2;
+const TIMER_SAFETY_DRAIN: usize = 1;   // always-on 100 ms queue safety net
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        WM_WAKE | WM_TIMER => { drain_queue(); LRESULT(0) }   // non-blocking only
-        WM_STOP => { DestroyWindow(hwnd).ok(); LRESULT(0) }
-        WM_DESTROY => { PostQuitMessage(0); LRESULT(0) }       // owner thread only
+        WM_WAKE => { drain_queue(); LRESULT(0) }              // non-blocking only
+        WM_TIMER if wp.0 == TIMER_SAFETY_DRAIN => { drain_queue(); LRESULT(0) }
+        WM_STOP => { PostQuitMessage(0); LRESULT(0) }         // owner thread; NO DestroyWindow here
+        WM_DESTROY => { let _ = KillTimer(Some(hwnd), TIMER_SAFETY_DRAIN); LRESULT(0) }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }
 ```
 
+`WM_STOP` only calls `PostQuitMessage(0)` on the owning thread — it does **not** destroy the window. `WM_QUIT` is never dispatched as a normal window message. Window destruction happens last in the architecture §3.6 sequence, after all producers are joined.
+
 - `RegisterClassW` returns 0 on failure; tolerate `ERROR_CLASS_ALREADY_EXISTS` (1410); register once.
 - `CreateWindowExW(WINDOW_EX_STYLE(0), CLASS, w!(""), WINDOW_STYLE(0), 0,0,0,0, Some(HWND_MESSAGE), None, Some(hinstance.into()), None)`.
 - `PostMessageW(Some(hwnd), WM_WAKE, WPARAM(0), LPARAM(0))` — check `Result`; on failure log and rely on the safety timer. Queue limit is 10,000; unreachable here but checked.
-- `SetTimer(hidden_hwnd, 1, 100, None)` → `WM_TIMER` drains the queue as a safety net so no payload is stranded.
-- `GetMessageW(&mut msg, None, 0, 0)` — never pass the hidden HWND as filter; check `-1 / 0 / > 0`.
+- `SetTimer(hidden_hwnd, TIMER_SAFETY_DRAIN, 100, None)` → `WM_TIMER` drains the queue as a safety net so no payload is stranded. `WM_TIMER` is low-priority/coalesced (fine for a safety net) and survives modal loops. `KillTimer` does not remove already-queued `WM_TIMER`s, so the WndProc branch is idempotent.
+- **Drag polling is not a second `WM_TIMER`:** use `MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, default())` in the message loop — `timeout = 16 ms` while a drag is active (on `WAIT_TIMEOUT`, poll `GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 && GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0` + `GetCursorPos` + update overlay), `INFINITE` when idle (zero CPU). `GetAsyncKeyState` reflects state at call time; ignore its low bit. No low-level mouse hook.
+- `GetMessageW(&mut msg, None, 0, 0)` — never pass the hidden HWND as filter; check `-1 / 0 / > 0`. (When using the `MsgWaitForMultipleObjectsEx` loop, drain with `PeekMessageW(..., PM_REMOVE)` instead; both patterns are in architecture §3.7.)
 - `HwndSend(*mut c_void)` newtype with `unsafe impl Send/Sync`, justified by an `Arc<AtomicBool>` accepting flag and join-before-destroy ordering.
 - D2 `MessageBoxW` owner = `None` (not `HWND_MESSAGE`); its modal loop dispatches window messages so `WM_WAKE`/`WM_TIMER` still arrive.
-- Teardown: accepting=false → join producers → `DestroyWindow` → `PostQuitMessage(0)` on main → `UnregisterClassW` (optional at exit).
+- **Teardown is the single ordered sequence in architecture §3.6** — do not destroy the window here. `WM_STOP` → `PostQuitMessage(0)` on main → loop exits → close SSE → fire Axum shutdown → join Tokio → drop `cmd_tx` → join worker → final drain → kill timers → `DestroyWindow(overlay)` → `DestroyWindow(hidden)` → drop `System` on main → `UnregisterClassW` (optional).
 
 ### 1.3 Tray and hotkeys (verified tray-icon 0.26 / global-hotkey 0.10 / muda 0.21)
 
@@ -180,13 +217,13 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 | Task | Files | Responsibility | Verification |
 |---|---|---|---|
 | B1 | `api/state.rs`, `api/commands.rs`, `api/worker.rs`, `api/dto.rs` | Authoritative state, command worker, D1–D6 command logic, D2 dirty contract | Unit tests per command; dirty/clean × discard/cancel matrix; slow command does not block unrelated request |
-| B2 | `api/mod.rs`, `api/routes.rs` | Router, all §5 endpoints, ephemeral port, graceful shutdown | `oneshot` tests for every endpoint (status + JSON), 401/403/409 |
+| B2 | `api/mod.rs`, `api/routes.rs` | Router, all §5 endpoints incl. `/api/shutdown`, ephemeral port, SSE-close watch + graceful shutdown | `oneshot` tests for every endpoint (status + JSON), 401/403/409; test that SSE stream ends on `send_replace(true)` so `serve` returns |
 | B3 | `api/middleware.rs` | Token generation, Host validation, session cookie, response headers | Missing token 401, bad token 403, bad Host 403, valid 200 |
 | B4 | `api/events.rs` | SSE broadcast, keep-alive, session reaper | Two subscribers receive one event; lagged subscriber skips |
 | B5 | `web/assets.rs` | rust-embed static handler, Content-Type, SPA fallback | `/` → index.html; `/assets/x.js` → JS type; missing asset 404 |
 | B6 | `session.rs` | Browser launch (`open::that_detached` via `spawn_blocking`), session lifecycle | Session created/reaped; browser close does not stop Rust (manual) |
-| B7 | `native_loop.rs` (overlay part) | Overlay layered window on main, `UpdateLayeredWindow` per-zone alpha, `WM_TIMER` drag poll | Manual: Ctrl+drag highlight, click-through, no taskbar entry |
-| B8 | `main.rs`, `native_loop.rs` | Main=native thread, message window, queue, safety timer, startup/shutdown, reverse updates | Native-loop unit tests (wake-up, modal-dialog message, safety timer); manual tray/hotkey/shutdown |
+| B7 | `native_loop.rs` (overlay part) | Overlay layered window on main, `UpdateLayeredWindow` per-zone alpha, `MsgWaitForMultipleObjectsEx` drag poll (16 ms active / INFINITE idle) | Manual: Ctrl+drag highlight, click-through, no taskbar entry; idle CPU ~0 |
+| B8 | `main.rs`, `native_loop.rs` | Main=native thread, message window, queue, safety timer ID 1, startup/shutdown per architecture §3.6, reverse updates | Native-loop unit tests (wake-up, modal-dialog message, safety timer, shutdown ordering); manual tray/hotkey/shutdown with all threads joined |
 | B9 | `system.rs`, `native_loop.rs` | Dynamic tray menu, applied/selected markers, D2 native dialog, hotkey re-registration | Menu rebuild after CRUD; checkmark; D2 matrix; Disable/Enable; Open editor/Settings/Exit |
 | F1 | `frontend/` scaffold | Vite/Svelte/Tailwind/shadcn config, scripts | `npm run check` clean; `npm run build` emits `dist/`; no Node needed to serve |
 | F2 | `api/client.ts`, `api/events.ts`, `state/app.svelte.ts` | Bootstrap, cookie session, SSE, mirrored state, dirty flag | Store reactivity; dirty flag; SSE reconnect; auth failure paths |
@@ -238,7 +275,7 @@ These test the **current egui app and backend**, not the new architecture. No ne
 
 ### 6.2 Planned tests (not yet written or run)
 
-- **Backend unit/integration:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop wake-up, modal-dialog message and safety-timer tests; static handler Content-Type tests.
+- **Backend unit/integration:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop wake-up, modal-dialog message and safety-timer tests; shutdown-sequence test (SSE ends → `serve` returns → worker joins → windows destroyed after producers stop); static handler Content-Type tests.
 - **Frontend:** `svelte-check` + `tsc` clean; store reactivity and dirty flag; SSE reconnect; auth failure paths. Vitest only if justified before adding.
 - **Real editing functional test (dev-only):** browser automation (e.g. Playwright, test-only dependency) performs a real SVG zone-boundary drag, asserts the frontend interaction completes and the backend persists the geometry. This is a functional test, not the `PointerActivity` benchmark.
 - **Manual Windows journeys:** tray-only operation; hotkeys with browser closed; browser open/close lifecycle; overlay Ctrl+drag; full edit→save→apply→launch→tray→disable→enable; unsaved-change prompts including tray Discard/Cancel; rename a profile in the browser and confirm the tray updates with no other input; graceful shutdown with all threads joined.
