@@ -4,25 +4,30 @@
 #   powershell -ExecutionPolicy Bypass -File docs\performance\benchmark.ps1 -Mode Background -Exe <path>
 #
 # Modes:
-#   Background    - Rust backend only, browser closed. Runnable now with the
-#                   headless spike exe. This is the always-on workload.
-#   EditorOpen    - Rust backend + browser with the editor loaded. Requires
-#                   -Url (the tokenised editor URL) and a running frontend.
-#   ActiveEditing - EditorOpen plus 20s of synthetic pointer movement over the
-#                   SVG canvas. Requires -Url and a running frontend.
+#   Background      - Rust backend only, browser closed. Runnable now with the
+#                     headless spike exe. This is the always-on workload.
+#   EditorOpen      - Rust backend + browser with the editor loaded. Requires
+#                     -Url (the tokenised editor URL) and a running frontend.
+#   PointerActivity - EditorOpen plus 20s of synthetic cursor movement. This is
+#                     NOT an editing workload: it does not drag or resize a zone.
+#                     Requires -Url and a running frontend.
+#
+# Real SVG zone-boundary dragging is verified separately as a functional test
+# (dev-only browser automation, never an installed runtime dependency). See
+# docs/performance/results.md. Do not describe PointerActivity as editing.
 #
 # All modes sample WorkingSet64 / PrivateMemorySize64 / TotalProcessorTime over
 # a fixed window and report raw MiB + CPU%. Browser processes are attributed
-# only to this run (see below) and reported separately from the Rust process.
+# only to this run and reported separately from the Rust process.
 #
-# IMPORTANT: close all browser windows before running EditorOpen/ActiveEditing.
+# IMPORTANT: close all browser windows before running EditorOpen/PointerActivity.
 # The script snapshots existing browser PIDs and measures only NEW processes;
 # if a browser is already running, opening a URL may reuse it and attribution
 # will be incomplete. The script warns when this happens.
 
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Background", "EditorOpen", "ActiveEditing")]
+    [ValidateSet("Background", "EditorOpen", "PointerActivity")]
     [string]$Mode,
     [string]$Exe = "target\release\screenlayout.exe",
     [string]$Url = "",
@@ -63,42 +68,46 @@ function SampleBrowser([string]$name, [int[]]$excludePids) {
     }
 }
 
-$proc = Start-Process -FilePath $exeFull -PassThru
-Start-Sleep -Seconds 5
-
-$rustStart = Sample $proc
-$browserStart = SampleBrowser $BrowserProcessName $preExistingBrowserPids
-
-if ($Mode -ne "Background") {
-    Start-Process $Url
+$proc = $null
+$orig = $null
+try {
+    $proc = Start-Process -FilePath $exeFull -PassThru
     Start-Sleep -Seconds 5
-    $newBrowser = SampleBrowser $BrowserProcessName $preExistingBrowserPids
-    if ($newBrowser.Count -eq 0) {
-        Write-Warning "No new $BrowserProcessName processes detected - the browser may have reused an existing instance. Close all browser windows and re-run for clean attribution."
+
+    $rustStart = Sample $proc
+    $browserStart = SampleBrowser $BrowserProcessName $preExistingBrowserPids
+
+    if ($Mode -ne "Background") {
+        Start-Process $Url
+        Start-Sleep -Seconds 5
+        $newBrowser = SampleBrowser $BrowserProcessName $preExistingBrowserPids
+        if ($newBrowser.Count -eq 0) {
+            Write-Warning "No new $BrowserProcessName processes detected - the browser may have reused an existing instance. Close all browser windows and re-run for clean attribution."
+        }
     }
-}
 
-# ---- Idle window ----
-Start-Sleep -Seconds $IdleSeconds
+    # ---- Idle / editor-open window ----
+    Start-Sleep -Seconds $IdleSeconds
 
-$rustIdleEnd = Sample $proc
-$browserIdleEnd = SampleBrowser $BrowserProcessName $preExistingBrowserPids
+    $rustIdleEnd = Sample $proc
+    $browserIdleEnd = SampleBrowser $BrowserProcessName $preExistingBrowserPids
 
-$out = [ordered]@{
-    Mode                 = $Mode
-    RustWorkingSetMiB    = [math]::Round($rustIdleEnd.WS / 1MB, 1)
-    RustPrivateMiB       = [math]::Round($rustIdleEnd.Priv / 1MB, 1)
-    RustCpuPercent       = [math]::Round((($rustIdleEnd.CPU - $rustStart.CPU) / $IdleSeconds) * 100, 2)
-    BrowserProcessCount  = $browserIdleEnd.Count
-    BrowserWorkingSetMiB = [math]::Round($browserIdleEnd.WS / 1MB, 1)
-    BrowserPrivateMiB    = [math]::Round($browserIdleEnd.Priv / 1MB, 1)
-    ExeBytes             = (Get-Item $exeFull).Length
-    ExeMiB               = [math]::Round((Get-Item $exeFull).Length / 1MB, 2)
-}
+    $out = [ordered]@{
+        Mode                 = $Mode
+        RustWorkingSetMiB    = [math]::Round($rustIdleEnd.WS / 1MB, 1)
+        RustPrivateMiB       = [math]::Round($rustIdleEnd.Priv / 1MB, 1)
+        RustCpuPercent       = [math]::Round((($rustIdleEnd.CPU - $rustStart.CPU) / $IdleSeconds) * 100, 2)
+        BrowserProcessCount  = $browserIdleEnd.Count
+        BrowserWorkingSetMiB = [math]::Round($browserIdleEnd.WS / 1MB, 1)
+        BrowserPrivateMiB    = [math]::Round($browserIdleEnd.Priv / 1MB, 1)
+        BrowserCpuPercent    = [math]::Round((($browserIdleEnd.CPU - $browserStart.CPU) / $IdleSeconds) * 100, 2)
+        ExeBytes             = (Get-Item $exeFull).Length
+        ExeMiB               = [math]::Round((Get-Item $exeFull).Length / 1MB, 2)
+    }
 
-# ---- Active window: sample AFTER the simulated editing, not before ----
-if ($Mode -eq "ActiveEditing") {
-    Add-Type @"
+    # ---- Pointer activity: sample AFTER the movement, not before ----
+    if ($Mode -eq "PointerActivity") {
+        Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class ZfBench {
@@ -107,38 +116,43 @@ public class ZfBench {
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 }
 "@
-    $orig = New-Object ZfBench+POINT
-    [void][ZfBench]::GetCursorPos([ref]$orig)
+        $orig = New-Object ZfBench+POINT
+        [void][ZfBench]::GetCursorPos([ref]$orig)
 
-    $rustActiveStart = Sample $proc
-    $browserActiveStart = SampleBrowser $BrowserProcessName $preExistingBrowserPids
+        $rustActiveStart = Sample $proc
+        $browserActiveStart = SampleBrowser $BrowserProcessName $preExistingBrowserPids
 
-    $rng = New-Object System.Random
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalSeconds -lt $ActiveSeconds) {
-        [void][ZfBench]::SetCursorPos($rng.Next(200, 1400), $rng.Next(200, 800))
-        Start-Sleep -Milliseconds 40
+        $rng = New-Object System.Random
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($sw.Elapsed.TotalSeconds -lt $ActiveSeconds) {
+            [void][ZfBench]::SetCursorPos($rng.Next(200, 1400), $rng.Next(200, 800))
+            Start-Sleep -Milliseconds 40
+        }
+        $sw.Stop()
+
+        $rustActiveEnd = Sample $proc
+        $browserActiveEnd = SampleBrowser $BrowserProcessName $preExistingBrowserPids
+        $activeWall = $sw.Elapsed.TotalSeconds
+
+        $out.PointerRustWorkingSetMiB    = [math]::Round($rustActiveEnd.WS / 1MB, 1)
+        $out.PointerRustPrivateMiB       = [math]::Round($rustActiveEnd.Priv / 1MB, 1)
+        $out.PointerRustCpuPercent       = [math]::Round((($rustActiveEnd.CPU - $rustActiveStart.CPU) / $activeWall) * 100, 2)
+        $out.PointerBrowserWorkingSetMiB = [math]::Round($browserActiveEnd.WS / 1MB, 1)
+        $out.PointerBrowserPrivateMiB    = [math]::Round($browserActiveEnd.Priv / 1MB, 1)
+        $out.PointerBrowserCpuPercent    = [math]::Round((($browserActiveEnd.CPU - $browserActiveStart.CPU) / $activeWall) * 100, 2)
+        $out.PointerSampleSeconds        = [math]::Round($activeWall, 1)
     }
-    $sw.Stop()
 
-    # Samples taken AFTER the workload — these are the active figures.
-    $rustActiveEnd = Sample $proc
-    $browserActiveEnd = SampleBrowser $BrowserProcessName $preExistingBrowserPids
-    $activeWall = $sw.Elapsed.TotalSeconds
-
-    $out.ActiveRustWorkingSetMiB    = [math]::Round($rustActiveEnd.WS / 1MB, 1)
-    $out.ActiveRustPrivateMiB       = [math]::Round($rustActiveEnd.Priv / 1MB, 1)
-    $out.ActiveRustCpuPercent       = [math]::Round((($rustActiveEnd.CPU - $rustActiveStart.CPU) / $activeWall) * 100, 2)
-    $out.ActiveBrowserWorkingSetMiB = [math]::Round($browserActiveEnd.WS / 1MB, 1)
-    $out.ActiveBrowserPrivateMiB    = [math]::Round($browserActiveEnd.Priv / 1MB, 1)
-    $out.ActiveBrowserCpuPercent    = [math]::Round((($browserActiveEnd.CPU - $browserActiveStart.CPU) / $activeWall) * 100, 2)
-    $out.ActiveSampleSeconds        = [math]::Round($activeWall, 1)
-
-    [void][ZfBench]::SetCursorPos($orig.X, $orig.Y)
+    $out | ConvertTo-Json -Depth 3
 }
-
-try { $proc.CloseMainWindow() | Out-Null } catch {}
-Start-Sleep -Milliseconds 500
-if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
-
-$out | ConvertTo-Json -Depth 3
+finally {
+    # Cursor restoration and process cleanup run even if the benchmark fails.
+    if ($null -ne $orig) {
+        try { [void][ZfBench]::SetCursorPos($orig.X, $orig.Y) } catch {}
+    }
+    if ($null -ne $proc) {
+        try { $proc.CloseMainWindow() | Out-Null } catch {}
+        Start-Sleep -Milliseconds 500
+        if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+    }
+}

@@ -48,21 +48,22 @@ All boundary types are plain owned Rust data with no egui types. **Serde status 
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Rust executable (always running)                                    │
 │                                                                      │
-│  ┌────────────────┐  ┌──────────────────┐  ┌─────────────────────┐  │
-│  │ Windows lifecycle│  │ Tray + hotkeys   │  │ Win32 engine        │  │
-│  │ (main thread)   │  │ (system.rs)      │  │ (engine.rs/core)    │  │
-│  └───────┬────────┘  └────────┬─────────┘  └──────────┬──────────┘  │
-│          │                    │                       │             │
-│  ┌───────▼────────────────────▼───────────────────────▼──────────┐  │
-│  │ Application state (Rust, authoritative)                        │  │
-│  │ draft config · dirty · applied · enabled · selection · history │  │
-│  └───────┬───────────────────────────────────────────────────────┘  │
-│          │                                                          │
-│  ┌───────▼───────────────────────────────────────────────────────┐  │
-│  │ Axum HTTP API (127.0.0.1:<ephemeral>)                          │  │
-│  │  /api/* commands + state   ·   /api/events (SSE)               │  │
-│  │  embedded dist/ static assets (rust-embed)                     │  │
-│  └───────┬───────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │ Native thread: System (tray + hotkeys) + Win32 message pump   │  │
+│  │ GetMessageW → TranslateMessage → DispatchMessageW             │  │
+│  └───────┬──────────────────────────────────────────▲───────────┘  │
+│          │ Actions (mpsc)                          │ Menu/hotkey    │
+│          │                                         │ updates (mpsc) │
+│  ┌───────▼─────────────────────────────────────────┴──────────┐    │
+│  │ Command worker thread (synchronous Win32 engine calls)      │    │
+│  │ Application state: draft · dirty · applied · enabled · ...   │    │
+│  └───────┬──────────────────────────────────────────▲──────────┘    │
+│          │ oneshot replies                         │ commands       │
+│  ┌───────▼─────────────────────────────────────────┴──────────┐    │
+│  │ Tokio runtime (separate thread): Axum HTTP API              │    │
+│  │  /api/* commands + state   ·   /api/events (SSE)            │    │
+│  │  embedded dist/ static assets (rust-embed)                  │    │
+│  └───────┬─────────────────────────────────────────────────────┘    │
 └──────────┼───────────────────────────────────────────────────────────┘
            │ loopback HTTP, per-launch token
     ┌──────▼───────┐
@@ -75,15 +76,60 @@ All boundary types are plain owned Rust data with no egui types. **Serde status 
 
 | Concern | Owner | Notes |
 |---|---|---|
-| Windows application lifecycle | `main.rs` | Owns the Win32 message loop; creates tray/hotkey managers on the main thread. |
-| Window-management engine | `engine.rs`, `engine_core.rs` | Unchanged. Geometry stays in `engine_core`. |
+| Windows application lifecycle | `main.rs` | Starts and joins all threads; owns shutdown coordination. Does **not** own the message pump. |
+| Native thread | new `native_loop.rs` | Creates and owns `System` (tray + hotkey managers); runs `GetMessageW`/`TranslateMessage`/`DispatchMessageW`. |
+| Window-management engine | `engine.rs`, `engine_core.rs` | Unchanged. Geometry stays in `engine_core`. Executed on the command worker thread. |
 | Configuration and profiles | `config.rs` | Unchanged schema v1; atomic writes; migration. |
-| Local HTTP API | new `api/` module | Axum routers, extractors, command handlers. Thin — delegates to state/engine. |
+| Local HTTP API | new `api/` module | Axum routers, extractors, command handlers on the Tokio runtime. Thin — sends commands to the worker. |
 | Static asset serving | new `web/` module | Embedded `dist/` via the selected crate (§4). |
 | Browser/editor session | new `session` module | Token, launch, SSE subscriber set, cleanup on disconnect. |
-| Tray and global hotkeys | `system.rs` | Unchanged; emits `Action`s consumed by the lifecycle loop. |
+| Tray and global hotkeys | `system.rs` | Unchanged; owned by the native thread; emits `Action`s to the command worker. |
 
 The authoritative application state lives in Rust, not the browser. The browser holds a mirrored view for rendering and optimistic previews; every durable mutation goes through an API command.
+
+### 3.2 Thread ownership and communication (authoritative)
+
+`tray-icon` and `global-hotkey` require a real Win32 message loop on the **same thread that creates their managers**. A Tokio timer is not a substitute. The ownership model is therefore fixed:
+
+| Thread | Creates / owns | Runs |
+|---|---|---|
+| Native thread | `System`, tray icon, hotkey managers, overlay window | `GetMessageW` → `TranslateMessage` → `DispatchMessageW`; calls `System::poll()`; if it blocks on handles, uses `MsgWaitForMultipleObjectsEx` |
+| Command worker thread | Authoritative `Inner` state, history, engine calls | Synchronous engine operations (including the 8 s launch wait), serialized |
+| Tokio runtime thread(s) | Axum server, SSE subscribers, HTTP handlers | `axum::serve`; handlers send commands and await `oneshot` replies |
+| Main thread | Process bootstrap, shutdown coordination | Starts the three threads above and joins them on exit |
+
+**Communication paths (channels only — no event framework):**
+
+1. **Native → worker:** `System::poll()` yields `Action`s (hotkey, tray menu clicks); an `mpsc::Sender<Command>` forwards them to the command worker.
+2. **HTTP → worker:** each API handler sends `Command { payload, reply: oneshot::Sender<Result<...>> }` and awaits the reply. Blocking engine work never runs on a Tokio worker.
+3. **Worker → HTTP/native:** state changes are broadcast to SSE subscribers; results return via the `oneshot` reply.
+4. **Reverse path (API → native) — critical:** profile create/rename/delete/select, hotkey edits, settings changes and Disable/Enable all originate as API commands. After the worker mutates state it sends a `NativeUpdate` over an `mpsc` channel **back to the native thread**, which rebuilds the tray profile submenu, updates the applied-profile checkmark, toggles the Disable/Enable label, and re-registers hotkeys. The native thread never reads shared state directly — it applies updates only from its channel. This keeps tray and hotkeys in sync with API changes without shared mutable GUI state.
+5. **Shutdown:** tray "Exit" or a close request posts `WM_QUIT` to the native loop and fires the axum `oneshot` shutdown signal. The main thread then joins native, worker and Tokio threads in that order; each channel closes so receivers terminate. No thread is left detached.
+
+This design uses only `mpsc`/`oneshot` channels and clear ownership — no elaborate event framework.
+
+### 3.3 Tray and profile workflow (D1–D6)
+
+The tray is the primary daily interface and must work with no browser open. `src/system.rs` currently builds a fixed menu; the new design builds it dynamically on the native thread from a `NativeUpdate` (§3.2):
+
+```
+ZoneFlow Studio — Active: <applied profile>
+─────────────────────────────
+Profiles              ▸  Website ✓   (checkmark = applied profile)
+                          Coding
+                          Trading
+─────────────────────────────
+Disable layout           (toggles to Enable layout)
+Open editor…
+Settings…
+Exit
+```
+
+- Rebuild the profile submenu after every profile create/rename/delete/select; update the checkmark from the **applied** dimension, never the draft.
+- **D6:** tray profile click applies immediately when enabled; when disabled it selects only. Home selection and editor-rail loading use their own API operations (`select` / `load`) and remain separate.
+- **D2:** a tray switch with a dirty draft shows a native Windows confirmation ("Unsaved changes in <profile>. Discard them and switch?") with Discard/Cancel. Never silently discard. The API returns 409 on dirty; the dialog is the user-facing resolution before retrying with an explicit discard flag.
+- **D4:** Disable/Enable suspends all automation; runtime-only; label toggles.
+- Open editor / Settings open the browser editor (Task B6/F1); Exit performs graceful shutdown (§3.2).
 
 ---
 
@@ -279,14 +325,14 @@ This is a locally hosted management interface, not a public service. The user ha
 
 **Minimum necessary (verified against current guidance):**
 - **Loopback-only binding:** bind `127.0.0.1:0`, never `0.0.0.0` or `::`. Use the literal `http://127.0.0.1:<port>` in the launch URL — on modern Windows `localhost` may resolve to `::1` first and stall. Read the assigned port from `listener.local_addr().port()` (the pattern in axum's official SSE example). A random port is a convenience, **not** a security boundary.
-- **Per-launch random token + bootstrap session:** generate 32 bytes with a CSPRNG (`getrandom`), URL-safe encoded. Rust opens `http://127.0.0.1:<port>/#token=<token>` — the **fragment** is never sent in HTTP requests, logs or `Referer`. The SPA reads it in JS and calls `POST /api/session` with `Authorization: Bearer <token>`; the server sets an `HttpOnly; SameSite=Strict` session cookie. All later requests (fetch and native `EventSource` with `withCredentials: true`) are same-origin and carry the cookie. The auth guard covers **only `/api/*`** — static assets are public. The token is the CSRF defense; a separate CSRF token is redundant.
+- **Per-launch random token + bootstrap session:** generate 32 bytes with a CSPRNG (`getrandom`), URL-safe encoded. Rust opens `http://127.0.0.1:<port>/#token=<token>` — the **fragment** is never sent in HTTP requests, logs or `Referer`. The SPA reads it in JS, calls `POST /api/session` with `Authorization: Bearer <token>`, and on success clears the fragment with `history.replaceState(null, '', location.pathname)`. The server sets an `HttpOnly; SameSite=Strict` session cookie. All later requests (fetch and native `EventSource` with `withCredentials: true`) are same-origin and carry the cookie. The auth guard covers **only `/api/*`** — static assets are public. The token is the CSRF defense; a separate CSRF token is redundant. Failure behavior (missing/invalid token, failed exchange, expired session, SSE reconnect) is specified in the implementation plan §1.1.
 - **Host header validation:** reject requests whose `Host` is not exactly `127.0.0.1:<port>`. This is the direct, cheap mitigation for DNS rebinding (a malicious page makes the browser contact loopback; the rebounded request carries the attacker's `Host`). Loopback binding alone does **not** stop this.
 - **No CORS headers:** the page and API are same-origin, so CORS is irrelevant. Never set `Access-Control-Allow-Origin: *` — that would let any origin read the API.
 - **Safe browser opening:** use the `open` crate (`open::that(url)`) or `webbrowser`, never `cmd /C start` (shell injection). The `open` crate sets `CREATE_NO_WINDOW` on Windows. Keep its `insecure` feature off. Construct the URL from a literal scheme/host, numeric port and URL-safe token — no untrusted input. `--app=` mode (Chromium/Edge only) is a UX convenience, not a security control.
 - **Session cleanup:** tie per-session state to the SSE stream lifetime (RAII drop guard) or reap sessions after a short grace period (30–60 s) so `EventSource` auto-reconnects are not treated as logout. The whole server exits with the app, so cleanup can stay simple.
 - **Response headers:** `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
 
-**Optional hardening (cheap, defense-in-depth):** validate `Origin`/`Sec-Fetch-Site` on state-changing requests (403 on mismatch — MCP-spec baseline for local HTTP servers); use the URL fragment for the initial token; constant-time token comparison; `Cross-Origin-Resource-Policy: same-origin` and a basic CSP (`default-src 'self'`); log rejected requests.
+**Optional hardening (cheap, defense-in-depth):** validate `Origin`/`Sec-Fetch-Site` on state-changing requests (403 on mismatch — MCP-spec baseline for local HTTP servers); constant-time token comparison; `Cross-Origin-Resource-Policy: same-origin` and a basic CSP (`default-src 'self'`); log rejected requests. The URL fragment for the initial token is **not** optional — it is the chosen bootstrap design above.
 
 **What localhost alone does NOT protect against:** DNS rebinding, cross-origin form POSTs, other local processes, malicious browser extensions, XSS in our own UI, malware already on the machine, or plaintext sniffing by privileged local processes. These are accepted or covered by the controls above; none justify heavy security theater for this utility.
 
@@ -300,9 +346,9 @@ Three workloads must be measured and reported separately (see `docs/performance/
 
 1. **Background** — Rust backend, tray, hotkeys, HTTP server; browser closed. Measured: ~2.0–2.1 MiB private / ~10.9–12.5 MiB WS for the spike, versus ~59–62 MiB private / ~109–112 MiB WS for the current egui app.
 2. **Editor open** — Rust backend plus browser with the full Svelte UI. **Not yet measured** (frontend does not exist). Measure Rust and browser process trees separately.
-3. **Active editing** — editor open plus SVG pointer interactions and backend traffic. **Not yet measured.** Use the deterministic 20 s pointer workload in `benchmark.ps1`.
+3. **Pointer activity** — editor open plus 20 s of synthetic cursor movement. **Not yet measured.** This is **not** editing: the cursor does not drag or resize a zone. Use `-Mode PointerActivity` in `benchmark.ps1`. Real SVG zone-boundary dragging is a separate dev-only functional test (§4 of the implementation plan); no resource values are claimed for it.
 
-Metrics: working set, private bytes, CPU, cold startup, executable size. Run ≥3 times, report ranges. **Do not present the headless backend's RAM improvement as the memory consumption of the complete application.**
+Metrics: working set, private bytes, CPU (Rust and browser reported separately, including browser CPU for Editor open), cold startup, executable size. Run ≥3 times, report ranges. **Do not present the headless backend's RAM improvement as the memory consumption of the complete application.**
 
 ---
 
@@ -348,8 +394,8 @@ egui dependencies are **not removed until Phase 6**, so the app remains buildabl
 - **Checkpoint 4:** full user journey passes; D1–D6 behaviors verified; no data loss.
 
 ### Phase 5 — Lifecycle and native integration
-- Browser session management, native overlay window, close/minimize-to-tray, graceful shutdown, SSE cleanup.
-- **Checkpoint 5:** tray-only operation works; overlay works; hotkeys fire while unfocused; browser close does not stop Rust.
+- Native thread + message pump owning tray/hotkeys; dynamic profile submenu with applied checkmark; D2 tray Discard/Cancel dialog; reverse `NativeUpdate` path; browser session management; native overlay window; close/minimize-to-tray; graceful shutdown joining all threads; SSE cleanup.
+- **Checkpoint 5:** tray-only operation works; menu stays in sync with API changes; dirty-draft tray switch confirms; overlay works; hotkeys fire while unfocused; browser close does not stop Rust; all threads join on exit.
 
 ### Phase 6 — Verification, performance, egui removal
 - Measure all three workloads; remove egui/eframe/shadcn-egui/rfd-from-UI dependencies only after parity; update README/CHANGELOG/plans.

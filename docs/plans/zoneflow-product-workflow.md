@@ -235,11 +235,12 @@ Open editor…
 Settings…
 Exit
 ```
-- Header shows active profile; checkmark marks the applied profile.
-- **(D6)** Profile submenu **applies immediately on click** when layout is enabled (no main window needed). When disabled, selecting a profile changes the selection only — nothing is applied or launched; status shows "Disabled".
+- Header shows active profile; checkmark marks the applied profile. The submenu is **dynamic** — rebuilt after profile create/rename/delete/select so it is never stale.
+- **(D6)** Profile submenu **applies immediately on click** when layout is enabled (no main window needed). When disabled, selecting a profile changes the selection only — nothing is applied or launched; status shows "Disabled". Tray switching, Home selection and editor-rail loading remain three separate actions with their own contracts.
+- **(D2 — tray switching with a dirty draft):** if the draft has unsaved changes, a tray profile click must never silently discard or switch. Show a simple native Windows confirmation: "Unsaved changes in <profile>. Discard them and switch?" → **Discard** proceeds; **Cancel** leaves everything unchanged. No custom dialog system is required. The same rule applies to Home and rail switching through their own flows.
 - **(D4)** Disable/Enable toggle suspends all layout automation without deleting anything; tray, profile selection, editor and settings stay available.
-- Open editor opens the main window on the Layout Editor.
-- Settings and Exit as today.
+- Open editor opens the editor in the browser; Settings opens it on the Settings view.
+- Exit performs graceful shutdown of all threads.
 
 ---
 

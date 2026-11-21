@@ -1,7 +1,7 @@
 # ZoneFlow Studio — Master Plan
 
 Last updated: 2026-11-21
-Status: historical master plan. **The UI-stack decision in §9 (egui + glow LOCKED) was superseded on 2026-11-21** by the authoritative `zoneflow-rust-axum-svelte-architecture.md` (headless Rust + Axum + on-demand Svelte editor). Data model (§1), configurability (§2), D1–D6, and engineering standards (§10) remain in force; §6 phases and §9 are historical. **IMPLEMENTATION Phases 1–7 of the egui app COMPLETE and verified** (fmt clean, 43 tests pass, clippy clean, release build ~14.21 MiB). AHK detection removed per user.
+Status: historical master plan. **The UI-stack decision in §9 (egui + glow LOCKED) was superseded on 2026-11-21** by the authoritative `zoneflow-rust-axum-svelte-architecture.md` (headless Rust + Axum + on-demand Svelte editor). Data model (§1), configurability (§2) and D1–D6 remain in force; §6 phases, §9, and the **threading paragraphs in §10.1 / §11.2** are historical — thread ownership is now defined in the new architecture plan §3.2 (native thread owns tray/hotkeys + message pump; Tokio runs separately). **IMPLEMENTATION Phases 1–7 of the egui app COMPLETE and verified** (fmt clean, 43 tests pass, clippy clean, release build ~14.21 MiB). AHK detection removed per user.
 
 > **Where this file fits (read first):** This is the historical master plan. The **authoritative architecture and migration plan is `zoneflow-rust-axum-svelte-architecture.md`**. For product behavior, `zoneflow-product-workflow.md` (D1–D6, frozen), `zoneflow-feature-preservation.md`, and `zoneflow-implementation-roadmap.md` remain authoritative; `zoneflow-gui-architecture.md` is historical for the web UI. All six product decisions **D1–D6 are APPROVED and frozen**. Multi-monitor is explicitly OUT OF SCOPE. **No implementation is authorized** by any planning document; implementation requires explicit user approval. Older sections below (§0–§15) are retained as background and may contain superseded wording (e.g. "decision pending", Tauri/egui-era references, ~10 MB size claims) — where they conflict with the authoritative plan or the product documents, those win.
 
@@ -325,8 +325,8 @@ Basis: official API/docs fetched 2026-11-20 (§11) + full audit of the current R
 - [ ] Add `tracing` + `tracing-subscriber` with `env-filter`, file writer, no ANSI (§11.4); remove `println!` debugging.
 - [ ] Unit tests for zone math, `findSharedBoundaries`, 25/50/75 snapping, DWM border compensation math.
 - [ ] Mock Win32 behind a trait **only at the `engine-win32` seam**; the trait must not expose `HWND` across threads (`!Send`/`!Sync`, §11.1).
-- [ ] **Threading (C4):** pure window-manipulation calls may run on a worker thread with typed channels, but **global-hotkey manager, tray icon, and all message-loop-dependent code must be created and owned on the egui/eframe main thread** (which owns the winit/Win32 message loop). The current `system.rs` already does this correctly — preserve it.
-**Exit gate:** engine-core tests pass on non-Windows; zero undocumented unsafe; zero swallowed errors in library code; hotkey/tray managers confirmed on main thread.
+- [ ] **Threading (C4 — HISTORICAL, egui era):** pure window-manipulation calls may run on a worker thread with typed channels, but **global-hotkey manager, tray icon, and all message-loop-dependent code must be created and owned on the egui/eframe main thread** (which owns the winit/Win32 message loop). The current `system.rs` already does this correctly — preserve it. **Superseded:** in the new architecture a dedicated native thread owns these managers and the message pump; see `zoneflow-rust-axum-svelte-architecture.md` §3.2.
+**Exit gate:** engine-core tests pass on non-Windows; zero undocumented unsafe; zero swallowed errors in library code; hotkey/tray managers confirmed on the owning native thread (new architecture).
 
 ### Phase 3 — Editor UI rebuild, part 1: shell & canvas (egui)
 **Goal:** rebuild the editor shell and canvas in egui from the `design-v3.html` spec (§2d). Use egui 0.37 APIs (§7, §11.6).
@@ -455,7 +455,7 @@ The solution must be maintainable long-term, not a one-off script. Apply these f
 - **Error handling**: `thiserror` for typed domain errors, `anyhow` only at binary boundaries. **Zero `unwrap`/`expect` in both library AND binary code** (C28 — with `panic="abort"` any missed one kills the app); no silent `let _ = ...` swallowing errors.
 - **Logging**: `tracing` + `tracing-subscriber` with levels; no `println!` debugging in shipped code.
 - **Config**: `serde` with versioned schema, `#[serde(default)]`, atomic write (`MoveFileExW` replace-existing), migration function tested against prior versions.
-- **Concurrency (C4 — corrected):** keep **pure window-manipulation calls** on a worker thread with typed channels. **Global-hotkey manager, tray icon, and all message-loop-dependent code must be created and owned on Tauri's main thread** (which runs the winit/Win32 message loop). Tauri commands run on the main thread by default — keep manager creation there; do not move it to the worker.
+- **Concurrency (C4 — HISTORICAL, Tauri/egui era):** keep **pure window-manipulation calls** on a worker thread with typed channels. **Global-hotkey manager, tray icon, and all message-loop-dependent code must be created and owned on Tauri's main thread** (which runs the winit/Win32 message loop). Tauri commands run on the main thread by default — keep manager creation there; do not move it to the worker. **Superseded:** the new architecture uses a dedicated native thread for these managers and the message pump; see `zoneflow-rust-axum-svelte-architecture.md` §3.2.
 - **Tests**: unit tests for zone math / boundary detection / snapping / config migration; integration tests for config round-trip and a real v0 config file. Mock Win32 behind a trait at the `engine-win32` seam (must not expose `HWND` across threads). Add a hotkey-conflict test (C27).
 - **Dependencies**: commit `Cargo.lock`; review new crates before adding; keep the dependency tree small (lightweight is a core requirement). **Keep `default-features=false, features=["glow",...]`** — wgpu caused ~323 MB RAM vs ~49 MB with glow (C30). Add `rfd` for the file dialog (Phase 4).
 - **Unsafe**: isolate in small, documented modules with `// SAFETY:` comments; prefer `windows` crate safe wrappers.
@@ -489,7 +489,7 @@ The solution must be maintainable long-term, not a one-off script. Apply these f
 ### 11.2 tray-icon 0.26 / global-hotkey 0.10
 - `TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip(..).with_icon(..).build()`; menu module re-exports `muda 0.21`. Events: `TrayIconEvent::receiver()` **or** `set_event_handler(Some(..))` — the latter disables the former. Pick one.
 - `GlobalHotKeyManager::new()?.register(HotKey)?`; parse via `"shift+alt+KeyQ".parse::<HotKey>()`; event `id` maps back via `hotkey.id()`. Windows: manager must be created on the event-loop thread. `register()` fails if combo is grabbed by another app.
-- Both need an event loop on their thread — main thread must own it.
+- Both need an event loop on their thread — in the historical egui/Tauri design the main thread owned it; in the current architecture a dedicated native thread owns it (`zoneflow-rust-axum-svelte-architecture.md` §3.2).
 
 ### 11.3 Tauri v2 (EVALUATED, NOT CHOSEN — see §9)
 - Latest stable `tauri 2.12.7`. Structure: `src-tauri/` (Cargo.toml, build.rs with `tauri_build::build()`, src/lib.rs, src/main.rs, tauri.conf.json, capabilities/, icons/) + frontend folder.

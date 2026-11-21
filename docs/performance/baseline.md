@@ -2,7 +2,7 @@
 
 **Recorded:** 2026-11-21 · **Commit:** `363201c` (clean tree, latest `main`)
 **Purpose:** trustworthy pre-change baseline for the WS-A backend-correctness work. No targets are set here — this is measurement only.
-**Current status:** historical egui baseline. For the three-workload model (background / editor open / active editing) and the headless Rust + Axum spike results, see `results.md` and `benchmark.ps1` in this directory.
+**Current status:** historical egui baseline. For the three-workload model (background / editor open / pointer activity) and the headless Rust + Axum spike results, see `results.md` and `benchmark.ps1` in this directory.
 
 ## Environment
 

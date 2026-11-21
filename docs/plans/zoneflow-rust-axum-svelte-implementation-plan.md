@@ -1,7 +1,7 @@
 # ZoneFlow — Rust + Axum + Svelte: Detailed Implementation Plan
 
 **Status:** Implementation-ready companion to the architecture plan. **No implementation is authorized by this file** — it exists so that, once approved, work can proceed without another research cycle.
-**Date:** 2026-11-21 · **Corrected:** 2026-11-22 after independent audit (Windows message pump, browser auth bootstrap, blocking-work isolation, D6 profile actions, overlay constant, dependency/error/DTO/benchmark corrections).
+**Date:** 2026-11-21 · **Corrected:** 2026-11-22 after two independent audits (Windows message pump, browser auth bootstrap, blocking-work isolation, D6 profile actions, overlay constant, dependency/error/DTO/benchmark corrections; then fragment-only auth, native-thread ownership, dynamic tray + D2 dialog, and honest pointer-activity benchmark).
 **Relationship:** Implements `zoneflow-rust-axum-svelte-architecture.md`. Product behavior from `zoneflow-product-workflow.md` (D1–D6) and `zoneflow-feature-preservation.md` remains authoritative.
 **Research basis:** official docs.rs, crates.io, svelte.dev, vite.dev, tailwindcss.com, shadcn-svelte.com, bits-ui.com, paneforge.com, lucide.dev, Microsoft Learn — all fetched 2026-11-21. Code below is either verbatim from those sources or a composition of verified primitives; compositions are marked where relevant.
 
@@ -87,10 +87,23 @@ impl IntoResponse for ApiError {
 
 **Auth + Host middleware — bootstrap/session design.** The guard applies **only to `/api/*` routes**, never to static assets. The browser cannot attach a bearer header to its initial navigation or to a native `EventSource`, so authentication uses a two-step bootstrap:
 
-1. Rust opens `http://127.0.0.1:<port>/#token=<token>`. The token is in the **URL fragment**, which browsers never send in HTTP requests, logs or `Referer`.
+1. Rust generates a 256-bit token and opens `http://127.0.0.1:<port>/#token=<token>`. The token is in the **URL fragment**, which browsers never send in HTTP requests, logs or `Referer`.
 2. The SPA reads `location.hash` in JS, then calls `POST /api/session` with `Authorization: Bearer <token>`. The server validates it and sets an `HttpOnly; SameSite=Strict` session cookie containing the same token.
-3. All later requests — including `fetch()` and native `EventSource` — are same-origin and carry the cookie automatically (`EventSource` with `withCredentials: true`). The middleware accepts **either** the bearer header **or** the session cookie.
-4. Static assets (`/`, `/assets/*`) are public — they contain no secrets. The token dies with the process; the cookie dies with the browser session.
+3. On a successful exchange the SPA calls `history.replaceState(null, '', location.pathname)` to **clear the fragment** so the token is no longer visible in the address bar or retained in the URL.
+4. All later requests — including `fetch()` and native `EventSource` — are same-origin and carry the cookie automatically (`EventSource` with `withCredentials: true`). The middleware accepts **either** the bearer header **or** the session cookie.
+5. Static assets (`/`, `/assets/*`) are public — they contain no secrets. The token dies with the process; the cookie dies with the browser session.
+
+**Failure behavior (must be implemented and tested):**
+
+| Condition | Behavior |
+|---|---|
+| No fragment / missing token | Show a clear error page: "Open the editor from the ZoneFlow tray menu." Do not call `/api/session`. |
+| Invalid token (bad exchange) | `/api/session` returns 403; show "Session rejected — reopen the editor from the tray." Do not retry in a loop. |
+| Failed exchange (network/server error) | Show a retry button that re-reads `location.hash` and retries once; if still failing, instruct the user to reopen from the tray. |
+| Expired / invalid session on later request | API returns 401; the SPA shows a session-expired banner with a "Reopen from tray" action. Do not silently clear the draft. |
+| SSE disconnect | `EventSource` reconnects automatically; the cookie authenticates each reconnect. After repeated failures, show a "connection lost" indicator and keep local state intact. |
+
+The token is per-launch and lives only as long as the Rust process; there is no separate expiry timer. "Expired session" means the process restarted (old cookie no longer matches the new token).
 
 Use `middleware::from_fn_with_state` with `route_layer` on an `/api` sub-router (added **after** routes, so auth returns 401/403 rather than converting 404). Last extractor must be `Request`.
 
@@ -302,7 +315,7 @@ Sizes are percentages. `autoSaveId` persists layout to localStorage. Toggle with
 
 **Browser:** `open::that_detached(&url)` — non-blocking, sets `CREATE_NO_WINDOW` on Windows, no features needed. Keep `insecure` **off**. Chromeless `--app=` mode requires `std::process::Command` directly (not an `open` feature) and is browser-specific — UX only, not security.
 
-**Overlay:** a browser page cannot paint over other apps or be click-through — a desktop-level window is required. Use a layered window on a **dedicated thread with its own message loop** (window creation and `GetMessageW` must be on the same thread; main thread runs Tokio).
+**Overlay:** a browser page cannot paint over other apps or be click-through — a desktop-level window is required. Use a layered window on a **dedicated thread with its own message loop** (window creation and `GetMessageW` must be on the same thread). Tokio runs on its own separate thread; the main thread only coordinates shutdown.
 
 - Styles: `WS_POPUP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`; `SetWindowPos(HWND_TOPMOST, SWP_SHOWWINDOW)`. `WS_EX_LAYERED` is required by `UpdateLayeredWindow`.
 - Zones need **different alphas** → use `UpdateLayeredWindow` with a 32-bpp DIB section and `BLENDFUNCTION { BlendOp: 0, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: 1 }` (`AC_SRC_ALPHA`). **Never mix** with `SetLayeredWindowAttributes` (once called, `UpdateLayeredWindow` fails until the layering bit is cleared/re-set).
@@ -351,7 +364,7 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 
 ### Task B6 — Browser session management
 **Files:** `src/session.rs`.
-- On tray "Open editor": `open::that_detached(&format!("http://127.0.0.1:{port}/?token={token}"))`.
+- On tray "Open editor": `open::that_detached(&format!("http://127.0.0.1:{port}/#token={token}"))`. The token is in the **fragment**, never a query parameter.
 - Track sessions; reap stale SSE sessions after 60 s; keep Rust running when browser closes.
 - **Test:** session created on launch, reaped after timeout; Rust process unaffected by browser close (manual).
 
@@ -365,14 +378,30 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 
 **Windows constraint (critical):** `tray-icon` and `global-hotkey` require a real Win32 message loop **on the same thread where their managers are created**. A Tokio timer is not a substitute — it does not pump `GetMessageW`/`DispatchMessageW`, so tray clicks and hotkey events would never be delivered. The current egui app works only because `eframe`/`winit` owns that loop; the headless app must provide its own.
 
-**Design:**
-- A **dedicated native thread** creates the `System` (tray + hotkey managers) and runs the message pump: `GetMessageW` → `TranslateMessage` → `DispatchMessageW` on that same thread. If the thread ever blocks on handles, use `MsgWaitForMultipleObjectsEx` to avoid the documented deadlock.
-- The **Tokio runtime runs on a separate thread** (or the main thread) and owns axum. It never owns the tray/hotkey managers.
-- `System::poll()` is called from the native loop, not from a Tokio timer. Actions are forwarded to the API/command layer over an `mpsc` channel; the command worker (Task B1) consumes them.
-- Shutdown: tray "Exit" posts `WM_QUIT` to the native loop and fires the axum `oneshot` shutdown signal; both threads join cleanly.
-- **Runtime choice:** benchmark `current_thread` against `rt-multi-thread` Tokio runtimes (§4) before locking the feature set. The app is I/O-light; `current_thread` may reduce RAM. Start with `rt-multi-thread` for safety, then measure and decide.
+**Design (matches architecture plan §3.2):**
+- A **dedicated native thread** creates the `System` (tray + hotkey managers) and runs the message pump: `GetMessageW` → `TranslateMessage` → `DispatchMessageW` on that same thread. If it blocks on handles, use `MsgWaitForMultipleObjectsEx`.
+- The **Tokio runtime runs on a separate thread** and owns axum. It never owns the tray/hotkey managers. The **command worker thread** (Task B1) owns authoritative state and runs synchronous engine calls. The main thread only starts and joins threads.
+- `System::poll()` is called from the native loop, not a Tokio timer. `Action`s go to the command worker over `mpsc`; API handlers send `Command { payload, reply: oneshot }` to the same worker.
+- **Reverse path (API → native):** after any profile CRUD/selection, hotkey edit, settings change or Disable/Enable, the worker sends a `NativeUpdate` over a second `mpsc` channel to the native thread. The native thread rebuilds the tray profile submenu, updates the applied-profile checkmark, toggles the Disable/Enable label and re-registers hotkeys. It never reads shared state directly.
+- **Shutdown:** tray "Exit" or close request posts `WM_QUIT` to the native loop and fires the axum `oneshot` shutdown signal. The main thread joins native → worker → Tokio in order; closing each channel terminates its receiver. No detached threads.
+- **Runtime choice:** benchmark `current_thread` against `rt-multi-thread` (§4) before locking the feature set. Start with `rt-multi-thread`, then measure.
 
-**Test:** full manual journey — tray-only operation, hotkeys while browser closed, graceful exit; plus a unit test that the native loop forwards a synthetic `Action` to the command channel.
+**Test:** full manual journey — tray-only operation, hotkeys while browser closed, graceful exit; unit tests that (a) the native loop forwards a synthetic `Action` to the command channel and (b) a `NativeUpdate` from an API command rebuilds the tray menu and re-registers hotkeys.
+
+### Task B9 — Dynamic tray menu and profile workflow
+**Files:** modify `src/system.rs` (menu construction), `src/native_loop.rs` (update handling).
+
+The existing `src/system.rs` builds a **fixed** menu (Settings / Re-tile / Reload / Exit). It must become dynamic while staying on the native thread:
+
+- **Header:** "ZoneFlow Studio — Active: <applied profile>".
+- **Profiles submenu:** one item per saved profile, with a checkmark on the **applied** profile (not the draft). Rebuild from the current profile list on every `NativeUpdate` (create/rename/delete/select) — never keep a stale menu.
+- **Profile click (D6):** when enabled → apply immediately (the `apply` command); when disabled → select-only. Tray, Home and editor-rail actions stay separate and use their own API operations (`apply` / `select` / `load`).
+- **Disable/Enable layout (D4):** toggle label and state; suspends all automation; runtime-only.
+- **Open editor…** → browser session (Task B6); **Settings…** → open the editor on the Settings view; **Exit** → shutdown (Task B8).
+
+**D2 — tray switching with a dirty draft:** never silently discard or switch. When a tray profile click arrives and the draft is dirty, the native thread shows a **simple native Windows confirmation dialog** (`MessageBoxW` with Yes/No/Cancel semantics): "Unsaved changes in <profile>. Discard them and switch?" → **Discard** proceeds with the switch; **Cancel** aborts and leaves everything unchanged. No custom dialog system. The same rule applies to Home and rail switching through their own flows. The API `apply`/`load` endpoints already return 409 on dirty; the native dialog is the user-facing resolution before retrying with an explicit discard flag.
+
+**Test:** menu rebuild after profile create/rename/delete/select; checkmark tracks the applied profile; tray click applies when enabled and selects only when disabled; dirty-draft dialog Discard/Cancel paths; Disable/Enable label and behavior; Open editor/Settings/Exit.
 
 ---
 
@@ -416,8 +445,9 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 
 - **Backend unit/integration:** all 43 existing tests must keep passing; new `oneshot` API tests for every endpoint and D1–D6 error case; command-layer state-transition tests.
 - **Frontend:** `svelte-check` + `tsc` clean; component tests for store reactivity and dirty flag (Vitest if added — justify the dependency before adding).
-- **Manual Windows journeys:** tray-only operation; hotkeys with browser closed; browser open/close lifecycle; overlay Ctrl+drag; full edit→save→apply→launch→tray→disable→enable journey; unsaved-change prompts.
-- **Performance:** three workloads from `docs/performance/results.md`; measure Rust and browser process trees separately; ≥3 runs, report ranges. **Benchmark Tokio `current_thread` against `rt-multi-thread`** before locking the runtime feature set — the app is I/O-light and `current_thread` may reduce RAM. Also measure the command-worker channel overhead.
+- **Manual Windows journeys:** tray-only operation; hotkeys with browser closed; browser open/close lifecycle; overlay Ctrl+drag; full edit→save→apply→launch→tray→disable→enable journey; unsaved-change prompts including the tray Discard/Cancel dialog.
+- **Real editing functional test (dev-only):** browser automation (e.g. Playwright, test-only dependency) performs a real SVG zone-boundary drag, asserts the frontend interaction completes and the backend persists the geometry. This is a functional test, not the `PointerActivity` benchmark.
+- **Performance:** three workloads from `docs/performance/results.md`; measure Rust and browser process trees separately (including browser CPU for Editor open); ≥3 runs, report ranges. **Benchmark Tokio `current_thread` against `rt-multi-thread`** before locking the runtime feature set — the app is I/O-light and `current_thread` may reduce RAM. Also measure the command-worker channel overhead.
 - **Paneforge isolation:** keep all Paneforge usage behind the shadcn-svelte `Resizable` component wrapper (`$lib/components/ui/resizable`). Do not import `paneforge` directly in feature components — its stale maintenance status makes it a replaceable dependency.
 
 ---
@@ -429,9 +459,9 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 | C0 | Research (this doc) | APIs verified; plan approved; no implementation started |
 | C1 | B1–B2 | API tests pass; egui UI still builds |
 | C2 | B3–B6 | Auth/SSE/static/session tests pass; browser loads from embedded assets |
-| C3 | B7–B8 | Overlay works; tray/hotkeys/lifecycle verified |
-| C4 | F1–F2 | `npm run check`/`build` clean; store + SSE work |
-| C5 | F3–F4 | Shell + canvas parity; no clipping; geometry matches Rust |
+| C3 | B7–B9 | Overlay works; native thread owns tray/hotkeys; dynamic tray menu + D2 dialog verified; lifecycle joins all threads |
+| C4 | F1–F2 | `npm run check`/`build` clean; store + SSE work; auth bootstrap + failure paths verified |
+| C5 | F3–F4 | Shell + canvas parity; no clipping; geometry matches Rust; real drag functional test passes |
 | C6 | F5–F6 | Full journey; D1–D6 verified; no data loss |
 | C7 | Phase 6 of architecture plan | Three workloads measured; egui removed; docs synced |
 

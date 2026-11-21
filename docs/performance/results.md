@@ -20,8 +20,11 @@ on the same machine; raw values are recorded, not targets.
 1. **Background** — Rust backend, tray, hotkeys and HTTP server; browser closed.
    This is the always-on process and the workload the new architecture targets.
 2. **Editor open** — Rust backend plus browser with the full Svelte interface loaded.
-3. **Active editing** — editor open plus SVG canvas pointer interactions and
-   backend communication.
+3. **Pointer activity** — editor open plus 20 s of synthetic cursor movement. This
+   is **not** an editing workload: the cursor does not drag or resize a zone. Real
+   SVG zone-boundary dragging is a separate functional test (dev-only browser
+   automation, never an installed runtime dependency). Do not describe this
+   workload as editing.
 
 These must never be reported as one number. The headless backend's RAM reduction
 is **not** the memory consumption of the complete application.
@@ -51,15 +54,22 @@ ready (`-Mode EditorOpen -Url <tokenised-url>`); record results here when the
 frontend is built. Measure the Rust process and the browser process tree
 separately — summing them into one figure hides the trade-off.
 
-### Workload 3 — Active editing
+### Workload 3 — Pointer activity (not editing)
 
-**Not yet measured.** Requires the frontend. The harness provides a deterministic
-20 s pointer workload (`-Mode ActiveEditing`) and reports `Active*` fields sampled
-**after** the workload. Browser processes are attributed only to PIDs created by
-the run — close all browser windows first, or the script warns that attribution
-may be incomplete. The historical egui active-CPU figures (1.01–46.14%) were
-noisy under synthetic cursor input and are **not** comparable to a deterministic
-SVG-canvas workload.
+**Not yet measured.** Requires the frontend. The harness mode is
+`-Mode PointerActivity`; it moves the cursor randomly for 20 s and reports
+`Pointer*` fields sampled **after** the movement. It does **not** drag or resize
+a zone, so it measures cursor-driven repaint cost only. Browser processes are
+attributed only to PIDs created by the run — close all browser windows first, or
+the script warns that attribution may be incomplete. The historical egui
+active-CPU figures (1.01–46.14%) were noisy under synthetic cursor input and are
+**not** comparable to a real SVG-canvas editing workload.
+
+**Real editing verification (separate functional test, not a benchmark):** a
+dev-only browser automation script (e.g. Playwright, test-only dependency) should
+perform a real SVG zone-boundary drag, assert the frontend interaction completes,
+and assert the backend receives and persists the geometry update. Resource usage
+during that test may be recorded later; no values are claimed here.
 
 ## Historical egui baseline (pre-change, `363201c`)
 
