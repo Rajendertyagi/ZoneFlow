@@ -61,6 +61,16 @@ export function getZones(): ZoneDto[] {
   return store.snapshot?.zones ?? [];
 }
 
+/**
+ * Optimistically patch one zone's geometry in the local mirror after a commit.
+ * The authoritative SSE refresh follows immediately; this only removes the
+ * one-frame flicker where the zone would snap back to its old position.
+ */
+export function patchZoneLocal(id: number, patch: Partial<ZoneDto>): void {
+  const zone = store.snapshot?.zones.find((z) => z.id === id);
+  if (zone) Object.assign(zone, patch);
+}
+
 export function getHotkeys(): HotkeyDto[] {
   return store.snapshot?.hotkeys ?? [];
 }
