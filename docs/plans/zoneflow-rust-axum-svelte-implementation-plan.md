@@ -1,7 +1,7 @@
 # ZoneFlow — Rust + Axum + Svelte: Detailed Implementation Plan
 
 **Status:** Implementation-ready companion to the architecture plan. **No implementation is authorized by this file** — it exists so that, once approved, work can proceed without another research cycle.
-**Date:** 2026-11-21
+**Date:** 2026-11-21 · **Corrected:** 2026-11-22 after independent audit (Windows message pump, browser auth bootstrap, blocking-work isolation, D6 profile actions, overlay constant, dependency/error/DTO/benchmark corrections).
 **Relationship:** Implements `zoneflow-rust-axum-svelte-architecture.md`. Product behavior from `zoneflow-product-workflow.md` (D1–D6) and `zoneflow-feature-preservation.md` remains authoritative.
 **Research basis:** official docs.rs, crates.io, svelte.dev, vite.dev, tailwindcss.com, shadcn-svelte.com, bits-ui.com, paneforge.com, lucide.dev, Microsoft Learn — all fetched 2026-11-21. Code below is either verbatim from those sources or a composition of verified primitives; compositions are marked where relevant.
 
@@ -21,6 +21,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }   # BroadcastStream
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+getrandom = "0.3"                    # per-launch token (32 bytes from OS CSPRNG)
 rust-embed = "8.14.0"                # default features; do NOT enable axum-ex
 open = "5"                           # browser launch; keep insecure feature OFF
 
@@ -62,22 +63,36 @@ use serde_json::json;
 #[derive(Debug)]
 enum ApiError { DirtyState, Unauthorized, Forbidden, NotFound(String), Internal(String) }
 
+impl ApiError {
+    fn parts(&self) -> (StatusCode, &'static str, String) {
+        match self {
+            ApiError::DirtyState => (StatusCode::CONFLICT, "dirty_state", "save or discard changes first".into()),
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", "missing token".into()),
+            ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "invalid token or host".into()),
+            ApiError::NotFound(w) => (StatusCode::NOT_FOUND, "not_found", format!("{w} not found")),
+            ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, "internal", m.clone()),
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, msg) = match self {
-            ApiError::DirtyState => (StatusCode::CONFLICT, "save or discard changes first".into()),
-            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "missing token".into()),
-            ApiError::Forbidden => (StatusCode::FORBIDDEN, "invalid token or host".into()),
-            ApiError::NotFound(w) => (StatusCode::NOT_FOUND, format!("{w} not found")),
-            ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
-        };
-        (status, Json(json!({ "error": msg }))).into_response()
+        let (status, code, message) = self.parts();
+        // Matches the architecture contract: { "error": { "code": ..., "message": ... } }
+        (status, Json(json!({ "error": { "code": code, "message": message } }))).into_response()
     }
 }
 // Result<Json<T>, ApiError> works directly as a handler return type.
 ```
 
-**Auth + Host middleware.** Use `middleware::from_fn_with_state` with `route_layer` (added **after** routes, so auth returns 401/403 rather than converting 404). Last extractor must be `Request`.
+**Auth + Host middleware — bootstrap/session design.** The guard applies **only to `/api/*` routes**, never to static assets. The browser cannot attach a bearer header to its initial navigation or to a native `EventSource`, so authentication uses a two-step bootstrap:
+
+1. Rust opens `http://127.0.0.1:<port>/#token=<token>`. The token is in the **URL fragment**, which browsers never send in HTTP requests, logs or `Referer`.
+2. The SPA reads `location.hash` in JS, then calls `POST /api/session` with `Authorization: Bearer <token>`. The server validates it and sets an `HttpOnly; SameSite=Strict` session cookie containing the same token.
+3. All later requests — including `fetch()` and native `EventSource` — are same-origin and carry the cookie automatically (`EventSource` with `withCredentials: true`). The middleware accepts **either** the bearer header **or** the session cookie.
+4. Static assets (`/`, `/assets/*`) are public — they contain no secrets. The token dies with the process; the cookie dies with the browser session.
+
+Use `middleware::from_fn_with_state` with `route_layer` on an `/api` sub-router (added **after** routes, so auth returns 401/403 rather than converting 404). Last extractor must be `Request`.
 
 ```rust
 use axum::{extract::{Request, State}, http::{header, StatusCode},
@@ -87,18 +102,36 @@ async fn guard(State(s): State<AppState>, req: Request, next: Next) -> Response 
     let host_ok = req.headers().get(header::HOST).and_then(|v| v.to_str().ok())
         .map(|h| h == s.allowed_host.as_str()).unwrap_or(false);
     if !host_ok { return (StatusCode::FORBIDDEN, "bad host").into_response(); }
-    let token = req.headers().get(header::AUTHORIZATION)
+
+    // Accept bearer header (bootstrap + tests) OR session cookie (EventSource + fetch).
+    let bearer = req.headers().get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-    match token {
+    let cookie = req.headers().get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix("zf_session=")));
+    match bearer.or(cookie) {
         None => (StatusCode::UNAUTHORIZED, "missing token").into_response(),
         Some(t) if t != s.expected_token.as_str() => (StatusCode::FORBIDDEN, "bad token").into_response(),
         Some(_) => next.run(req).await,
     }
 }
-// Router::new().route(...).route_layer(middleware::from_fn_with_state(state.clone(), guard)).with_state(state)
+
+// Static routes are NOT behind the guard; only the API sub-router is.
+let api = Router::new()
+    .route("/state", get(get_state))
+    .route("/events", get(events))
+    .route("/session", post(bootstrap))   // validates bearer, sets cookie
+    .route_layer(middleware::from_fn_with_state(state.clone(), guard));
+
+let app = Router::new()
+    .nest("/api", api)
+    .fallback(static_file)                // public: index.html + assets
+    .with_state(state);
 ```
 
-**SSE broadcast.** `Sse::new(stream).keep_alive(...)`; `BroadcastStream` from `tokio-stream` wraps `broadcast::Receiver`. Each connection subscribes independently; disconnect drops the receiver automatically.
+`bootstrap` validates the bearer token and returns `Set-Cookie: zf_session=<token>; HttpOnly; SameSite=Strict; Path=/`. No `Secure` flag — the transport is plain HTTP on loopback.
+
+**SSE broadcast.** `Sse::new(stream).keep_alive(...)`; `BroadcastStream` from `tokio-stream` wraps `broadcast::Receiver`. Each connection subscribes independently; disconnect drops the receiver automatically. The browser uses native `EventSource('/api/events', { withCredentials: true })` — it cannot set a bearer header, so it authenticates with the session cookie from the bootstrap step.
 
 ```rust
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -271,7 +304,7 @@ Sizes are percentages. `autoSaveId` persists layout to localStorage. Toggle with
 
 **Overlay:** a browser page cannot paint over other apps or be click-through — a desktop-level window is required. Use a layered window on a **dedicated thread with its own message loop** (window creation and `GetMessageW` must be on the same thread; main thread runs Tokio).
 
-- Styles: `WS_POPUP | WS_EX_LAYED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`; `SetWindowPos(HWND_TOPMOST, SWP_SHOWWINDOW)`.
+- Styles: `WS_POPUP | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`; `SetWindowPos(HWND_TOPMOST, SWP_SHOWWINDOW)`. `WS_EX_LAYERED` is required by `UpdateLayeredWindow`.
 - Zones need **different alphas** → use `UpdateLayeredWindow` with a 32-bpp DIB section and `BLENDFUNCTION { BlendOp: 0, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: 1 }` (`AC_SRC_ALPHA`). **Never mix** with `SetLayeredWindowAttributes` (once called, `UpdateLayeredWindow` fails until the layering bit is cleared/re-set).
 - `WNDPROC` signature: `unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT`.
 - `HWND` is `!Send`/`!Sync` — create it inside the thread. Marshal zone updates from Tokio via a channel; the overlay thread calls `PostMessageW` locally.
@@ -285,11 +318,15 @@ Sizes are percentages. `autoSaveId` persists layout to localStorage. Toggle with
 egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release`.
 
 ### Task B1 — App state and command layer
-**Files:** new `src/api/state.rs`, `src/api/commands.rs`.
-- Define `AppState { inner: Arc<RwLock<Inner>>, tx: broadcast::Sender<String>, expected_token: String, allowed_host: String }`.
+**Files:** new `src/api/state.rs`, `src/api/commands.rs`, `src/api/worker.rs`.
+
+**Blocking-work isolation (critical):** the Win32 engine can block up to **8 seconds** waiting for a launched window (`execute_zone_inner`). An async Axum handler must never call it directly on a Tokio worker — that stalls all requests on that worker. Use a **dedicated command worker thread** with an `mpsc` channel: handlers send a command plus a `oneshot` reply channel and `.await` the reply; the worker executes the synchronous engine calls serially. This also prevents concurrent window moves. (`spawn_blocking` is an alternative, but a single worker better matches the engine's serialized window operations and the app's existing worker-thread pattern.) Measure the channel overhead in §4.
+
+- Define `AppState { inner: Arc<RwLock<Inner>>, tx: broadcast::Sender<String>, cmd_tx: mpsc::Sender<Command>, expected_token: String, allowed_host: String }`.
 - `Inner` holds the authoritative draft `AppConfig`, `last_saved_json`, `applied_profile`, `layout_enabled`, `selected_zone`, history, logs.
-- Implement command functions that delegate to unchanged backend modules: `save`, `apply`, `launch_arrange`, `preview`, `revert`, `disable`, `enable`, profile CRUD, zone mutations, undo/redo. Encode D1–D6: 409 on dirty for apply/launch/select; disabled-mode guards; D3 assignment replacement rules.
-- **Test:** unit tests for each command's state transition, including D1–D6 error cases.
+- Implement command functions that delegate to unchanged backend modules **on the worker thread**: `save`, `apply`, `launch_arrange`, `preview`, `revert`, `disable`, `enable`, profile CRUD, zone mutations, undo/redo. Encode D1–D6: 409 on dirty for apply/launch/load; disabled-mode guards; D3 assignment replacement rules.
+- **D6 profile actions are three distinct commands**, not one: `load` (editor rail → draft, dirty-guarded), `select` (Home → selection only), `apply` (tray → apply when enabled, select-only when disabled). See architecture plan §5.2. Each gets its own handler and test.
+- **Test:** unit tests for each command's state transition, including D1–D6 error cases; a test that a slow command does not block an unrelated API request; separate tests for `load` / `select` / `apply`.
 
 ### Task B2 — HTTP API scaffold
 **Files:** new `src/api/mod.rs`, `src/api/routes.rs`.
@@ -323,10 +360,19 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 - Dedicated thread, layered window, `UpdateLayeredWindow` with per-zone alpha, channel-based updates from Tokio, `PostMessageW` marshalling.
 - **Test:** manual Windows test — Ctrl+drag shows correct zone highlight, click-through works, taskbar/Alt-Tab unaffected.
 
-### Task B8 — Lifecycle integration
-**Files:** modify `src/main.rs`.
-- Keep logging; create tray/hotkeys on main thread; start axum on Tokio runtime; wire tray "Open editor"/Exit to session/shutdown; preserve `System::poll()` cadence via a Tokio timer.
-- **Test:** full manual journey — tray-only operation, hotkeys while browser closed, graceful exit.
+### Task B8 — Lifecycle integration and native message pump
+**Files:** modify `src/main.rs`; new `src/native_loop.rs`.
+
+**Windows constraint (critical):** `tray-icon` and `global-hotkey` require a real Win32 message loop **on the same thread where their managers are created**. A Tokio timer is not a substitute — it does not pump `GetMessageW`/`DispatchMessageW`, so tray clicks and hotkey events would never be delivered. The current egui app works only because `eframe`/`winit` owns that loop; the headless app must provide its own.
+
+**Design:**
+- A **dedicated native thread** creates the `System` (tray + hotkey managers) and runs the message pump: `GetMessageW` → `TranslateMessage` → `DispatchMessageW` on that same thread. If the thread ever blocks on handles, use `MsgWaitForMultipleObjectsEx` to avoid the documented deadlock.
+- The **Tokio runtime runs on a separate thread** (or the main thread) and owns axum. It never owns the tray/hotkey managers.
+- `System::poll()` is called from the native loop, not from a Tokio timer. Actions are forwarded to the API/command layer over an `mpsc` channel; the command worker (Task B1) consumes them.
+- Shutdown: tray "Exit" posts `WM_QUIT` to the native loop and fires the axum `oneshot` shutdown signal; both threads join cleanly.
+- **Runtime choice:** benchmark `current_thread` against `rt-multi-thread` Tokio runtimes (§4) before locking the feature set. The app is I/O-light; `current_thread` may reduce RAM. Start with `rt-multi-thread` for safety, then measure and decide.
+
+**Test:** full manual journey — tray-only operation, hotkeys while browser closed, graceful exit; plus a unit test that the native loop forwards a synthetic `Action` to the command channel.
 
 ---
 
@@ -339,8 +385,8 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 
 ### Task F2 — API client + state store
 **Files:** `src/lib/api/client.ts`, `src/lib/api/events.ts`, `src/lib/state/app.svelte.ts`.
-- `client.ts`: `fetch` wrapper adding `Authorization: Bearer <token>` (token read from URL fragment on load, then held in memory); typed request/response interfaces mirroring §5 contracts.
-- `events.ts`: `EventSource('/api/events')` with reconnect; dispatch events into the store.
+- `client.ts`: on load, read the token from `location.hash` and call `POST /api/session` with `Authorization: Bearer <token>` to receive the session cookie; subsequent `fetch` calls are same-origin and rely on the cookie (bearer header optional). Typed request/response interfaces mirroring §5 contracts, including the `{ error: { code, message } }` error shape.
+- `events.ts`: `new EventSource('/api/events', { withCredentials: true })` with reconnect; the cookie authenticates it. Dispatch events into the store.
 - `app.svelte.ts`: exported `$state` object (mutate properties only), `$derived` dirty flag via `$state.snapshot` comparison, getter/setter functions for reassignment.
 - **Check:** store updates reactively; dirty flag correct; SSE reconnect works.
 
@@ -371,7 +417,8 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 - **Backend unit/integration:** all 43 existing tests must keep passing; new `oneshot` API tests for every endpoint and D1–D6 error case; command-layer state-transition tests.
 - **Frontend:** `svelte-check` + `tsc` clean; component tests for store reactivity and dirty flag (Vitest if added — justify the dependency before adding).
 - **Manual Windows journeys:** tray-only operation; hotkeys with browser closed; browser open/close lifecycle; overlay Ctrl+drag; full edit→save→apply→launch→tray→disable→enable journey; unsaved-change prompts.
-- **Performance:** three workloads from `docs/performance/results.md`; measure Rust and browser process trees separately; ≥3 runs, report ranges.
+- **Performance:** three workloads from `docs/performance/results.md`; measure Rust and browser process trees separately; ≥3 runs, report ranges. **Benchmark Tokio `current_thread` against `rt-multi-thread`** before locking the runtime feature set — the app is I/O-light and `current_thread` may reduce RAM. Also measure the command-worker channel overhead.
+- **Paneforge isolation:** keep all Paneforge usage behind the shadcn-svelte `Resizable` component wrapper (`$lib/components/ui/resizable`). Do not import `paneforge` directly in feature components — its stale maintenance status makes it a replaceable dependency.
 
 ---
 

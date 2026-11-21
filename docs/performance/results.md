@@ -54,9 +54,12 @@ separately — summing them into one figure hides the trade-off.
 ### Workload 3 — Active editing
 
 **Not yet measured.** Requires the frontend. The harness provides a deterministic
-20 s pointer workload (`-Mode ActiveEditing`). The historical egui active-CPU
-figures (1.01–46.14%) were noisy under synthetic cursor input and are **not**
-comparable to a deterministic SVG-canvas workload.
+20 s pointer workload (`-Mode ActiveEditing`) and reports `Active*` fields sampled
+**after** the workload. Browser processes are attributed only to PIDs created by
+the run — close all browser windows first, or the script warns that attribution
+may be incomplete. The historical egui active-CPU figures (1.01–46.14%) were
+noisy under synthetic cursor input and are **not** comparable to a deterministic
+SVG-canvas workload.
 
 ## Historical egui baseline (pre-change, `363201c`)
 

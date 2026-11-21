@@ -36,7 +36,7 @@ The crate is a binary (`src/main.rs`, no `src/lib.rs`). The backend is already t
 | `src/system.rs`, `src/autostart.rs` | None (`global-hotkey`, `tray-icon`, Win32) | Unchanged |
 | `src/main.rs`, `src/editor/*`, `src/overlay.rs` | `eframe`, `egui`, `shadcn-egui`, `rfd` | Replaced by HTTP API + Svelte UI |
 
-All boundary types (`AppConfig`, `Settings`, `Profile`, `Zone`, `ResolutionPreset`, `engine_core::Rect`, `KeyEvent`, `system::Action`) are plain owned serde structs with no egui types. `AppConfig` is already `Send + Sync` and cloned across a worker thread today. The backend can be retained verbatim; the migration surface is the GUI layer plus a new HTTP/API layer.
+All boundary types are plain owned Rust data with no egui types. **Serde status differs by type:** `AppConfig`, `Settings`, `Profile`, `Zone` and `ResolutionPreset` derive `Serialize`/`Deserialize`; `engine_core::Rect`, `KeyEvent` and `system::Action` do **not**. The HTTP layer therefore needs its own DTOs (or serde derives added to those three types during implementation) — do not assume every backend type can be put directly in a `Json` response. `AppConfig` is already `Send + Sync` and cloned across a worker thread today. The backend can be retained verbatim; the migration surface is the GUI layer plus a new HTTP/API layer.
 
 **Remaining backend work (from feature-preservation, not caused by this migration):** B4 gesture guards (GUI-side), B6 config-source unification, B10 `restore_active` parity, B12 dead `is_auto_start()`. These remain tracked in the roadmap; the new UI must not reintroduce them.
 
@@ -159,7 +159,7 @@ All responses are JSON. All requests require the per-launch token (§8). Command
 - `GET /api/events` → SSE stream of `{type, payload}` events: `state-changed`, `log`, `status`, `hotkey-action`, `apply-result`.
 - `GET /api/status` → lightweight status poll (fallback if SSE is unavailable).
 
-**Transport decision:** use **SSE** for backend→UI events and plain `fetch()` for commands. SSE is built into Axum, works with the browser's `EventSource`, needs no extra dependency, and handles the actual requirement (push logs/status/state changes). **WebSocket is unnecessary** — there is no bidirectional streaming need; high-frequency pointer previews stay in the frontend. Polling is a fallback only, not the primary mechanism.
+**Transport decision:** use **SSE** for backend→UI events and plain `fetch()` for commands. SSE is built into Axum, works with the browser's `EventSource`, needs no extra dependency, and handles the actual requirement (push logs/status/state changes). Native `EventSource` cannot set a bearer header, so it authenticates with the session cookie established by the bootstrap flow (§8); the auth guard applies only to `/api/*`, never to static assets. **WebSocket is unnecessary** — there is no bidirectional streaming need; high-frequency pointer previews stay in the frontend. Polling is a fallback only, not the primary mechanism.
 
 ### 5.2 Profiles
 
@@ -170,7 +170,11 @@ All responses are JSON. All requests require the per-launch token (§8). Command
 | PUT | `/api/profiles/{name}` | `{new_name}` | renamed |
 | DELETE | `/api/profiles/{name}` | — | deleted; applied dimension cleared if it was applied |
 | POST | `/api/profiles/{name}/duplicate` | `{new_name}` | copy |
-| POST | `/api/profiles/{name}/select` | — | D6 draft load; **409 if dirty** (D2 Discard/Cancel required) |
+| POST | `/api/profiles/{name}/load` | — | **D6 editor rail:** load profile into the draft for editing; **409 if dirty** (D2 Discard/Cancel required). Does not apply. |
+| POST | `/api/profiles/{name}/select` | — | **D6 Home:** select only — update the Selected dimension, no draft change, no apply, no launch. |
+| POST | `/api/profiles/{name}/apply` | — | **D6 tray:** apply immediately when layout is enabled; when disabled, behave as select-only. **409 if dirty** (D2). |
+
+These are three distinct operations, not one. Tests must verify each path independently: rail load changes the draft and is dirty-guarded; Home select changes only selection; tray apply changes the Applied dimension when enabled and only selection when disabled.
 
 ### 5.3 Zones
 
@@ -275,7 +279,7 @@ This is a locally hosted management interface, not a public service. The user ha
 
 **Minimum necessary (verified against current guidance):**
 - **Loopback-only binding:** bind `127.0.0.1:0`, never `0.0.0.0` or `::`. Use the literal `http://127.0.0.1:<port>` in the launch URL — on modern Windows `localhost` may resolve to `::1` first and stall. Read the assigned port from `listener.local_addr().port()` (the pattern in axum's official SSE example). A random port is a convenience, **not** a security boundary.
-- **Per-launch random token:** generate 32 bytes with a CSPRNG (`getrandom`/`rand::OsRng`), URL-safe encoded. The initial browser navigation can only carry the token in the URL (query or fragment); use it once to establish the session, then send it as a header on `fetch()` calls. A query-string token is acceptable for this threat model; mitigate the history/referrer leak with `Referrer-Policy: no-referrer` and no outbound links. The token is the CSRF defense — a separate CSRF token is redundant.
+- **Per-launch random token + bootstrap session:** generate 32 bytes with a CSPRNG (`getrandom`), URL-safe encoded. Rust opens `http://127.0.0.1:<port>/#token=<token>` — the **fragment** is never sent in HTTP requests, logs or `Referer`. The SPA reads it in JS and calls `POST /api/session` with `Authorization: Bearer <token>`; the server sets an `HttpOnly; SameSite=Strict` session cookie. All later requests (fetch and native `EventSource` with `withCredentials: true`) are same-origin and carry the cookie. The auth guard covers **only `/api/*`** — static assets are public. The token is the CSRF defense; a separate CSRF token is redundant.
 - **Host header validation:** reject requests whose `Host` is not exactly `127.0.0.1:<port>`. This is the direct, cheap mitigation for DNS rebinding (a malicious page makes the browser contact loopback; the rebounded request carries the attacker's `Host`). Loopback binding alone does **not** stop this.
 - **No CORS headers:** the page and API are same-origin, so CORS is irrelevant. Never set `Access-Control-Allow-Origin: *` — that would let any origin read the API.
 - **Safe browser opening:** use the `open` crate (`open::that(url)`) or `webbrowser`, never `cmd /C start` (shell injection). The `open` crate sets `CREATE_NO_WINDOW` on Windows. Keep its `insecure` feature off. Construct the URL from a literal scheme/host, numeric port and URL-safe token — no untrusted input. `--app=` mode (Chromium/Edge only) is a UX convenience, not a security control.
