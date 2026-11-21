@@ -12,10 +12,12 @@
 
 | Workstream | Scope | Can start | Integrates at |
 |---|---|---|---|
-| **WS-A — Backend correctness** | The 12 confirmed bugs (B1–B12); config consistency; dead wrappers | Immediately | Checkpoint 1 |
-| **WS-B — GUI shell & navigation** | Shell rect ownership, status bar, min window size, Home view, state badges | Immediately (independent of WS-A) | Checkpoint 2 |
-| **WS-C — Profile & application workflow** | Save/Apply split, Disable, tray switching, assignment UI, workflow rules | After product decisions resolved | Checkpoint 3 |
-| **WS-D — Integration & regression testing** | Performance baseline, automated tests, manual Windows journeys | Baseline immediately; full testing after each checkpoint | Continuous |
+| **WS-A — Backend correctness & engine reliability** | Engine bugs (B1–B4, B9–B12); config consistency (B6/B7); dead wrappers. **No GUI functionality.** | Immediately | Checkpoint 1 |
+| **WS-B — GUI shell, layout ownership & navigation** | Shell rect ownership, status bar, min window size, Home view, state indicators, responsive breakpoints | Immediately (independent of WS-A) | Checkpoint 2 |
+| **WS-C — Profile management, assignments, Apply/Disable & tray workflows** | Save/Apply split, Launch & Arrange, Disable, tray switching, assignment UI, workflow rules (D1–D6) | Immediately (decisions D1–D6 are APPROVED) | Checkpoint 3 |
+| **WS-D — Integration, performance & regression verification** | Performance baseline, automated tests, manual Windows journeys | Baseline immediately; full testing after each checkpoint | Continuous |
+
+**Ownership correction:** GUI functionality must not be hidden inside the backend workstream. B5 (Launch button), B8 (profile switch apply) and the docs fix are GUI/workflow tasks owned by WS-B/WS-C, not WS-A. WS-A owns only engine/config correctness.
 
 ### Integration checkpoints
 
@@ -38,16 +40,18 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 |---|---|---|
 | Fix SendInput text injection (B1) | `engine.rs` | Replace ASCII-as-VK with `KEYEVENTF_UNICODE` for text; map `^X` to real VK; support common tokens. URLs and macros must type correctly. |
 | Fix path-based launching (B2) | `engine.rs` | Launch with `zone.path` when non-empty (fallback to `zone.exe`); add `CREATE_NO_WINDOW`; keep 8s wait. |
-| Fix drag-to-snap HWND (B3/B4) | `engine.rs`, `editor/mod.rs` | Walk to top-level window (`GetAncestor(GA_ROOT)`); add AHK guards: class exclusion, title-bar region, 8px threshold. |
-| Fix Launch button (B5) | `editor/mod.rs`, `action_bar.rs` | Perform real execution or rename to "Preview steps" — product decision §7 required. |
-| Unify config source (B6) | `editor/mod.rs` | Hotkey actions use in-memory config, not `config::load_config()` from disk; reload only on Revert. |
+| Fix drag-to-snap HWND (B3/B4) | `engine.rs` | Walk to top-level window (`GetAncestor(GA_ROOT)`); add AHK guards: class exclusion, title-bar region, 8px threshold. Engine-side only. |
+| Unify config source (B6) | `config.rs`, `engine.rs` | Provide a single in-memory config source for engine operations; remove engine-side disk reloads. GUI call sites updated by WS-C. |
 | Fix `LOADED_SETTINGS` (B7) | `config.rs` | Pass `&Settings` explicitly or refresh snapshot on save/revert. |
-| Fix profile switch apply (B8) | `editor/rail.rs`, `editor/mod.rs` | Rail switch = draft; Home/Tray switch = apply (after WS-C). |
-| Fix `LaunchApp(i)` zone id (B9) | `editor/mod.rs` | Map hotkey index to zone id, not list position. |
+| Fix `LaunchApp(i)` zone id (B9) | `engine.rs` / `system.rs` | Map hotkey index to zone id, not list position (engine action layer). |
 | Fix `restore_active` parity (B10) | `engine.rs` | Only re-snap when window is maximized (AHK parity). |
-| Wire config retries into drag | `engine.rs`, `editor/mod.rs` | Drag path must use `settings.dwm_snap_retries`. |
-| Fix docs on atomicity (B11) | `README.md`, `CHANGELOG.md` | Say "temp file + rename with small crash window", not "atomic". |
+| Wire config retries into drag | `engine.rs` | Drag path must use `settings.dwm_snap_retries`. |
 | Fix `is_auto_start()` (B12) | `autostart.rs` | Wire or remove dead helper with false doc comment. |
+
+**Moved out of WS-A (GUI/workflow ownership):**
+- B5 (Launch button real execution + Preview) → **WS-C** (D5).
+- B8 (profile switch apply) → **WS-C** (D6).
+- Docs on atomicity (B11) → **WS-D** (docs sync at Checkpoint 4).
 
 **Acceptance criteria:** each bug has a regression test where feasible (key mapping, path selection, zone-id mapping); manual Windows test for drag-to-snap and launching; `cargo test` ≥ 30 pass; clippy/fmt clean.
 
@@ -63,9 +67,9 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 | Hand rects to children | `canvas.rs`, `rail.rs`, `inspector.rs`, `action_bar.rs` | Children receive their rect; remove `stage_lower_h`, `available_height()-56`, `48.0` guessing. |
 | Canvas-focused layout | `shell.rs`, `canvas.rs` | Canvas gets max space; right aside appears only when a zone is selected or explicitly opened — no forced 3-column. |
 | Library accessibility | `shell.rs`, `rail.rs` | Left rail toggleable/collapsible; library one click away. |
-| Add min window size | `main.rs` | `ViewportBuilder::with_min_inner_size([900,600])`. |
+| Add min window size | `main.rs` | `ViewportBuilder::with_min_inner_size([700,500])` — lowered from 900 so the defined 700–799px responsive breakpoint is reachable (contradiction resolved). |
 | Add status bar | NEW `editor/status_bar.rs`, `mod.rs` | Engine state, active profile, zone count, version. Move "Engine ready" out of top bar. |
-| State badges | `top_bar.rs`, `home.rs`, `status_bar.rs` | Distinct visuals for saved / unsaved / applied / disabled. |
+| State indicators | `top_bar.rs`, `home.rs`, `status_bar.rs` | Four **independent** dimensions: Saved, Applied, Enabled, Selected/Editing — distinct indicators, never one ambiguous badge. |
 | Add Home view | NEW `editor/home.rs`, `state.rs`, `mod.rs` | Active profile status, profile list with Apply/Edit/Duplicate/Rename/Delete, New profile, Disable layout. |
 
 **Acceptance criteria:** screenshots at 1280×720 / 1920×1080 / maximized show no clipping; canvas is primary; library accessible; inspector contextual; status bar visible; `cargo test` pass.
@@ -74,21 +78,24 @@ At each checkpoint: run all automated commands, execute the relevant manual Wind
 
 ## 4. WS-C — Profile & application workflow
 
-**Objective:** Implement the intended UX from `zoneflow-product-workflow.md` (§2a, §3a, §4a, §6).
+**Objective:** Implement the intended UX from `zoneflow-product-workflow.md`. **All six product decisions D1–D6 are APPROVED** — no decisions pending.
 
 | Task | Files | Requirement |
 |---|---|---|
 | Split Save and Apply | `action_bar.rs`, `mod.rs` | Separate buttons: Save (persist only), Apply (use now), Revert. Remove "Save & Apply". |
-| Apply modes | `mod.rs`, `action_bar.rs` | Mode B (arrange running) default, Mode A (launch & arrange) optional — product decision §7. |
-| Add Disable layout | `config.rs` (runtime flag), `mod.rs`, `system.rs`, tray | `layout_enabled` flag; exact suspend list from product §6; tray toggle; re-enable re-applies. |
-| Tray profile switching | `system.rs` | Tray menu: active profile header, profile submenu (apply on click), Disable/Enable, Open editor, Settings, Exit. |
-| Separate rail vs Home switching | `rail.rs`, `home.rs` | Rail switch loads draft; Home/Tray switch applies. |
-| Assignment workflow | `rail.rs`, `dialogs.rs`, `mod.rs`, `inspector.rs` | Drag library→zone, picker assign, replace/remove rules (product §2a/§3a), contextual rule config, assignment visibility. |
-| Ambiguity rules | `mod.rs`, `home.rs`, `dialogs.rs` | Unsaved-change prompts, apply-failure reporting, revert, replace/remove, same-app-in-multiple-zones warning (product §2a). |
+| **(D1)** Apply + Launch & Arrange | `mod.rs`, `action_bar.rs` | Apply = arrange running apps only (default, never launch). Launch & Arrange = explicit launch + arrange, respect Launch/Attach, report per-zone failures. Two distinct actions. |
+| **(D2)** Unsaved changes | `mod.rs`, `home.rs`, `dialogs.rs` | Disable Apply while dirty with "Save or revert your changes before applying"; profile switching with unsaved changes requires Discard/Cancel. |
+| **(D3)** Replace assignment | `mod.rs`, `inspector.rs`, `dialogs.rs` | Preserve zone geometry/ID/position; replace identity; reset rules with confirmation for non-default; never delete library entry. |
+| **(D4)** Disable layout | `config.rs` (runtime flag), `mod.rs`, `system.rs`, tray | Suspend all positioning, drag-snap, auto-launch, movement hotkeys, launch/focus hotkeys; tray/profile/editor/settings stay available; profile selection while disabled = select only; runtime-only, resets on restart; Enable re-applies via normal Apply. |
+| **(D5)** Launch + Preview | `mod.rs`, `action_bar.rs`, `inspector.rs` | Launch performs real execution with success/failure feedback; separate Preview inspects steps without running; no simulated success. |
+| **(D6)** Profile switching | `rail.rs`, `home.rs`, `system.rs` | Rail = load draft; Home = select only (explicit Apply/Launch & Arrange); tray = apply immediately when enabled, select-only when disabled. |
+| Tray menu | `system.rs` | Active profile header, profile submenu, Disable/Enable, Open editor, Settings, Exit. |
+| Assignment workflow | `rail.rs`, `dialogs.rs`, `mod.rs`, `inspector.rs` | Drag library→zone, picker assign, replace/remove (D3), contextual rule config, assignment visibility. |
+| Same-app warning | `mod.rs`, `inspector.rs` | Detect duplicate exe/path within one profile; warn "only one window per app; last zone wins" (product §3b). No multi-window claim. |
 
-**Acceptance criteria:** full user journey passes manually (Open → Home → Edit → Assign → Save → Apply → Tray switch → Disable → Enable); no data loss; unsaved-change rules honored; `cargo test` pass.
+**Acceptance criteria:** full user journey passes manually (Open → Home → Edit → Assign → Save → Apply → Launch & Arrange → Tray switch → Disable → Enable); no data loss; D1–D6 behaviors verified; unsaved-change rules honored; `cargo test` pass.
 
-**Depends on:** product decisions (§7 of product workflow) + WS-B shell hosting Home/tray.
+**Depends on:** WS-B shell hosting Home/tray. Product decisions are approved — no blocking decisions.
 
 ---
 
@@ -149,6 +156,9 @@ Rules: measure current build first; re-measure at each checkpoint; record deltas
 | Stale plan/docs mislead future work | Checkpoint 4 syncs all docs; these four documents are the source of truth until then |
 | Workstreams diverge | Integration checkpoints with explicit acceptance criteria; no unfinished integration |
 | Multi-monitor scope creep | Explicitly out of scope — do not implement or plan |
+| Same app in multiple zones within one profile moves the same HWND twice (`engine.rs:315-334`, `:522-534`) | Warn in editor (product §3b); do not claim multi-window support; proper multi-window matching deferred |
+| Responsive breakpoints unreachable | Minimum window size lowered to 700px so 700–799px breakpoint is reachable (GUI §2.3) |
+| Repository default branch is empty `main` while `master` holds the project | See final report — recommendation to make `master` default requires authorization; no change made |
 
 ---
 

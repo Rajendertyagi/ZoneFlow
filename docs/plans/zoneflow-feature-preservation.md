@@ -83,7 +83,10 @@ Consequences:
 | Apply/disable | Save & Apply only | Apply verb + Disable verb | **Split Save and Apply; add Disable** (new) |
 | Profile-specific assignments | Already in model (`Profile.zones` → `Zone.exe/path/rules`) | Same model; UI shows assignments per profile | No data change; add assignment visibility (§1a) |
 | Global app library | Runtime enumeration, no assignments stored | Reusable entries only | No change; keep separate from assignments |
-| Apply mode (launch vs arrange) | Current Apply = arrange only (`save_apply` retiles, no launch) | Mode B default, Mode A optional | Product decision (product workflow §4a) — no assumed change |
+| Apply mode (launch vs arrange) | Current Apply = arrange only (`save_apply` retiles, no launch) | **(D1)** Apply (arrange running, default) + Launch & Arrange (explicit) | Add Launch & Arrange action; keep Apply as-is |
+| Launch button | Console simulation (`run_sequence`) | **(D5)** real execution + separate Preview | Replace simulation with real execution; add Preview action |
+| Disable layout | Absent | **(D4)** runtime-only flag, suspends all automation | New feature; resets to enabled on restart |
+| Same app in multiple zones (one profile) | Backend returns single HWND per exe/path (`engine.rs:315-334`); `retile` moves same window twice (`engine.rs:522-534`) | Warn in editor; no reliable multi-window support | Document limitation (product §3b); proper multi-window matching deferred |
 
 ---
 
@@ -112,10 +115,19 @@ Consequences:
 |---|---|---|
 | `Profile.hotkey` field | Dead — global hotkeys in `AppConfig.hotkeys` | Keep field; wire to profile switching in a future iteration or document as reserved. Do not delete silently. |
 | Compatibility wrappers in `engine.rs`/`engine_core.rs` | Thin wrappers around config-aware variants | Keep for now; remove only after all call sites migrated and tests confirm. |
-| `run_sequence` simulation | Doesn't execute | Keep as "Preview steps" or convert to real execution — decision pending (product workflow §7). |
+| `run_sequence` simulation | Doesn't execute | **(D5 — APPROVED)** Launch performs real execution; keep a separate Preview action for inspecting steps. No simulated success. |
 | Config-only tunables (~17) | Not editable in UI | Keep in config; expose gradually. Do not remove. |
 | `clear_layout` name | Maps to Retile, not clear | Rename action internally to `retile_all` in a future cleanup; preserve hotkey behavior. |
 | Unicode-free Lucide icons | Already correct | No change. |
+
+---
+
+## 4a. Same application in multiple zones — verified limitation
+
+- **Different profiles:** same app in different zones is fully supported (each profile owns independent zones — §1a). Preserve this.
+- **Within one profile:** `find_window_by_path_min` (`engine.rs:315-334`) returns a **single** HWND (first exe match or exact path match). `retile` (`engine.rs:522-534`) calls it per zone, so two zones with the same exe/path receive the **same HWND** — the window is moved twice, last zone wins. `execute_zone` behaves similarly.
+- **Safest initial behavior:** detect duplicate exe/path within a profile, warn the user ("only one window can be placed per app; last zone will win"), do not claim multi-window support, do not silently move the same window without warning. Keep the model permissive (user may intend two instances the backend cannot distinguish).
+- **Deferred capability:** proper multi-window matching (enumerate all windows for an exe/path, track placed HWNDs, assign distinct instances) — separate future work, not in scope.
 
 ---
 

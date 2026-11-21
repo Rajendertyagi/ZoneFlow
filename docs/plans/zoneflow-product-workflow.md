@@ -113,13 +113,13 @@ These are **decisions** for the intended workflow. Each must be implemented cons
 |---|---|
 | **Editing the active profile** | Allowed. The editor works on a draft copy; the applied layout on Windows is unchanged until **Apply**. Home/tray continue to show the active (saved) profile, not the draft. |
 | **Saving without applying** | Draft is written to disk for that profile. Unsaved badge clears. Windows are **not** repositioned; active profile status is unchanged. |
-| **Applying with unsaved changes** | **Apply uses the saved profile, not the draft.** The UI must make this explicit: either disable Apply while dirty with a tooltip "Save first", or apply the saved version and show a notice "Applied saved version — your unsaved edits were not applied". Recommended: disable Apply while dirty to avoid confusion. *(Decision requiring review.)* |
-| **Switching profiles with unsaved changes** | Prompt: "Discard unsaved changes to [profile]?" with **Discard / Cancel**. Never silently discard. Switching loads the target profile's own zones/rules. |
+| **Applying with unsaved changes** | **(D2 — APPROVED)** **Disable Apply while the draft has unsaved changes.** Show the explanation: "Save or revert your changes before applying." Never silently apply an old saved version when the user expects their edits to be applied. The same rule applies to **Launch & Arrange**. |
+| **Switching profiles with unsaved changes** | **(D2 — APPROVED)** Requires explicit **Discard** or **Cancel**. Never silently lose draft changes. Switching loads the target profile's own zones/rules. |
 | **Apply failure / partial application** | Apply is best-effort per zone. Each zone reports success/failure in the console. A summary shows "Applied 2/3 zones; 1 failed (app not found)". The profile is still marked active (it was selected), but the status shows "Applied with errors". No silent partial success. |
 | **Reverting changes** | Reload the draft from disk for the current profile; clear unsaved badge; reset selection and transient drag/merge state; re-register hotkeys from the saved config. Does not change the active profile on Windows. |
-| **Replacing an application assignment** | Assigning a new app to an occupied zone replaces the binding (label/exe/path) and **resets that zone's rules** (launch mode, URL, title, tab, macro) to defaults — with an inline confirmation if rules were non-default. Alternative: carry rules over — *(decision requiring review)*. |
+| **Replacing an application assignment** | **(D3 — APPROVED)** Preserve zone geometry, ID and position. Replace application identity (label, exe, path). Reset application-specific rules (launch mode, URL, title, tab, macro) to defaults. Show confirmation before resetting non-default rules. Do **not** delete the application from the global library. |
 | **Removing an assignment** | Clears the zone's app fields (label/exe/path) and rules; the zone remains as an empty region. The application entry stays in the global library. Never deletes the library entry. |
-| **Same app in multiple zones within one profile** | Allowed but warned: "Chrome is already assigned to Zone 1. Assigning to Zone 2 as well may cause unpredictable placement." The model permits it (each zone is independent); the UI warns because one process may match multiple zones. |
+| **Same app in multiple zones within one profile** | See §3b — backend limitation documented; safest initial behavior defined. Different profiles may freely assign the same app to different zones. |
 | **Closing with unsaved changes** | Existing close dialog preserved: Minimize to tray / Exit / Cancel + Remember choice. If Exit is chosen with unsaved changes, the draft is auto-saved by `on_exit` (existing behavior) — document this clearly in the dialog copy. |
 
 ---
@@ -134,6 +134,26 @@ The canvas stays primary; assignment is a deliberate gesture, not a permanent pa
 4. **Remove an assignment.** Zone context menu → "Remove app from zone" → clears zone fields only; library entry untouched.
 5. **Configure rules contextually.** With a zone selected, the contextual inspector shows Launch mode, Process matching (exe/path), Browser rules (URL/title/tab), and Macro (trigger/keys/delay). These are zone-scoped → profile-scoped (§1a).
 6. **Show assignments clearly.** The editor footer "Apps in this workspace" lists each assigned app → zone for the **current profile** (existing `apps_strip`). Optionally an assignment matrix across profiles (§1a example) — a future enhancement, not required initially.
+
+---
+
+## 3b. Same application in multiple zones — backend limitation (verified)
+
+**Different profiles:** freely supported and required. Chrome → Zone 1 in Coding, Zone 2 in Trading, Zone 3 in Gaming (§1a). Each profile owns independent zones; no conflict.
+
+**Within ONE profile:** the current backend has a real limitation.
+
+- `find_window_by_path_min` (`engine.rs:315-334`) returns a **single** `HWND` — the first exe-name match, or the exact full-path match. It has no concept of "already placed" windows and cannot return multiple windows for one app.
+- `retile` (`engine.rs:522-534`) iterates zones and calls `find_window_by_path_min` **per zone**. If two zones in one profile specify the same exe/path, **both zones receive the same first HWND** and the window is moved twice — the last zone wins. The same applies to `execute_zone` during Apply/Launch & Arrange.
+- **Why repeated placement is incorrect:** one window cannot occupy two zones simultaneously. Silently moving the same window between zones produces unpredictable final placement and misleading "success" logs.
+
+**Safest behavior for the initial implementation:**
+1. Detect duplicate exe/path assignments **within one profile** in the editor.
+2. Show a clear warning: "Chrome is assigned to Zone 1 and Zone 2. Only one window can be placed per app; the last zone will win." Recommend removing the duplicate or using different apps.
+3. Do **not** claim reliable multi-window support. Do not silently move the same window between zones without warning.
+4. Keep the model permissive (no forced deletion) — the user may intend two instances of the same app, which the backend cannot currently distinguish.
+
+**Future capability (separate, not in scope):** proper multi-window matching — enumerating all windows for an exe/path, tracking which HWND was already placed, and assigning distinct instances to distinct zones. This requires a new matching/placement design and is explicitly deferred.
 
 ---
 
@@ -213,8 +233,8 @@ Settings…
 Exit
 ```
 - Header shows active profile; checkmark marks the applied profile.
-- Profile submenu applies on click (no main window needed).
-- Disable/Enable toggle suspends the active layout without deleting it.
+- **(D6)** Profile submenu **applies immediately on click** when layout is enabled (no main window needed). When disabled, selecting a profile changes the selection only — nothing is applied or launched; status shows "Disabled".
+- **(D4)** Disable/Enable toggle suspends all layout automation without deleting anything; tray, profile selection, editor and settings stay available.
 - Open editor opens the main window on the Layout Editor.
 - Settings and Exit as today.
 
@@ -226,66 +246,79 @@ Exit
 |---|---|
 | "Save & Apply" single button | Separate **Save** (persist) and **Apply** (use now) |
 | Profile switch in rail only changes selection | Rail switch loads draft; Home/Tray switch applies |
-| Launch button only prints to console | Launch must perform real execution (or be renamed "Preview steps") |
+| Launch button only prints to console | **(D5 — APPROVED)** Launch performs real execution; a separate Preview action inspects steps without running |
 | Active profile implicit | Active profile explicitly shown in Home and tray |
 | No disable concept | Explicit Disable/Enable layout action |
 
 ---
 
-## 4a. Apply behavior — two modes (PRODUCT DECISION REQUIRING REVIEW)
+## 4a. Apply behavior — two modes (D1 — APPROVED)
 
-Two modes are possible. This document **does not assume** an implementation change; it presents the decision.
+**Decision D1 is APPROVED. Both modes are required as distinct, understandable actions.**
 
-| Mode | Behavior | Pros | Cons |
-|---|---|---|---|
-| **A — Launch and arrange** | Launch missing assigned applications, then arrange their windows. | Matches the original AHK script (`AutoLaunchAndSnapAll`) and the current `auto_launch_on_startup` option; one action sets up the whole workspace. | Can launch many apps at once; slower; may fail if apps are not installed. |
-| **B — Arrange running applications** | Only position applications that are already running; do not launch anything. | Matches DisplayFusion Window Position Profiles and FancyZones (which never launch apps); fast, predictable, no surprise launches. | User must open apps manually first. |
+| Action | Behavior |
+|---|---|
+| **Apply** (default) | Arrange applications that are **already running**. **Never** unexpectedly launch missing applications. |
+| **Launch & Arrange** | Explicitly launch missing assigned applications, then arrange their windows into configured zones. Respect each zone's existing **Launch/Attach** setting. Report individual launch and positioning failures. |
 
-**Recommendation (for review):** default to **Mode B — arrange running applications** for the Apply button, because it is predictable and matches the "apply a layout" mental model. Keep **Mode A** available as an explicit "Launch & arrange" action (or via the existing `auto_launch_on_startup` setting at startup). The user selects the other mode through a small choice in the Apply button's dropdown or a Settings option — **not** by changing behavior silently.
+- These are **two separate buttons/actions**, not a mode toggle that silently changes behavior.
+- **Apply** is the default and safe action. **Launch & Arrange** is explicit and opt-in.
+- Per-zone Launch/Attach: a zone in `Attach` mode must not launch; it only attaches if running (existing `LaunchMode` semantics, `config.rs:90`).
+- Failures are reported per zone (e.g. "Chrome: launched, positioned" / "Obsidian: not running, Attach mode — skipped" / "VS Code: launch failed").
 
-**Current source reality:** `save_apply` (`mod.rs:312-327`) only saves + re-tiles + re-registers hotkeys — it does **not** launch apps. Real launching happens via hotkeys (`Action::LaunchApp`) and the opt-in startup auto-launch worker. So today's Apply is effectively **Mode B**. Making Mode A available is an addition, not a change to existing behavior.
+**Current source reality:** `save_apply` (`mod.rs:312-327`) only saves + re-tiles + re-registers hotkeys — it does **not** launch apps. Real launching happens via hotkeys (`Action::LaunchApp`) and the opt-in startup auto-launch worker. So today's Apply is effectively Mode B. **Launch & Arrange** is a new explicit action built on the existing `execute_zone_with_config` path.
 
 ---
 
-## 6. New capability: Disable layout
+## 6. Disable layout (D4 — APPROVED)
 
-Currently absent from both the Rust app and the AHK original. Required by the intended UX.
+Currently absent from both the Rust app and the AHK original. Required by the intended UX. **Decision D4 is APPROVED.**
 
 **Temporary disabling vs removing/deactivating a profile:**
-- **Disable** is a temporary, runtime suspension of layout automation. It does **not** delete, deactivate, or modify any profile. The active profile remains selected and visible in Home/tray, marked "Disabled".
+- **Disable** is a temporary, runtime suspension of layout automation. It does **not** delete, deactivate, or modify any profile. The selected profile remains visible in Home/tray, marked "Disabled".
 - Removing/deactivating a profile is a separate, destructive management action (Delete) — unaffected by this feature.
 
-**Exact behavior when disabled — what is suspended:**
+**Exact behavior when disabled — what is suspended (all approved):**
 
-| Capability | Suspended? | Notes |
-|---|---|---|
-| Automatic window positioning (re-tile on Apply/display change) | **Yes** | No windows are moved while disabled. |
-| Drag-to-snap overlay | **Yes** | Ctrl+drag does nothing while disabled. |
-| Automatic application launching (startup auto-launch) | **Yes** | No apps launched while disabled. |
-| Global hotkeys that move windows (`Ctrl+Alt+arrows`) | **Yes** | Window movement suppressed. |
-| Global hotkeys that launch/focus apps (`Ctrl+Shift+1..9`) | **Decision needed** — recommended: keep active, since they are explicit user actions, not automation. | See open questions. |
-| Profile switching (tray/Home) | **No** — switching still selects a profile, but does not apply it while disabled. | Status shows "Selected: X (disabled)". |
+| Capability | Suspended? |
+|---|---|
+| Automatic window positioning (re-tile on Apply/display change) | **Yes** |
+| Drag-to-snap overlay | **Yes** |
+| Automatic application launching (startup auto-launch) | **Yes** |
+| Window movement hotkeys (`Ctrl+Alt+arrows`) | **Yes** |
+| Application launch/focus hotkeys (`Ctrl+Shift+1..9`) | **Yes** |
 
-**What Enable restores:** re-applies the currently selected profile (per the chosen Apply mode), re-enables drag-to-snap, re-tiling on display change, and auto-launch on next startup. It does not re-launch apps that were closed while disabled unless Mode A is explicitly chosen.
+**What stays available while disabled:** tray access, profile selection, editor access, and settings.
 
-**State visibility:** tray toggle shows "Disable layout" / "Enable layout"; Home shows a clear "Layout disabled" badge; status bar reflects disabled state.
+**Profile selection while disabled:** changes the **selected profile only** — it must **not** apply or launch anything. Show explicit "Disabled" status.
 
-- Add a `layout_enabled: bool` runtime flag — not persisted; default enabled on startup.
+**What Enable restores:** layout automation and re-applies the selected profile using the normal **Apply** behavior (D1 default — arrange running apps only; no unexpected launches).
+
+**Startup persistence (defined):** the disabled state is **runtime-only and resets to enabled on application restart**. This is predictable and documented: on every launch, layout automation is enabled and the selected profile is applied per normal startup behavior. *(If persistence is later desired, it becomes a separate Settings option — not in scope now.)*
+
+**State visibility:** tray toggle shows "Disable layout" / "Enable layout"; Home shows a clear "Disabled" badge; status bar reflects disabled state.
+
+- Add a `layout_enabled: bool` runtime flag — **not persisted**; default `true` on startup.
 - This is a **new** feature, not a preservation item; it must be added without removing existing capabilities.
 
 ---
 
-## 7. Decisions and open questions
+## 7. Decisions (frozen) and remaining technical questions
 
-### Decided
-- **Multi-monitor support — NOT in scope.** ZoneFlow targets the primary work area only, matching the original AHK script. No multi-monitor work should be planned or implemented.
+### APPROVED product decisions (D1–D6 — confirmed requirements, not open questions)
+- **D1 — Apply modes:** both **Apply** (arrange running apps only, default) and **Launch & Arrange** (explicitly launch missing apps, respect Launch/Attach, report failures) are required as distinct actions (§4a).
+- **D2 — Unsaved changes:** disable Apply while dirty with explanation "Save or revert your changes before applying"; profile switching with unsaved changes requires explicit Discard/Cancel (§2a).
+- **D3 — Replace assignment:** preserve zone geometry/ID/position; replace app identity; reset rules to defaults with confirmation for non-default rules; never delete the library entry (§2a).
+- **D4 — Disable:** suspends all window positioning, drag-to-snap, auto-launch, window-movement hotkeys and launch/focus hotkeys; tray/profile/editor/settings stay available; profile selection while disabled changes selection only; runtime-only state resets to enabled on restart (§6).
+- **D5 — Launch button:** performs real execution; a separate Preview action inspects steps without running; no simulated success (§5 / anti-pattern table).
+- **D6 — Profile switching:** rail = load draft for editing; Home = select only (explicit Apply or Launch & Arrange); tray = apply immediately when enabled, select-only when disabled (§2a / §4.5).
+
+### Other decided items
+- **Multi-monitor support — NOT in scope.** Primary work area only, matching the AHK script. No multi-monitor work should be planned or implemented.
 - **Profile-specific assignments — CONFIRMED and already supported by the data model** (§1a). No data-model rewrite needed.
 - **Edit / Save / Apply / Disable are separate verbs** (§1). No combined "Save & Apply" in the redesigned UI.
 
-### Open questions requiring user approval before implementation
-1. **Apply mode** (§4a): default to Mode B (arrange running apps) with Mode A (launch & arrange) as an explicit option? Or keep launch as the default?
-2. **Apply with unsaved changes** (§2a): disable Apply while dirty, or apply the saved version with a notice?
-3. **Replacing an assignment** (§2a): reset the zone's rules to defaults, or carry them over to the new app?
-4. **Disable scope** (§6): should `Ctrl+Shift+1..9` launch/focus hotkeys remain active while disabled? (Recommendation: yes — explicit user actions.)
-5. **Launch button** (existing): perform real execution, or rename to "Preview steps" if the simulation is retained?
-6. **Rail vs Home profile switching** (§2a): rail = edit draft, Home/Tray = apply — confirm this split.
+### Remaining genuinely unresolved technical questions (not product decisions)
+1. **Same app in multiple zones within one profile** (§3b): backend returns a single HWND per exe/path — document the limitation and warn in the editor; proper multi-window matching is a deferred capability. No product decision needed — the safe behavior is defined.
+2. **Responsive breakpoints vs minimum window size** (GUI architecture §2.3): must be reconciled before implementation — see that document for the resolution.
+3. **Repository default branch** (see final report): `main` is empty and default; `master` holds the project. Recommendation to make `master` default requires authorization — no change made.

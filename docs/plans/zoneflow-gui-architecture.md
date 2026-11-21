@@ -83,12 +83,14 @@ The right aside is **not** always present — it appears when a zone/app is sele
 - Remove magic numbers: `stage_lower_h`, `available_height()-56`, `48.0`, fixed `max_height` values where they compete.
 - **Library accessibility:** the left rail can be toggled/collapsed; when collapsed, a slim icon strip or a "Apps" toggle in the toolbar reopens it. The library is never more than one click away.
 
-### 2.3 Responsive behavior
-Use shadcn-egui's `layout::window_at_least(ctx, px)` and `layout::container_at_least(ui, px)` (both exist in 0.8, currently unused):
-- **≥ 1100px:** full shell (left rail + main + right aside).
-- **800–1100px:** right aside collapses to a toggle button; canvas expands.
-- **< 800px:** left rail collapses to icon-only or a drawer; canvas takes most space.
-- Set `ViewportBuilder::with_min_inner_size([900, 600])` in `main.rs` (currently missing).
+### 2.3 Responsive behavior (contradiction resolved)
+The earlier plan set a **900px minimum window width** but defined responsive behavior **below 800px** — unreachable. **Resolution: lower the minimum to 700px** and define breakpoints that are all reachable.
+
+- Set `ViewportBuilder::with_min_inner_size([700, 500])` in `main.rs` (currently missing). The layout must genuinely work at 700px.
+- Use shadcn-egui's `layout::window_at_least(ctx, px)` and `layout::container_at_least(ui, px)` (both exist in 0.8, currently unused):
+  - **≥ 1100px:** full shell (left rail + main + right aside).
+  - **800–1099px:** right aside collapses to a toggle button; canvas expands.
+  - **700–799px:** left rail collapses to icon-only; canvas takes most space. No behavior is defined below 700px because the window cannot go there.
 - Panel collapse: `egui::Panel` has no `collapsible` method and shadcn has no `show_collapsible`; use `egui::CollapsingHeader` or conditionally skip `Panel::left/right` based on a toggle in `Editor` state.
 
 ---
@@ -132,7 +134,16 @@ Navigation is coherent; no duplicated view state. Keep it. The redesign is about
 │ Engine ready · 17 hotkeys · v0.1.0                           │
 └──────────────────────────────────────────────────────────────┘
 ```
-**State badges must be visually distinct:** `APPLIED` (green), `SAVED` (neutral), `UNSAVED ●` (amber), `DISABLED` (red/grey). The active profile is always shown in Home and the tray.
+**State indicators are independent dimensions, not mutually exclusive badges** (correction to earlier plan):
+
+| Dimension | Question it answers | Values | UI location |
+|---|---|---|---|
+| **Saved** | Does the draft match the persisted profile? | Saved / Unsaved ● | TopBar, Editor footer |
+| **Applied** | Which profile/config is currently applied to Windows? | Profile name + Applied / Not applied | Home, StatusBar, tray checkmark |
+| **Enabled** | Is layout automation active? | Enabled / Disabled | Home, StatusBar, tray toggle |
+| **Selected/Editing** | Which profile is being edited? | Profile name | TopBar, Home, rail |
+
+These combine freely — e.g. a profile can be **Saved but not Applied**; an **Applied** profile can have a newer **Saved** version; a profile can be **Applied + Disabled**. Never collapse them into one ambiguous badge. Use distinct visuals: Saved (neutral), Unsaved ● (amber), Applied (green), Disabled (red/grey). The applied profile is always shown in Home and the tray.
 
 ### 4.2 Layout Editor (primary workspace)
 ```
@@ -177,17 +188,19 @@ Key changes from current: **Save** and **Apply** are separate buttons; inspector
 
 ## 6. State management
 
-- **Draft vs saved vs active** must be explicit in `Editor` state:
-  - `draft: AppConfig` (editing)
-  - `last_saved_json: String` (baseline for dirty)
-  - `active_profile: String` (applied to Windows) — currently conflated with `cfg.active_profile`
-  - `layout_enabled: bool` (new disable concept)
+- **Four independent state dimensions** must be explicit in `Editor` state (not mutually exclusive):
+  - `draft: AppConfig` + `last_saved_json: String` → **Saved** dimension (dirty check)
+  - `applied_profile: String` → **Applied** dimension (which config is on Windows) — currently conflated with `cfg.active_profile`
+  - `layout_enabled: bool` → **Enabled** dimension (D4, runtime-only, resets on restart)
+  - `cfg.active_profile` / editing selection → **Selected/Editing** dimension
+  - These are separate fields; never derive one from another.
 - **Profile-specific assignments are already in the data model** (see product workflow §1a): `Profile.zones: Vec<Zone>` (`config.rs:150-156`), each `Zone` owns exe/path/rules (`config.rs:84-109`), `attach_app` writes only to `active_mut().zones` (`mod.rs:585-596`). The global library is runtime enumeration (`rail.rs:485-569`), not persisted assignments. **No data-model rewrite is needed** — only UI clarity and the workflow rules in product workflow §2a/§3a.
 - **Dirty check:** cache a dirty flag updated on mutation instead of serializing the whole config twice per frame (`dirty()` at `mod.rs:272-274`, called from `top_bar.rs:17` and `action_bar.rs:33`).
 - **Config consistency:** hotkey actions currently call `config::load_config()` from disk (`mod.rs:356-385`) while auto-launch/display polling use `self.draft` (`mod.rs:1118,1200`). Unify on one source (the in-memory config) and reload from disk only on explicit Revert.
 - **LOADED_SETTINGS** (`config.rs:252`) is frozen at first load; config-free helpers (`resolutions()`, `app_list_cap`) never see runtime edits. Replace with passing `&Settings` explicitly or refreshing the snapshot on save/revert.
 - **History:** full-config JSON snapshots are heavy but acceptable for a small app; keep.
-- **Visual state mapping:** the four states (saved / unsaved / applied / disabled) must each have a distinct badge in TopBar, Home, and StatusBar — never implied by position alone.
+- **Visual state mapping:** the four independent dimensions (Saved, Applied, Enabled, Selected/Editing) must each have a distinct indicator in TopBar, Home, and StatusBar — never implied by position alone (see §4.1).
+- **Approved decisions reflected here:** D1 (Apply vs Launch & Arrange as distinct actions), D2 (Apply disabled while dirty), D3 (replace assignment rules), D4 (Disable suspends all automation, runtime-only), D5 (Launch real + separate Preview), D6 (rail=edit / Home=select / tray=apply).
 
 ---
 
