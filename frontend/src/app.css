@@ -1,0 +1,48 @@
+@import 'tailwindcss';
+
+/* Deep-slate surfaces with an amber accent — the ZoneFlow Studio palette.
+   Tailwind 4 CSS-first theme: these become `bg-zf-*`, `text-zf-*`, etc. */
+@theme {
+  --color-zf-bg: #070b14;
+  --color-zf-surface: #0d1526;
+  --color-zf-panel: #111c31;
+  --color-zf-raised: #17243d;
+  --color-zf-border: #22304a;
+  --color-zf-border-strong: #33445f;
+  --color-zf-text: #e6edf7;
+  --color-zf-muted: #93a4bd;
+  --color-zf-faint: #64748b;
+  --color-zf-accent: #f59e0b;
+  --color-zf-accent-hover: #fbbf24;
+  --color-zf-accent-ink: #1a1204;
+  --color-zf-ok: #34d399;
+  --color-zf-warn: #fbbf24;
+  --color-zf-error: #f87171;
+
+  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-zf-bg);
+    color: var(--color-zf-text);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #app {
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-zf-accent) 35%, transparent);
+  }
+}
