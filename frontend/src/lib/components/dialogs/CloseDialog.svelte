@@ -19,11 +19,11 @@
   const dirty = $derived(store.snapshot?.dirty ?? false);
 
   /**
-   * Mirror the existing egui close dialog (editor/dialogs.rs): set close_action
-   * to the chosen action when remembered (Ask otherwise) and persist the whole
-   * draft to disk. This both makes "Remember this choice" survive a restart and
-   * honours §2a's documented exception that Exit auto-saves a dirty draft.
-   * Returns false on failure so callers never discard data on a failed write.
+   * Mirror the native close-dialog behaviour: set close_action to the chosen
+   * action when remembered (Ask otherwise) and persist the whole draft to disk.
+   * This both makes "Remember this choice" survive a restart and honours §2a's
+   * documented exception that Exit auto-saves a dirty draft. Returns false on
+   * failure so callers never discard data on a failed write.
    */
   async function persist(action: 'minimize' | 'exit'): Promise<boolean> {
     try {
