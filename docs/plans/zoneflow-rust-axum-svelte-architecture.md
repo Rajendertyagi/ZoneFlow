@@ -4,6 +4,7 @@
 **Date:** 2026-11-21
 **Branch:** Based on `main` at `964aac7` (verified clean, matching `origin/main`).
 **Supersedes:** `slint-gui-migration-plan.md` as the active implementation direction (that document is retained as historical research). The four approved planning documents remain authoritative for product behavior: `zoneflow-product-workflow.md` (D1–D6), `zoneflow-feature-preservation.md`, `zoneflow-implementation-roadmap.md`, and `zoneflow-gui-architecture.md` (egui-specific layout guidance, now historical for the web UI).
+**Companion:** `zoneflow-rust-axum-svelte-implementation-plan.md` contains the code-level API details and task breakdown derived from official documentation. Read this document for architecture and that one for implementation.
 
 ---
 
@@ -125,7 +126,7 @@ Verified comparison (crates.io/docs.rs, 2026-11-21):
 
 Axum 0.8.9 has **no** built-in `ServeFile`/`ServeDir` in `axum::response` (verified across 0.5–0.8); disk serving requires `tower-http` with the `fs` feature. We do not need it — embedded bytes are served directly via `IntoResponse`, as in rust-embed's official axum example. Add an SPA fallback to `index.html`. Use forward slashes in `#[folder = "dist/"]` and lookups.
 
-**Open verification item:** confirm whether `Metadata::mimetype()` is available with default features in 8.14.0 (the official example enables `axum-ex`, which pulls `mime_guess`). If not, either enable the `mime-guess` feature or set `Content-Type` from the file extension. Resolve this in Phase 1.
+**Resolved:** `Metadata` in rust-embed 8.14.0 exposes only `sha256_hash()`, `last_modified()` and `created()` — **no `mimetype()` method**. Derive `Content-Type` from the file extension in the handler (a small `match` on the suffix), or add `mime_guess` explicitly. No extra crate is needed for the minimal path.
 
 ### 4.3 Rust runtime — verified versions
 
