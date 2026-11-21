@@ -6,6 +6,7 @@
     bootstrap,
     canRetryBootstrap,
     getBootstrapMessage,
+    readViewFromHash,
     retryBootstrap,
     setSessionExpiredHandler,
   } from '$lib/api/client';
@@ -88,11 +89,21 @@
     };
   });
 
+  /** Apply a view requested via `#token=…&view=…` (tray "Settings…"). */
+  function applyInitialView(view: string | null): void {
+    if (view === 'home' || view === 'editor' || view === 'hotkeys' || view === 'settings') {
+      navigate(view);
+    }
+  }
+
   async function initialize(): Promise<void> {
+    // Read the requested view before bootstrap clears the fragment.
+    const requestedView = readViewFromHash();
     if (!(await bootstrap())) {
       showBootstrapError();
       return;
     }
+    applyInitialView(requestedView);
     phase = 'ready';
     await refreshState();
     startEvents();
@@ -100,10 +111,12 @@
 
   async function retry(): Promise<void> {
     phase = 'loading';
+    const requestedView = readViewFromHash();
     if (!(await retryBootstrap())) {
       showBootstrapError();
       return;
     }
+    applyInitialView(requestedView);
     phase = 'ready';
     await refreshState();
     startEvents();

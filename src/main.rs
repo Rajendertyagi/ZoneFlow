@@ -12,7 +12,10 @@ mod system;
 mod web;
 
 use api::AppState;
-use native_loop::{HwndSend, NativeLoop, NativeNotifier, NativeQueue, SharedEvent, ShutdownHandle};
+use native_loop::{
+    HwndSend, NativeDirtyConfirm, NativeLoop, NativeNotifier, NativeQueue, SharedEvent,
+    ShutdownHandle,
+};
 use std::sync::{mpsc, Arc, OnceLock};
 use tokio::sync::{broadcast, oneshot, watch};
 use windows::Win32::Foundation::HANDLE;
@@ -167,7 +170,7 @@ fn main() {
 
     // Enter the message loop. Tray Exit and POST /api/shutdown both converge
     // on `shutdown.trigger()`, which sets the event and posts WM_STOP.
-    native.run(cmd_tx.clone(), &shutdown);
+    native.run(cmd_tx.clone(), &shutdown, &NativeDirtyConfirm);
 
     // --- ordered shutdown, steps 6–13 (architecture §3.6) ---
     // 6) Join Tokio. SSE streams were closed at step 2, so this cannot hang.

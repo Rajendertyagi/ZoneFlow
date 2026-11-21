@@ -263,6 +263,17 @@ function readTokenFromHash(): string | null {
 }
 
 /**
+ * Read the requested initial view from the URL fragment. The tray's
+ * "Settings…" item opens `#token=…&view=settings`; callers must read this
+ * BEFORE bootstrap() clears the fragment on success.
+ */
+export function readViewFromHash(): string | null {
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return null;
+  return new URLSearchParams(hash).get('view');
+}
+
+/**
  * Exchange the fragment token for the session cookie. The fragment is cleared
  * only on success so a retry can re-read it. Returns true when ready.
  */

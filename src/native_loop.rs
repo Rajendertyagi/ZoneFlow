@@ -9,9 +9,11 @@
 use crate::api::commands::CommandPayload;
 use crate::api::state::Inner;
 use crate::api::worker::Command;
+use crate::api::ApiError;
 use crate::config::AppConfig;
 use crate::engine_core::Rect;
-use crate::system::System;
+use crate::system::{Action, System};
+use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::c_void;
@@ -32,12 +34,12 @@ use windows::Win32::System::Threading::SetEvent;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, KillTimer,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW,
-    SetTimer, ShowWindow, TranslateMessage, UpdateLayeredWindow, HWND_MESSAGE, MSG,
-    MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SW_HIDE, SW_SHOW, ULW_ALPHA,
-    UPDATE_LAYERED_WINDOW_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_QUIT,
-    WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-    WS_POPUP,
+    MessageBoxW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, PostQuitMessage,
+    RegisterClassW, SetTimer, ShowWindow, TranslateMessage, UpdateLayeredWindow, HWND_MESSAGE,
+    IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MESSAGEBOX_STYLE, MSG, MWMO_INPUTAVAILABLE,
+    PM_REMOVE, QS_ALLINPUT, SW_HIDE, SW_SHOW, ULW_ALPHA, UPDATE_LAYERED_WINDOW_FLAGS,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_QUIT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const CLASS: PCWSTR = w!("ZoneFlow.MsgHost.7f3a9b7c");
@@ -77,6 +79,12 @@ pub enum NativeMessage {
     SetZones {
         zones: Vec<(i32, Rect)>,
     },
+    /// Full-state refresh of overlay colours/alpha from Settings (idempotent).
+    SetOverlayStyle {
+        tints: Vec<(u8, u8, u8)>,
+        inactive_alpha: u8,
+        active_alpha: u8,
+    },
     ShowOverlay,
     HideOverlay,
     /// Must-not-drop: latches shutdown on the native thread.
@@ -91,8 +99,9 @@ impl NativeMessage {
             Self::SetToggleLabel { .. } => 1,
             Self::ReregisterHotkeys { .. } => 2,
             Self::SetZones { .. } => 3,
-            Self::ShowOverlay => 4,
-            Self::HideOverlay => 5,
+            Self::SetOverlayStyle { .. } => 4,
+            Self::ShowOverlay => 5,
+            Self::HideOverlay => 6,
             Self::Shutdown => 255,
         }
     }
@@ -276,7 +285,33 @@ impl NativeNotifier {
         self.send(NativeMessage::SetZones { zones });
     }
 
-    #[allow(dead_code)] // used by Phase 5 overlay polish
+    /// Push a full-state overlay style refresh (Settings changes, §3.3 step 4).
+    pub fn set_overlay_style(
+        &self,
+        tints: Vec<(u8, u8, u8)>,
+        inactive_alpha: u8,
+        active_alpha: u8,
+    ) {
+        self.send(NativeMessage::SetOverlayStyle {
+            tints,
+            inactive_alpha,
+            active_alpha,
+        });
+    }
+
+    /// Derive and push the overlay style from the authoritative Settings.
+    pub fn sync_overlay_style(&self, settings: &crate::config::Settings) {
+        let tints = settings.zone_tints.iter().map(|s| parse_tint(s)).collect();
+        self.set_overlay_style(
+            tints,
+            settings.overlay_inactive_alpha,
+            settings.overlay_active_alpha,
+        );
+    }
+
+    // Reserved for producers that need to force overlay visibility; normal
+    // drag tracking drives the overlay directly from gesture state on main.
+    #[allow(dead_code)]
     pub fn show_overlay(&self) {
         self.send(NativeMessage::ShowOverlay);
     }
@@ -367,6 +402,74 @@ impl ShutdownHandle {
             {
                 tracing::debug!(error = %e, "WM_STOP post failed (event path still active)");
             }
+        }
+    }
+}
+
+/* ============================ D2 confirmation ============================ */
+
+/// Abstraction over the native dirty-draft confirmation so the tray-switch
+/// flow is unit-testable without a real modal dialog (architecture §4 / D2).
+pub trait DirtyConfirm {
+    /// `true` = Discard (retry with `discard_dirty=true`), `false` = Cancel.
+    fn confirm_discard(&self, profile: &str) -> bool;
+}
+
+/// Production implementation: a native `MessageBoxW` with Yes/No buttons whose
+/// text spells out the Discard/Cancel semantics explicitly. `None` is the owner
+/// on purpose — `HWND_MESSAGE` is not a valid owner (architecture §3.4).
+pub struct NativeDirtyConfirm;
+
+impl DirtyConfirm for NativeDirtyConfirm {
+    fn confirm_discard(&self, profile: &str) -> bool {
+        let text = format!(
+            "“{profile}” has unsaved changes.\n\nDiscard them and switch profiles?\n\nYes = Discard · No = Cancel"
+        );
+        let mut wide: Vec<u16> = text.encode_utf16().collect();
+        wide.push(0);
+        // SAFETY: `wide` is a local, null-terminated UTF-16 buffer that lives
+        // for the whole call; MessageBoxW copies its text. The modal loop still
+        // dispatches posted window messages, so WM_WAKE/WM_TIMER keep arriving.
+        unsafe {
+            MessageBoxW(
+                None,
+                windows::core::PCWSTR::from_raw(wide.as_ptr()),
+                w!("ZoneFlow — unsaved changes"),
+                MESSAGEBOX_STYLE(MB_YESNO.0 | MB_ICONWARNING.0 | MB_DEFBUTTON2.0),
+            ) == IDYES
+        }
+    }
+}
+
+/// Handle the oneshot reply of a tray profile switch. Only `DirtyState` opens
+/// the native dialog: Discard re-sends with `discard_dirty=true`, Cancel leaves
+/// authoritative state untouched — never a silent discard (D2).
+fn handle_tray_apply_reply(
+    result: Result<Value, ApiError>,
+    name: &str,
+    cmd_tx: &mpsc::Sender<Command>,
+    confirm: &dyn DirtyConfirm,
+) {
+    match result {
+        Ok(_) => {}
+        Err(ApiError::DirtyState) => {
+            if confirm.confirm_discard(name) {
+                let (reply, _) = oneshot::channel();
+                if let Err(e) = cmd_tx.send(Command {
+                    payload: CommandPayload::ProfileApply {
+                        name: name.to_string(),
+                        discard_dirty: true,
+                    },
+                    reply,
+                }) {
+                    tracing::warn!(error = %e, "failed to send discard-and-apply command");
+                }
+            } else {
+                tracing::info!(profile = %name, "tray profile switch cancelled (dirty draft)");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = ?e, profile = %name, "tray profile apply failed");
         }
     }
 }
@@ -522,10 +625,16 @@ impl NativeLoop {
 
         let work = crate::engine::work_area();
         // SAFETY: OVERLAY_CLASS is registered; the layered/ex-transparent/
-        // no-activate styles are valid flags; all coordinates are by value.
+        // topmost/no-activate/toolwindow styles are valid flags; all coordinates
+        // are by value. WS_EX_TRANSPARENT makes it click-through, WS_EX_TOPMOST
+        // keeps it above every app, WS_EX_TOOLWINDOW keeps it off the taskbar.
         let overlay = unsafe {
             CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT
+                    | WS_EX_TOPMOST
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE,
                 OVERLAY_CLASS,
                 w!(""),
                 WS_POPUP,
@@ -600,11 +709,36 @@ impl NativeLoop {
         self.zones = zones;
     }
 
+    /// Refresh cached overlay colours/alpha from a Settings change so the next
+    /// drag paints with the new values without a restart (§3.3 step 4).
+    pub fn set_overlay_style(
+        &mut self,
+        tints: Vec<(u8, u8, u8)>,
+        inactive_alpha: u8,
+        active_alpha: u8,
+    ) {
+        if !tints.is_empty() {
+            self.tints = tints;
+        }
+        self.inactive_alpha = inactive_alpha;
+        self.active_alpha = active_alpha;
+    }
+
     /// Run the message loop. Returns when the shutdown event is signalled or
     /// WM_QUIT is retrieved. Window destruction happens in `finish`, after all
     /// producers have been joined (§3.6 steps 10–12).
-    pub fn run(&mut self, cmd_tx: mpsc::Sender<Command>, shutdown: &ShutdownHandle) {
+    pub fn run(
+        &mut self,
+        cmd_tx: mpsc::Sender<Command>,
+        shutdown: &ShutdownHandle,
+        confirm: &dyn DirtyConfirm,
+    ) {
         let mut active = false;
+        // Tray profile switches are sent as guarded commands; their oneshot
+        // replies are polled here so a 409 dirty_state can open the native D2
+        // dialog without blocking the message loop on a busy worker.
+        let mut pending_applies: Vec<(String, oneshot::Receiver<Result<Value, ApiError>>)> =
+            Vec::new();
         loop {
             let timeout = if active { ACTIVE_MS } else { IDLE_MS };
             // SAFETY: `self.event` is a valid manual-reset event created before
@@ -634,6 +768,12 @@ impl NativeLoop {
                     break;
                 }
                 if msg.message == WM_QUIT {
+                    // Defensive: WM_QUIT normally arrives only after trigger()
+                    // posted WM_STOP, but any other source (e.g. an external
+                    // quit request) must still run the full §3.6 sequence so
+                    // SSE and Axum are closed before main joins them. trigger()
+                    // is idempotent, so this is a no-op on the normal path.
+                    shutdown.trigger();
                     return;
                 }
                 // SAFETY: `msg` was just filled by PeekMessageW and is valid.
@@ -648,12 +788,48 @@ impl NativeLoop {
 
             // Native → worker: hotkeys and tray clicks.
             for action in self.system.poll() {
-                let (reply, _) = oneshot::channel();
-                if let Err(e) = cmd_tx.send(Command {
-                    payload: CommandPayload::Action(action),
-                    reply,
-                }) {
-                    tracing::warn!(error = %e, "failed to forward native action to worker");
+                if let Action::ProfileApply(name) = action {
+                    // D6/D2: route tray profile clicks through the guarded
+                    // ProfileApply command so a dirty draft yields 409 instead
+                    // of being silently overwritten.
+                    let (reply, rx) = oneshot::channel();
+                    if let Err(e) = cmd_tx.send(Command {
+                        payload: CommandPayload::ProfileApply {
+                            name: name.clone(),
+                            discard_dirty: false,
+                        },
+                        reply,
+                    }) {
+                        tracing::warn!(error = %e, "failed to forward tray profile apply");
+                    } else {
+                        pending_applies.push((name, rx));
+                    }
+                } else {
+                    let (reply, _) = oneshot::channel();
+                    if let Err(e) = cmd_tx.send(Command {
+                        payload: CommandPayload::Action(action),
+                        reply,
+                    }) {
+                        tracing::warn!(error = %e, "failed to forward native action to worker");
+                    }
+                }
+            }
+
+            // Poll tray-apply replies without blocking. A DirtyState reply
+            // opens the (mockable) native dialog; Discard re-sends with the
+            // discard flag, Cancel leaves state untouched.
+            let mut i = 0;
+            while i < pending_applies.len() {
+                match pending_applies[i].1.try_recv() {
+                    Ok(result) => {
+                        let (name, _) = pending_applies.remove(i);
+                        handle_tray_apply_reply(result, &name, &cmd_tx, confirm);
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => i += 1,
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        tracing::warn!("tray profile apply reply channel closed");
+                        pending_applies.remove(i);
+                    }
                 }
             }
 
@@ -694,6 +870,11 @@ impl NativeLoop {
                     self.system.reregister_hotkeys(&hotkeys)
                 }
                 NativeMessage::SetZones { zones } => self.set_zones(zones),
+                NativeMessage::SetOverlayStyle {
+                    tints,
+                    inactive_alpha,
+                    active_alpha,
+                } => self.set_overlay_style(tints, inactive_alpha, active_alpha),
                 NativeMessage::ShowOverlay => self.show_overlay(),
                 NativeMessage::HideOverlay => self.hide_overlay(),
                 NativeMessage::Shutdown => shutdown.trigger(),
@@ -742,9 +923,10 @@ impl NativeLoop {
     }
 
     /// Paint the layered overlay with per-zone alpha via `UpdateLayeredWindow`.
-    /// This is a deliberately simple stub (Phase 5 adds polish): a 32bpp DIB
-    /// is filled with each zone's tint and the active/inactive alpha, then
-    /// blitted with `AC_SRC_ALPHA`.
+    /// Each zone is filled with its tint at the configured alpha and outlined;
+    /// the hovered zone gets a thicker, fully opaque highlight border. The DIB
+    /// is created and released per frame so no GDI handle is retained across
+    /// drag sessions.
     fn paint_overlay(&self) {
         if self.zones.is_empty() || self.tints.is_empty() {
             return;
@@ -797,9 +979,11 @@ impl NativeLoop {
                 (self.work.w as usize) * (self.work.h as usize) * 4,
             );
             pixels.fill(0);
+            let stride = self.work.w as usize;
             for (idx, (zid, z)) in self.zones.iter().enumerate() {
                 let (r, g, b) = self.tints[idx % self.tints.len()];
-                let alpha = if *zid == self.hover_zone {
+                let hovered = *zid == self.hover_zone;
+                let alpha = if hovered {
                     self.active_alpha
                 } else {
                     self.inactive_alpha
@@ -808,18 +992,34 @@ impl NativeLoop {
                 let y0 = (z.y - self.work.y).max(0) as usize;
                 let x1 = ((z.x - self.work.x + z.w) as usize).min(self.work.w as usize);
                 let y1 = ((z.y - self.work.y + z.h) as usize).min(self.work.h as usize);
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        let off = (y * self.work.w as usize + x) * 4;
-                        if off + 3 < pixels.len() {
-                            // DIB is BGRA.
-                            pixels[off] = b;
-                            pixels[off + 1] = g;
-                            pixels[off + 2] = r;
-                            pixels[off + 3] = alpha;
-                        }
-                    }
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
                 }
+                // Zone body at the configured alpha.
+                blit_rect(pixels, stride, (x0, y0, x1, y1), (r, g, b, alpha));
+                // Outline: thicker and fully opaque on the hovered zone, a
+                // subtle brighter edge elsewhere so every drop target is clear.
+                let border = if hovered { 3usize } else { 1usize };
+                let edge_alpha = if hovered {
+                    255
+                } else {
+                    alpha.saturating_add(40).min(200)
+                };
+                let edge = (r, g, b, edge_alpha);
+                blit_rect(pixels, stride, (x0, y0, x1, (y0 + border).min(y1)), edge);
+                blit_rect(
+                    pixels,
+                    stride,
+                    (x0, y1.saturating_sub(border).max(y0), x1, y1),
+                    edge,
+                );
+                blit_rect(pixels, stride, (x0, y0, (x0 + border).min(x1), y1), edge);
+                blit_rect(
+                    pixels,
+                    stride,
+                    (x1.saturating_sub(border).max(x0), y0, x1, y1),
+                    edge,
+                );
             }
 
             let blend = BLENDFUNCTION {
@@ -879,6 +1079,11 @@ impl NativeLoop {
                     self.system.reregister_hotkeys(&hotkeys)
                 }
                 NativeMessage::SetZones { zones } => self.set_zones(zones),
+                NativeMessage::SetOverlayStyle {
+                    tints,
+                    inactive_alpha,
+                    active_alpha,
+                } => self.set_overlay_style(tints, inactive_alpha, active_alpha),
                 NativeMessage::ShowOverlay => self.show_overlay(),
                 NativeMessage::HideOverlay => self.hide_overlay(),
                 NativeMessage::Shutdown => {}
@@ -942,6 +1147,27 @@ fn cursor_pos() -> (i32, i32) {
             tracing::warn!(error = %e, "GetCursorPos failed; using default position");
         }
         (p.x, p.y)
+    }
+}
+
+/// Fill a rectangle in a top-down 32bpp BGRA DIB. Coordinates are clipped by
+/// the caller; out-of-range pixels are ignored rather than wrapping rows.
+fn blit_rect(
+    pixels: &mut [u8],
+    stride: usize,
+    (x0, y0, x1, y1): (usize, usize, usize, usize),
+    (r, g, b, a): (u8, u8, u8, u8),
+) {
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let off = (y * stride + x) * 4;
+            if off + 3 < pixels.len() {
+                pixels[off] = b; // DIB byte order is BGRA.
+                pixels[off + 1] = g;
+                pixels[off + 2] = r;
+                pixels[off + 3] = a;
+            }
+        }
     }
 }
 
@@ -1049,6 +1275,12 @@ mod tests {
             }
             .kind(),
             NativeMessage::SetZones { zones: Vec::new() }.kind(),
+            NativeMessage::SetOverlayStyle {
+                tints: Vec::new(),
+                inactive_alpha: 0,
+                active_alpha: 0,
+            }
+            .kind(),
             NativeMessage::ShowOverlay.kind(),
             NativeMessage::HideOverlay.kind(),
             NativeMessage::Shutdown.kind(),
@@ -1057,6 +1289,209 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), kinds.len());
-        assert_eq!(unique.len(), 7);
+        assert_eq!(unique.len(), 8);
+    }
+
+    /* ------------------------- reverse updates ------------------------- */
+
+    #[test]
+    fn notifier_rebuild_menu_pushes_full_state() {
+        let queue = Arc::new(NativeQueue::new());
+        let notifier = NativeNotifier::new(queue.clone(), Arc::new(OnceLock::new()));
+        let mut inner = Inner::new(crate::config::default_config());
+        inner.applied_profile = "Coding".into();
+        inner.selected_profile = "Trading".into();
+        inner.layout_enabled = false;
+        notifier.rebuild_menu(&inner);
+        let drained = queue.drain();
+        assert_eq!(drained.len(), 1);
+        match &drained[0] {
+            NativeMessage::RebuildMenu {
+                applied,
+                selected,
+                profiles,
+                enabled,
+            } => {
+                assert_eq!(applied, "Coding");
+                assert_eq!(selected, "Trading");
+                assert_eq!(profiles.len(), 3);
+                assert!(!enabled);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notifier_reregister_hotkeys_pushes_bindings() {
+        let queue = Arc::new(NativeQueue::new());
+        let notifier = NativeNotifier::new(queue.clone(), Arc::new(OnceLock::new()));
+        let mut hotkeys = BTreeMap::new();
+        hotkeys.insert("clear_layout".to_string(), "Ctrl+Shift+1".to_string());
+        notifier.reregister_hotkeys(&hotkeys);
+        let drained = queue.drain();
+        assert_eq!(drained.len(), 1);
+        match &drained[0] {
+            NativeMessage::ReregisterHotkeys { hotkeys } => {
+                assert_eq!(hotkeys.get("clear_layout").unwrap(), "Ctrl+Shift+1");
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notifier_sync_overlay_style_pushes_tints_and_alpha() {
+        let queue = Arc::new(NativeQueue::new());
+        let notifier = NativeNotifier::new(queue.clone(), Arc::new(OnceLock::new()));
+        let mut settings = crate::config::default_config().settings;
+        settings.zone_tints = vec!["#010203".into()];
+        settings.overlay_inactive_alpha = 111;
+        settings.overlay_active_alpha = 222;
+        notifier.sync_overlay_style(&settings);
+        let drained = queue.drain();
+        assert_eq!(drained.len(), 1);
+        match &drained[0] {
+            NativeMessage::SetOverlayStyle {
+                tints,
+                inactive_alpha,
+                active_alpha,
+            } => {
+                assert_eq!(tints, &vec![(1, 2, 3)]);
+                assert_eq!(*inactive_alpha, 111);
+                assert_eq!(*active_alpha, 222);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    /* ----------------------------- D2 dialog --------------------------- */
+
+    struct MockConfirm {
+        discard: bool,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl DirtyConfirm for MockConfirm {
+        fn confirm_discard(&self, _profile: &str) -> bool {
+            self.calls.set(self.calls.get() + 1);
+            self.discard
+        }
+    }
+
+    #[test]
+    fn d2_discard_resends_profile_apply_with_discard_flag() {
+        let (tx, rx) = mpsc::channel::<Command>();
+        let confirm = MockConfirm {
+            discard: true,
+            calls: std::cell::Cell::new(0),
+        };
+        handle_tray_apply_reply(Err(ApiError::DirtyState), "Coding", &tx, &confirm);
+        assert_eq!(confirm.calls.get(), 1, "the dialog must be shown once");
+        let cmd = rx.try_recv().expect("Discard must re-send the command");
+        match cmd.payload {
+            CommandPayload::ProfileApply {
+                name,
+                discard_dirty,
+            } => {
+                assert_eq!(name, "Coding");
+                assert!(discard_dirty, "Discard must set discard_dirty=true");
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn d2_cancel_sends_no_command() {
+        let (tx, rx) = mpsc::channel::<Command>();
+        let confirm = MockConfirm {
+            discard: false,
+            calls: std::cell::Cell::new(0),
+        };
+        handle_tray_apply_reply(Err(ApiError::DirtyState), "Coding", &tx, &confirm);
+        assert_eq!(confirm.calls.get(), 1);
+        assert!(rx.try_recv().is_err(), "Cancel must not send a command");
+    }
+
+    #[test]
+    fn d2_non_dirty_error_does_not_open_dialog() {
+        let (tx, rx) = mpsc::channel::<Command>();
+        let confirm = MockConfirm {
+            discard: true,
+            calls: std::cell::Cell::new(0),
+        };
+        handle_tray_apply_reply(
+            Err(ApiError::NotFound("profile".into())),
+            "Coding",
+            &tx,
+            &confirm,
+        );
+        assert_eq!(confirm.calls.get(), 0, "only DirtyState opens the dialog");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn d2_success_does_not_open_dialog() {
+        let (tx, rx) = mpsc::channel::<Command>();
+        let confirm = MockConfirm {
+            discard: true,
+            calls: std::cell::Cell::new(0),
+        };
+        handle_tray_apply_reply(
+            Ok(serde_json::json!({ "ok": true })),
+            "Coding",
+            &tx,
+            &confirm,
+        );
+        assert_eq!(confirm.calls.get(), 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    /* ---------------------------- shutdown ----------------------------- */
+
+    #[test]
+    fn shutdown_trigger_is_idempotent_and_stops_producers() {
+        let queue = Arc::new(NativeQueue::new());
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let (axum_tx, axum_rx) = oneshot::channel::<()>();
+        let shutdown = ShutdownHandle::new(
+            queue.clone(),
+            SharedEvent::new_test(),
+            Arc::new(OnceLock::new()),
+            stop_tx,
+            Some(axum_tx),
+        );
+        assert!(!shutdown.is_shutting_down());
+        shutdown.trigger();
+        shutdown.trigger(); // second call must be a no-op
+        assert!(shutdown.is_shutting_down());
+        assert!(!queue.accepting(), "no producer may post after shutdown");
+        assert!(*stop_rx.borrow_and_update(), "SSE streams must be closed");
+        assert!(
+            axum_rx.blocking_recv().is_ok(),
+            "Axum must be signaled once"
+        );
+    }
+
+    #[test]
+    fn shutdown_event_is_signaled_even_without_hwnd() {
+        use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+
+        // SAFETY: CreateEventW takes no caller pointers; manual-reset, initially
+        // non-signaled, unnamed. Returns a valid handle or an error.
+        let event = unsafe { CreateEventW(None, true, false, None) }.expect("CreateEventW failed");
+        let queue = Arc::new(NativeQueue::new());
+        let (stop_tx, _) = watch::channel(false);
+        // Publish an invalid HWND so PostMessageW(WM_STOP) is attempted and
+        // fails; the guaranteed SetEvent path must still latch (§3.6 step 4a).
+        let hwnd_slot = Arc::new(OnceLock::new());
+        let _ = hwnd_slot.set(HwndSend(std::ptr::dangling_mut::<c_void>()));
+        let shutdown =
+            ShutdownHandle::new(queue.clone(), SharedEvent(event), hwnd_slot, stop_tx, None);
+        shutdown.trigger();
+        // SAFETY: `event` is a valid open handle; a zero timeout only queries
+        // its current state without blocking.
+        let wait = unsafe { WaitForSingleObject(event, 0) };
+        assert_eq!(wait, WAIT_OBJECT_0, "SetEvent must latch without an HWND");
+        // SAFETY: close exactly once, after the wait and with no other users.
+        unsafe { CloseHandle(event).expect("CloseHandle failed") };
     }
 }

@@ -46,6 +46,8 @@ pub struct System {
     /// Dynamic profile submenu and its check items (rebuilt on NativeUpdate).
     profiles_submenu: Option<Submenu>,
     profile_items: Vec<CheckMenuItem>,
+    /// Disabled header line showing Applied and Selected independently (§4).
+    header_item: Option<MenuItem>,
     /// Disable/Enable toggle item whose label flips with runtime state (D4).
     toggle_item: Option<MenuItem>,
 }
@@ -69,6 +71,17 @@ impl System {
         // Tray icon first — always available even if hotkeys fail.
         let menu = Menu::new();
 
+        // Disabled header line. Applied and Selected are shown separately so
+        // the two dimensions stay distinguishable while layout is disabled (§4).
+        let header = MenuItem::with_id(
+            MenuId::new("header"),
+            "ZoneFlow Studio — Applied:  · Selected: ",
+            false,
+            None,
+        );
+        menu.append(&header)?;
+        menu.append(&PredefinedMenuItem::separator())?;
+
         // Dynamic profile submenu. Stable IDs (`profile:<name>`) are matched by
         // prefix in `poll()` — never by display label (architecture §4).
         let profiles_submenu = Submenu::new("Profiles", true);
@@ -90,10 +103,10 @@ impl System {
         let i_toggle =
             MenuItem::with_id(MenuId::new("toggle_enabled"), "Disable layout", true, None);
         let i_open = MenuItem::with_id(MenuId::new("open_editor"), "Open editor…", true, None);
-        let i_settings = MenuItem::new("Settings", true, None);
-        let i_retile = MenuItem::new("Re-tile now", true, None);
-        let i_reload = MenuItem::new("Reload config", true, None);
-        let i_exit = MenuItem::new("Exit", true, None);
+        let i_settings = MenuItem::with_id(MenuId::new("settings"), "Settings…", true, None);
+        let i_retile = MenuItem::with_id(MenuId::new("retile"), "Re-tile now", true, None);
+        let i_reload = MenuItem::with_id(MenuId::new("reload"), "Reload config", true, None);
+        let i_exit = MenuItem::with_id(MenuId::new("exit"), "Exit", true, None);
         menu.append(&i_toggle)?;
         menu.append(&i_open)?;
         menu.append(&i_settings)?;
@@ -123,6 +136,7 @@ impl System {
             failures: Vec::new(),
             profiles_submenu: Some(profiles_submenu),
             profile_items,
+            header_item: Some(header),
             toggle_item: Some(i_toggle),
         };
         system.register_from_config(cfg)?;
@@ -221,11 +235,11 @@ impl System {
             match id {
                 "toggle_enabled" => actions.push(Action::ToggleEnabled),
                 "open_editor" => actions.push(Action::OpenEditor),
-                "Settings" => actions.push(Action::ShowSettings),
-                "Re-tile now" => actions.push(Action::Retile),
-                "Reload config" => actions.push(Action::Reload),
-                "Exit" => actions.push(Action::Exit),
-                _ => {}
+                "settings" => actions.push(Action::ShowSettings),
+                "retile" => actions.push(Action::Retile),
+                "reload" => actions.push(Action::Reload),
+                "exit" => actions.push(Action::Exit),
+                _ => {} // "header" is disabled and never emits events
             }
         }
 
@@ -233,37 +247,49 @@ impl System {
     }
 
     /// Rebuild the profile submenu from a full-state notification. Uses stable
-    /// IDs and shows the applied checkmark; the selected bullet is represented
-    /// by a distinct check item state so the two dimensions stay independent.
+    /// IDs (`profile:<name>`) and shows the applied checkmark. When Selected
+    /// differs from Applied, the selected item gets a distinct `•` marker so
+    /// the two dimensions stay independently visible (architecture §4). Also
+    /// refreshes the header and the Disable/Enable label from the same payload
+    /// so a single `RebuildMenu` is a complete, idempotent menu refresh.
     pub fn rebuild_profiles(
         &mut self,
         applied: &str,
-        _selected: &str,
+        selected: &str,
         profiles: &[String],
-        _enabled: bool,
+        enabled: bool,
     ) {
-        let Some(submenu) = self.profiles_submenu.as_ref() else {
-            return;
-        };
-        for item in self.profile_items.drain(..) {
-            if let Err(e) = submenu.remove(&item) {
-                tracing::debug!(error = %e, "failed to remove old profile menu item");
+        if let Some(header) = self.header_item.as_ref() {
+            header.set_text(format!(
+                "ZoneFlow Studio — Applied: {applied} · Selected: {selected}"
+            ));
+        }
+        if let Some(submenu) = self.profiles_submenu.as_ref() {
+            for item in self.profile_items.drain(..) {
+                if let Err(e) = submenu.remove(&item) {
+                    tracing::debug!(error = %e, "failed to remove old profile menu item");
+                }
+            }
+            for name in profiles {
+                let is_applied = name == applied;
+                let label = profile_label(name, applied, selected);
+                let item = CheckMenuItem::with_id(
+                    MenuId::new(format!("profile:{name}")),
+                    label,
+                    true,
+                    is_applied,
+                    None,
+                );
+                if let Err(e) = submenu.append(&item) {
+                    tracing::warn!(error = %e, "failed to append profile menu item");
+                    continue;
+                }
+                self.profile_items.push(item);
             }
         }
-        for name in profiles {
-            let item = CheckMenuItem::with_id(
-                MenuId::new(format!("profile:{name}")),
-                name,
-                true,
-                name == applied,
-                None,
-            );
-            if let Err(e) = submenu.append(&item) {
-                tracing::warn!(error = %e, "failed to append profile menu item");
-                continue;
-            }
-            self.profile_items.push(item);
-        }
+        // Full-state refresh: keep the D4 toggle label in sync even when a
+        // producer sends only RebuildMenu (no separate SetToggleLabel).
+        self.set_toggle_label(enabled);
     }
 
     /// Flip the Disable/Enable tray label (D4 runtime-only state).
@@ -275,6 +301,17 @@ impl System {
                 "Enable layout"
             });
         }
+    }
+}
+
+/// Label for a profile menu item. The checkmark (set by the caller) marks
+/// Applied; a `•` prefix marks Selected only when it differs from Applied so
+/// the two dimensions remain independently visible (architecture §4).
+fn profile_label(name: &str, applied: &str, selected: &str) -> String {
+    if name == selected && name != applied {
+        format!("• {name}")
+    } else {
+        name.to_string()
     }
 }
 
@@ -382,5 +419,12 @@ mod tests {
     fn win_is_normalised_to_meta() {
         assert_eq!(normalize_binding("Win+Up"), "Meta+Up");
         assert_eq!(normalize_binding("Ctrl+Shift+1"), "Ctrl+Shift+1");
+    }
+
+    #[test]
+    fn profile_label_marks_selected_only_when_different_from_applied() {
+        assert_eq!(profile_label("Website", "Website", "Website"), "Website");
+        assert_eq!(profile_label("Coding", "Website", "Coding"), "• Coding");
+        assert_eq!(profile_label("Trading", "Website", "Coding"), "Trading");
     }
 }

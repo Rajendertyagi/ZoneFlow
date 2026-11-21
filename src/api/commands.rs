@@ -678,6 +678,9 @@ pub fn handle(
             }
             let name = inner.selected_profile.clone();
             let result = apply_profile(inner, &name, false)?;
+            // Apply changes the applied dimension; refresh the tray checkmark
+            // and header so they never lag behind authoritative state.
+            ctx.notifier.rebuild_menu(inner);
             Ok(serde_json::to_value(result).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::LaunchArrange => {
@@ -687,6 +690,7 @@ pub fn handle(
             }
             let name = inner.selected_profile.clone();
             let result = apply_profile(inner, &name, true)?;
+            ctx.notifier.rebuild_menu(inner);
             Ok(serde_json::to_value(result).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::Preview => {
@@ -737,7 +741,11 @@ pub fn handle(
                 let name = inner.selected_profile.clone();
                 if !name.is_empty() {
                     match apply_profile(inner, &name, false) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            // Re-apply may change Applied when Selected differed;
+                            // refresh the tray after it, not just before.
+                            ctx.notifier.rebuild_menu(inner);
+                        }
                         Err(e) => tracing::warn!(error = ?e, "re-apply on enable failed"),
                     }
                 }
@@ -756,6 +764,9 @@ pub fn handle(
             inner.draft.settings = settings.into();
             crate::autostart::set_auto_start(inner.draft.auto_start);
             inner.push_history();
+            // Reverse update: overlay tints/alpha are cached on the native
+            // thread, so a Settings edit must refresh them (§3.3 step 4).
+            ctx.notifier.sync_overlay_style(&inner.draft.settings);
             inner.log("info", "Settings updated");
             ok()
         }
@@ -828,7 +839,14 @@ fn handle_action(
             ctx.shutdown.trigger();
             ok()
         }
-        Action::ShowSettings | Action::OpenEditor => {
+        Action::ShowSettings => {
+            // Open the same session on the Settings view. The SPA reads the
+            // `view` fragment parameter before bootstrap clears the hash.
+            let url = format!("{}&view=settings", ctx.editor_url);
+            crate::session::open_editor_url(&url);
+            ok()
+        }
+        Action::OpenEditor => {
             let url = ctx.editor_url.to_string();
             crate::session::open_editor_url(&url);
             ok()
@@ -848,6 +866,10 @@ fn handle_action(
             ok()
         }
         Action::ProfileApply(name) => {
+            // Defense in depth: the native loop now sends the guarded
+            // `ProfileApply` command, but any other caller of this legacy
+            // action must not silently overwrite a dirty draft either (D2).
+            guard_dirty(inner, false)?;
             if !inner.draft.profiles.contains_key(&name) {
                 return Err(not_found("profile"));
             }
@@ -862,6 +884,12 @@ fn handle_action(
         }
         Action::Reload => {
             inner.reload_from_disk();
+            // A disk reload can change profiles, hotkeys and settings, so push
+            // every full-state refresh the native side caches (§3.3 step 4).
+            ctx.notifier.rebuild_menu(inner);
+            ctx.notifier.set_toggle_label(inner.layout_enabled);
+            ctx.notifier.reregister_hotkeys(&inner.draft.hotkeys);
+            ctx.notifier.sync_overlay_style(&inner.draft.settings);
             inner.log("info", "Reloaded config from disk");
             ok()
         }
@@ -940,7 +968,7 @@ fn handle_action(
 mod tests {
     use super::*;
     use crate::config::default_config;
-    use crate::native_loop::{HwndSend, NativeQueue, SharedEvent};
+    use crate::native_loop::{HwndSend, NativeMessage, NativeQueue, SharedEvent};
     use std::sync::Arc;
 
     /// Build a context whose side effects are inert (no real window posts).
@@ -1354,6 +1382,32 @@ mod tests {
         )
         .unwrap();
         assert!(!inner.draft.profiles.contains_key("Copy"));
+    }
+
+    #[test]
+    fn apply_refreshes_tray_menu_after_applied_changes() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // Select a different profile so Apply actually changes Applied.
+        handle(
+            CommandPayload::ProfileSelect {
+                name: "Coding".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        queue.drain(); // discard the rebuild emitted by Select
+        handle(CommandPayload::Apply, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.applied_profile, "Coding");
+        assert!(
+            queue
+                .drain()
+                .iter()
+                .any(|m| matches!(m, NativeMessage::RebuildMenu { .. })),
+            "Apply must refresh the tray checkmark/header"
+        );
     }
 
     #[test]
