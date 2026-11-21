@@ -5,7 +5,7 @@ Status: data model LOCKED; UI stack LOCKED (pure eframe/egui 0.37 + glow, no HTM
 
 > **Where this file fits (read first):** This is the historical master plan. The **four documents in `docs/plans/` are the source of truth** for the next iteration (product/GUI redesign + bug fixes). All six product decisions **D1–D6 are APPROVED and frozen** — see `zoneflow-product-workflow.md` §7. Multi-monitor is explicitly OUT OF SCOPE. **No implementation is authorized** by any planning document; implementation requires explicit user approval. Older sections below (§0–§15) are retained as background and may contain superseded wording (e.g. "decision pending", Tauri-era references, ~10 MB size claims) — where they conflict with the four `docs/plans/` documents, the four documents win.
 
-**CURRENT DIRECTION (2026-11-21):** Four independent audits + product research produced a revised planning set in the repository at `docs/plans/` (pushed to GitHub `Rajendertyagi/ZoneFlow`, `master`; commits `3e02a25`, `504b3aa`, `7ab9a36`):
+**CURRENT DIRECTION (2026-11-21):** Four independent audits + product research produced a revised planning set in the repository at `docs/plans/` (pushed to GitHub `Rajendertyagi/ZoneFlow`, single branch `main`; commits `3e02a25`, `504b3aa`, `7ab9a36`, `023a941`, `d03d63f`):
 - `zoneflow-product-workflow.md` — product definition, user journeys, **profile-specific assignments confirmed already in data model**, exact workflow rules, **D1–D6 frozen**, Disable behavior.
 - `zoneflow-gui-architecture.md` — canvas-primary shell, contextual inspector, no forced 3-column, four independent state dimensions, Home view, tray design.
 - `zoneflow-feature-preservation.md` — 20-feature inventory, preservation matrix, 12 confirmed bugs (B1–B12), same-app limitation.
@@ -14,7 +14,7 @@ Status: data model LOCKED; UI stack LOCKED (pure eframe/egui 0.37 + glow, no HTM
 
 **Key correction:** earlier "Phases 1–7 complete" referred to the *implementation* work; the four `docs/plans/` documents are the **new source of truth for the next iteration** (product/GUI redesign + bug fixes). Multi-monitor explicitly OUT OF SCOPE. All six product decisions (D1 Apply modes, D2 unsaved changes, D3 assignment replacement, D4 Disable scope, D5 Launch/Preview, D6 rail/Home/tray switching) are **APPROVED** — no decisions pending. No implementation authorized yet.
 
-**Audit disclosure:** commit `3e02a25` was not documentation-only — it also modified six application source files (`src/editor/canvas.rs`, `inspector.rs`, `mod.rs`, `rail.rs`, `theme.rs`, `toolbar.rs`) as an authorized bug-fix bundle. The two later commits (`504b3aa`, `7ab9a36`) are documentation-only. **Repository default branch resolved (2026-11-21):** GitHub default branch changed to `master`; empty `main` left untouched per user decision. No history rewrite, force-push, or branch deletion was performed.
+**Audit disclosure:** commit `3e02a25` was not documentation-only — it also modified six application source files (`src/editor/canvas.rs`, `inspector.rs`, `mod.rs`, `rail.rs`, `theme.rs`, `toolbar.rs`) as an authorized bug-fix bundle. The two later commits (`504b3aa`, `7ab9a36`) are documentation-only. **Repository branches resolved (2026-11-21):** consolidated to a single `main` branch locally and remotely — empty legacy `main` deleted, `master` renamed to `main` (history preserved), GitHub default set to `main`. No history rewrite or force-push.
 
 ---
 

@@ -173,7 +173,7 @@ Rules: measure current build first; re-measure at each checkpoint; record deltas
 | Multi-monitor scope creep | Explicitly out of scope — do not implement or plan |
 | Same app in multiple zones within one profile moves the same HWND twice (`engine.rs:315-334`, `:522-534`) | Warn in editor (product §3b); do not claim multi-window support; proper multi-window matching deferred |
 | Responsive breakpoints unreachable | Minimum window size lowered to 700pt so 700–799pt breakpoint is reachable (GUI §2.3) |
-| Repository default branch | **Resolved (2026-11-21):** GitHub default branch changed to `master`; empty `main` left untouched per user decision. No history rewrite, force-push, or branch deletion. |
+| Repository branches | **Resolved (2026-11-21):** consolidated to a single `main` branch locally and remotely. Empty legacy `main` deleted, `master` renamed to `main` (history preserved), GitHub default set to `main`. No history rewrite or force-push. |
 
 ---
 
