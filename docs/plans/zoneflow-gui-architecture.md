@@ -38,22 +38,42 @@ All UI lives in `src/editor/` as `impl Editor` blocks. `Editor` (`mod.rs:34-102`
 ### 2.1 Shell component
 Create a single `Shell` owner (new module `src/editor/shell.rs`) that divides the viewport into exact regions and hands rects down. **Do not use `egui::StripBuilder` — it does not exist in egui 0.37** (verified in crate source). Use `egui::Panel::{top,bottom,left,right}` + explicit rect math (`allocate_ui_with_layout`, `available_rect_before_wrap`).
 
+**Design priority:** the canvas gets the maximum available space. The application library is easily accessible but does not permanently consume width. The inspector is contextual. Secondary settings never compete permanently with the canvas. **Do not force a three-column layout at all times** — the right aside appears only when needed.
+
 ```
+Editor — canvas-focused (default, no selection):
 ┌──────────────────────────────────────────────────────────────┐
-│ TopBar (fixed ~44px): brand · profile · resolution · dirty   │
-├────────────┬─────────────────────────────────┬───────────────┤
-│ LeftRail   │ Main (only region that grows)   │ RightAside    │
-│ (collaps.) │ ┌─────────────────────────────┐ │ (collapsible) │
-│ Apps/      │ │ Toolbar (fixed ~36px)       │ │ Inspector     │
-│ Profiles   │ ├─────────────────────────────┤ │ (contextual)  │
-│ + Tools    │ │ Canvas (flex, remaining)    │ │               │
-│ dock       │ ├─────────────────────────────┤ │               │
-│            │ │ Footer: actions + apps strip│ │               │
-│            │ └─────────────────────────────┘ │               │
-├────────────┴─────────────────────────────────┴───────────────┤
-│ StatusBar (fixed ~28px): engine · active · zones · version   │
+│ TopBar: brand · Editing: Website · [SAVED] · [4K ▾]           │
+├────────────┬─────────────────────────────────────────────────┤
+│ LeftRail   │ Toolbar: [Layout][Draw][Undo][Redo][Split]...    │
+│ (toggle)   ├─────────────────────────────────────────────────┤
+│ Apps       │                                                 │
+│ [Search]   │              CANVAS (maximum space)             │
+│ ...        │                                                 │
+│            ├─────────────────────────────────────────────────┤
+│ Profiles   │ Footer: [Save] [Revert]      [Apply]             │
+│ [Tools]    │ Apps in this workspace (compact, scroll)         │
+├────────────┴─────────────────────────────────────────────────┤
+│ Status: Ready · 3 zones · 2 assigned · Ctrl+drag to snap      │
+└──────────────────────────────────────────────────────────────┘
+
+Editor — with zone selected (inspector appears contextually):
+┌──────────────────────────────────────────────────────────────┐
+│ TopBar: brand · Editing: Website · [UNSAVED ●] · [4K ▾]       │
+├────────────┬───────────────────────────────┬─────────────────┤
+│ LeftRail   │ Toolbar                       │ INSPECTOR       │
+│ (collaps.) ├───────────────────────────────┤ (contextual)    │
+│ Apps       │                               │ Zone 1          │
+│ [Search]   │        CANVAS (smaller)        │ Label / Exe     │
+│ ...        │                               │ Rules           │
+│            ├───────────────────────────────┤ [Console ▾]     │
+│ Profiles   │ Footer: [Save][Revert][Apply]  │                 │
+├────────────┴───────────────────────────────┴─────────────────┤
+│ Status: Ready · 3 zones · 2 assigned                          │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+The right aside is **not** always present — it appears when a zone/app is selected or when the user explicitly opens it. This keeps the canvas primary.
 
 ### 2.2 Region ownership rules
 - The **shell** computes every region rect once per frame. No child guesses its siblings' sizes.
@@ -61,6 +81,7 @@ Create a single `Shell` owner (new module `src/editor/shell.rs`) that divides th
 - Left rail and right aside have **independent internal scroll** (already true via `ScrollArea`).
 - Footer height comes from a single token/config value; canvas gets `remaining = main_height - toolbar - footer`.
 - Remove magic numbers: `stage_lower_h`, `available_height()-56`, `48.0`, fixed `max_height` values where they compete.
+- **Library accessibility:** the left rail can be toggled/collapsed; when collapsed, a slim icon strip or a "Apps" toggle in the toolbar reopens it. The library is never more than one click away.
 
 ### 2.3 Responsive behavior
 Use shadcn-egui's `layout::window_at_least(ctx, px)` and `layout::container_at_least(ui, px)` (both exist in 0.8, currently unused):
@@ -96,21 +117,22 @@ Navigation is coherent; no duplicated view state. Keep it. The redesign is about
 ├──────────────────────────────────────────────────────────────┤
 │  ACTIVE LAYOUT                                               │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Website — Applied        Work area: 3840×2160         │  │
+│  │ Website — [APPLIED]      Work area: 3840×2160         │  │
 │  │ 3 zones · 2 apps assigned                             │  │
 │  │ [Edit] [Apply] [Disable layout]                       │  │
 │  └────────────────────────────────────────────────────────┘  │
 │  PROFILES                                                    │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │ Website   ✓ active   [Apply] [Edit] [Duplicate] [Del] │  │
-│  │ Coding                  [Apply] [Edit] [Duplicate]... │  │
-│  │ Trading                 [Apply] [Edit] [Duplicate]... │  │
+│  │ Website   ✓ APPLIED   [Apply] [Edit] [Duplicate] [Del]│  │
+│  │ Coding    — saved     [Apply] [Edit] [Duplicate]...   │  │
+│  │ Trading   — saved     [Apply] [Edit] [Duplicate]...   │  │
 │  └────────────────────────────────────────────────────────┘  │
 │  [+ New profile]                                             │
 ├──────────────────────────────────────────────────────────────┤
 │ Engine ready · 17 hotkeys · v0.1.0                           │
 └──────────────────────────────────────────────────────────────┘
 ```
+**State badges must be visually distinct:** `APPLIED` (green), `SAVED` (neutral), `UNSAVED ●` (amber), `DISABLED` (red/grey). The active profile is always shown in Home and the tray.
 
 ### 4.2 Layout Editor (primary workspace)
 ```
@@ -160,10 +182,12 @@ Key changes from current: **Save** and **Apply** are separate buttons; inspector
   - `last_saved_json: String` (baseline for dirty)
   - `active_profile: String` (applied to Windows) — currently conflated with `cfg.active_profile`
   - `layout_enabled: bool` (new disable concept)
+- **Profile-specific assignments are already in the data model** (see product workflow §1a): `Profile.zones: Vec<Zone>` (`config.rs:150-156`), each `Zone` owns exe/path/rules (`config.rs:84-109`), `attach_app` writes only to `active_mut().zones` (`mod.rs:585-596`). The global library is runtime enumeration (`rail.rs:485-569`), not persisted assignments. **No data-model rewrite is needed** — only UI clarity and the workflow rules in product workflow §2a/§3a.
 - **Dirty check:** cache a dirty flag updated on mutation instead of serializing the whole config twice per frame (`dirty()` at `mod.rs:272-274`, called from `top_bar.rs:17` and `action_bar.rs:33`).
 - **Config consistency:** hotkey actions currently call `config::load_config()` from disk (`mod.rs:356-385`) while auto-launch/display polling use `self.draft` (`mod.rs:1118,1200`). Unify on one source (the in-memory config) and reload from disk only on explicit Revert.
 - **LOADED_SETTINGS** (`config.rs:252`) is frozen at first load; config-free helpers (`resolutions()`, `app_list_cap`) never see runtime edits. Replace with passing `&Settings` explicitly or refreshing the snapshot on save/revert.
 - **History:** full-config JSON snapshots are heavy but acceptable for a small app; keep.
+- **Visual state mapping:** the four states (saved / unsaved / applied / disabled) must each have a distinct badge in TopBar, Home, and StatusBar — never implied by position alone.
 
 ---
 
@@ -191,4 +215,4 @@ Key changes from current: **Save** and **Apply** are separate buttons; inspector
 - ❌ shadcn `show_collapsible` — does not exist. Use `CollapsingHeader` or conditional panels.
 - ✅ `window_at_least` / `container_at_least` — exist in shadcn 0.8, currently unused.
 - ✅ `ViewportBuilder::with_min_inner_size` — exists in egui 0.37.
-- Phase 3 (app library cleanup) is largely already implemented in `rail.rs:37-349`; only polish remains.
+- App library cleanup is largely already implemented in `rail.rs:37-349`; only polish remains (WS-B/WS-C).

@@ -37,6 +37,26 @@ Legend: ✅ implemented · ⚠️ partial/degraded · ❌ absent
 
 ---
 
+## 1a. Data ownership — profile-specific assignments (verified)
+
+The requirement "application assignments belong to individual profiles, not the global library" is **already satisfied by the current data model**. Verified against source:
+
+| Data | Owner | Evidence |
+|---|---|---|
+| Zone geometry + app binding + all rules | `Zone` inside `Profile.zones` | `config.rs:84-109`, `:150-156` |
+| Profiles | `AppConfig.profiles: BTreeMap<String, Profile>` | `config.rs:272` |
+| Assignment write path | `attach_app` → `active_mut().zones` only | `mod.rs:585-596` |
+| Global library | Runtime enumeration, **not persisted** | `rail.rs:485-569` |
+
+Consequences:
+- Same app can be in different zones in different profiles — each profile owns independent zones.
+- Editing one profile cannot modify another — separate `Profile` structs in the map.
+- Browser rules, macros, launch settings are zone-scoped → profile-scoped.
+- Removing an assignment clears zone fields; the library entry is untouched (library is not persisted).
+- **No data-model rewrite required.** Remaining work is UI clarity (show assignments per profile) and the workflow rules in product workflow §2a/§3a.
+
+---
+
 ## 2. Feature preservation matrix
 
 | Existing feature | Current implementation | Proposed location/workflow | Required changes |
@@ -61,6 +81,9 @@ Legend: ✅ implemented · ⚠️ partial/degraded · ❌ absent
 | Views/tabs | `state.rs` + modules | Home + Editor + Hotkeys + Settings | Add Home view; make inspector contextual |
 | Profiles CRUD | `mod.rs`/`rail.rs`/`dialogs.rs` | Home + rail + tray | Keep; separate rail (draft) from tray/Home (apply) |
 | Apply/disable | Save & Apply only | Apply verb + Disable verb | **Split Save and Apply; add Disable** (new) |
+| Profile-specific assignments | Already in model (`Profile.zones` → `Zone.exe/path/rules`) | Same model; UI shows assignments per profile | No data change; add assignment visibility (§1a) |
+| Global app library | Runtime enumeration, no assignments stored | Reusable entries only | No change; keep separate from assignments |
+| Apply mode (launch vs arrange) | Current Apply = arrange only (`save_apply` retiles, no launch) | Mode B default, Mode A optional | Product decision (product workflow §4a) — no assumed change |
 
 ---
 
