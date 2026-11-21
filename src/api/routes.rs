@@ -1,7 +1,9 @@
 //! All §5 HTTP endpoints. Handlers only send commands and await oneshot
 //! replies — no blocking engine work runs on the Tokio thread.
 
-use super::dto::{AssignDto, MergeDto, SettingsDto, SplitDto, ZoneDto, ZoneGeometryUpdateDto};
+use super::dto::{
+    AppOptionsDto, AssignDto, MergeDto, SettingsDto, SplitDto, ZoneDto, ZoneGeometryUpdateDto,
+};
 use super::worker::Command;
 use super::{events, middleware, ApiError, AppState};
 use crate::api::commands::CommandPayload;
@@ -395,6 +397,17 @@ async fn set_settings(
     }
 }
 
+/// `PUT /api/app-options` — edit the AppConfig-level autostart + close behavior.
+async fn set_app_options(
+    State(state): State<AppState>,
+    Json(options): Json<AppOptionsDto>,
+) -> Response {
+    match call(&state, CommandPayload::AppOptionsSet { options }).await {
+        Ok(v) => json_response(v),
+        Err(e) => e.into_response(),
+    }
+}
+
 async fn get_hotkeys(State(state): State<AppState>) -> Response {
     match call(&state, CommandPayload::HotkeysGet).await {
         Ok(v) => json_response(v),
@@ -458,6 +471,7 @@ pub fn build(state: AppState) -> Router {
         .route("/disable", post(disable))
         .route("/enable", post(enable))
         .route("/settings", get(get_settings).put(set_settings))
+        .route("/app-options", put(set_app_options))
         .route("/hotkeys", get(get_hotkeys).put(set_hotkeys))
         .route("/logs", get(get_logs))
         .fallback(|| async { ApiError::NotFound("endpoint".to_string()).into_response() })
@@ -667,6 +681,34 @@ mod tests {
         let cookie = res.headers()[SET_COOKIE].to_str().unwrap();
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Strict"));
+    }
+
+    #[tokio::test]
+    async fn app_options_endpoint_updates_close_action() {
+        let h = harness();
+        let res = h
+            .router
+            .clone()
+            .oneshot(authed(
+                "/api/app-options",
+                &h.token,
+                "PUT",
+                Body::from(r#"{"auto_start":false,"close_action":"exit","gap":12}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json = body_json(res).await;
+        assert_eq!(json["ok"], true);
+
+        let res = h
+            .router
+            .clone()
+            .oneshot(authed("/api/state", &h.token, "GET", Body::empty()))
+            .await
+            .unwrap();
+        let json = body_json(res).await;
+        assert_eq!(json["draft"]["close_action"], "exit");
     }
 
     #[tokio::test]

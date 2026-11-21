@@ -37,9 +37,13 @@
     showGap: boolean;
     splitRatio: number;
     onnotice?: (message: string) => void;
+    /** Parent-owned assignment (applies the D3 confirmation + real API). */
+    onassign?: (zoneId: number, spec: AssignDto) => void | Promise<void>;
+    /** Open the application picker for a zone (context-menu action). */
+    onpick?: (zoneId: number) => void;
   }
 
-  let { mode, showGap, splitRatio, onnotice }: Props = $props();
+  let { mode, showGap, splitRatio, onnotice, onassign, onpick }: Props = $props();
 
   interface CanvasSettings {
     snap_points: number[];
@@ -324,6 +328,12 @@
   }
 
   async function assignApp(id: number, spec: AssignDto): Promise<void> {
+    if (onassign) {
+      await onassign(id, spec);
+      return;
+    }
+    // Fallback for standalone use; the editor always supplies `onassign` so the
+    // D3 confirmation and real result reporting are never bypassed.
     try {
       await api.assignZone(id, spec);
       await refreshState();
@@ -459,8 +469,11 @@
         },
       });
       items.push({
-        label: 'Assign sample app',
-        onselect: () => void assignApp(zone.id, { label: 'Chrome', exe: 'chrome.exe', path: '' }),
+        label: 'Assign app…',
+        onselect: () => {
+          if (onpick) onpick(zone.id);
+          else notice('Open the Apps panel to assign an application.');
+        },
       });
       items.push({
         label: 'Unassign app',

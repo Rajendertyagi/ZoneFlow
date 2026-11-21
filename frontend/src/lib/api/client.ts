@@ -82,6 +82,13 @@ export interface SettingsDto {
   stage_lower_h: number;
 }
 
+/** Mirrors `dto::AppOptionsDto` — AppConfig-level autostart + close behavior. */
+export interface AppOptionsDto {
+  auto_start: boolean;
+  close_action: CloseAction;
+  gap: number;
+}
+
 /** Mirrors `config::AppConfig` (the `fallback` field is `#[serde(skip)]`). */
 export interface AppConfig {
   schema_version: number;
@@ -451,6 +458,9 @@ export const api = {
   getSettings: () => apiFetch<SettingsDto>('/api/settings'),
   setSettings: (settings: SettingsDto) =>
     apiFetch<OkResult>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+  /** AppConfig-level options (autostart + close behavior) — see §5.6 gap. */
+  setAppOptions: (options: AppOptionsDto) =>
+    apiFetch<OkResult>('/api/app-options', { method: 'PUT', body: JSON.stringify(options) }),
   getHotkeys: () => apiFetch<HotkeyDto[]>('/api/hotkeys'),
   setHotkeys: (hotkeys: Record<string, string>) =>
     apiFetch<OkResult>('/api/hotkeys', { method: 'PUT', body: JSON.stringify(hotkeys) }),

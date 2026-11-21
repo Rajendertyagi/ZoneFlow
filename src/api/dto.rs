@@ -229,6 +229,28 @@ impl From<SettingsDto> for Settings {
     }
 }
 
+/// App-level options stored on `AppConfig` (not `Settings`): Windows autostart
+/// registration and the editor close behavior. The web UI needs to edit both,
+/// but `SettingsDto` only mirrors `Settings` — hence this small DTO (§5.6 gap).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppOptionsDto {
+    pub auto_start: bool,
+    pub close_action: crate::config::CloseAction,
+    /// Gap between zones (percent of the work area), also on `AppConfig`.
+    pub gap: i32,
+}
+
+impl Default for AppOptionsDto {
+    fn default() -> Self {
+        Self {
+            auto_start: false,
+            close_action: crate::config::CloseAction::Ask,
+            gap: 8,
+        }
+    }
+}
+
 /* -------------------------------- hotkeys -------------------------------- */
 
 /// One global hotkey binding (action name -> AHK-style binding string).

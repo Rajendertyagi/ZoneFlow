@@ -30,29 +30,69 @@ pub enum CommandPayload {
 
     // --- profiles (D6) ---
     ProfilesList,
-    ProfileCreate { name: String },
-    ProfileRename { name: String, new_name: String },
-    ProfileDelete { name: String },
-    ProfileDuplicate { name: String, new_name: String },
-    ProfileLoad { name: String, discard_dirty: bool },
-    ProfileSelect { name: String, discard_dirty: bool },
-    ProfileApply { name: String, discard_dirty: bool },
+    ProfileCreate {
+        name: String,
+    },
+    ProfileRename {
+        name: String,
+        new_name: String,
+    },
+    ProfileDelete {
+        name: String,
+    },
+    ProfileDuplicate {
+        name: String,
+        new_name: String,
+    },
+    ProfileLoad {
+        name: String,
+        discard_dirty: bool,
+    },
+    ProfileSelect {
+        name: String,
+        discard_dirty: bool,
+    },
+    ProfileApply {
+        name: String,
+        discard_dirty: bool,
+    },
 
     // --- zones ---
     ZonesList,
-    ZoneCreate { zone: ZoneDto },
-    ZoneUpdate { id: i32, zone: ZoneDto },
-    ZonesBatchUpdate { updates: Vec<ZoneGeometryUpdateDto> },
-    ZoneDelete { id: i32 },
-    ZoneSplit { id: i32, spec: SplitDto },
-    ZoneMerge { spec: MergeDto },
-    ZoneAssign { id: i32, spec: AssignDto },
-    ZoneUnassign { id: i32 },
+    ZoneCreate {
+        zone: ZoneDto,
+    },
+    ZoneUpdate {
+        id: i32,
+        zone: ZoneDto,
+    },
+    ZonesBatchUpdate {
+        updates: Vec<ZoneGeometryUpdateDto>,
+    },
+    ZoneDelete {
+        id: i32,
+    },
+    ZoneSplit {
+        id: i32,
+        spec: SplitDto,
+    },
+    ZoneMerge {
+        spec: MergeDto,
+    },
+    ZoneAssign {
+        id: i32,
+        spec: AssignDto,
+    },
+    ZoneUnassign {
+        id: i32,
+    },
     Undo,
     Redo,
 
     // --- applications ---
-    AppsList { source: String },
+    AppsList {
+        source: String,
+    },
     AppsBrowse,
 
     // --- actions (D1–D5) ---
@@ -66,14 +106,28 @@ pub enum CommandPayload {
 
     // --- settings / hotkeys / logs ---
     SettingsGet,
-    SettingsSet { settings: super::dto::SettingsDto },
+    SettingsSet {
+        settings: super::dto::SettingsDto,
+    },
+    /// AppConfig-level options (autostart + close behavior) — no other endpoint
+    /// exposes these, so the web Settings view needs its own command.
+    AppOptionsSet {
+        options: super::dto::AppOptionsDto,
+    },
     HotkeysGet,
-    HotkeysSet { hotkeys: BTreeMap<String, String> },
-    LogsGet { since: u64 },
+    HotkeysSet {
+        hotkeys: BTreeMap<String, String>,
+    },
+    LogsGet {
+        since: u64,
+    },
 
     // --- native inputs ---
     Action(Action),
-    MoveWindow { hwnd: isize, zone_id: i32 },
+    MoveWindow {
+        hwnd: isize,
+        zone_id: i32,
+    },
 }
 
 /// Non-authoritative context passed to the handler: side-effect channels and
@@ -701,6 +755,20 @@ pub fn handle(
             inner.log("info", "Settings updated");
             ok()
         }
+        CommandPayload::AppOptionsSet { options } => {
+            // Only touch the registry when the value actually changes — avoids a
+            // redundant HKCU write on every Settings save (and keeps tests inert
+            // when the value is unchanged).
+            if inner.draft.auto_start != options.auto_start {
+                crate::autostart::set_auto_start(options.auto_start);
+            }
+            inner.draft.auto_start = options.auto_start;
+            inner.draft.close_action = options.close_action;
+            inner.draft.gap = options.gap;
+            inner.push_history();
+            inner.log("info", "Application options updated");
+            ok()
+        }
         CommandPayload::HotkeysGet => {
             let rows: Vec<super::dto::HotkeyDto> = inner
                 .draft
@@ -1288,5 +1356,27 @@ mod tests {
         assert!(!inner.layout_enabled);
         handle(CommandPayload::Enable, &mut inner, &mut ctx).unwrap();
         assert!(inner.layout_enabled);
+    }
+
+    #[test]
+    fn app_options_update_autostart_and_close_action() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // auto_start stays false (the default), so no registry write occurs.
+        handle(
+            CommandPayload::AppOptionsSet {
+                options: super::super::dto::AppOptionsDto {
+                    auto_start: false,
+                    close_action: crate::config::CloseAction::Exit,
+                    gap: 12,
+                },
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert!(!inner.draft.auto_start);
+        assert_eq!(inner.draft.close_action, crate::config::CloseAction::Exit);
+        assert_eq!(inner.draft.gap, 12);
     }
 }

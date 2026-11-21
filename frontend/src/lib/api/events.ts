@@ -33,6 +33,14 @@ let reconnectTimer: number | null = null;
 let reconnectDelayMs = 1000;
 const MAX_RECONNECT_DELAY_MS = 15000;
 
+/** Optional UI handler for advisory events (apply-result, log, hotkey-action). */
+type SseEventHandler = (event: SseEvent) => void;
+let externalHandler: SseEventHandler | null = null;
+
+export function setSseEventHandler(handler: SseEventHandler | null): void {
+  externalHandler = handler;
+}
+
 /** Re-fetch the authoritative snapshot. 401 is handled by the client hook. */
 export async function refreshState(): Promise<void> {
   try {
@@ -47,6 +55,10 @@ function handleEvent(event: SseEvent): void {
   // Every backend mutation broadcasts `state-changed`; the other types are
   // advisory. A full snapshot refresh is correct for all of them.
   void refreshState();
+  // Let the shell turn documented advisory events into real toasts. The current
+  // backend only emits `state-changed`, so this is dormant until those types are
+  // produced — it never fabricates feedback.
+  externalHandler?.(event);
 }
 
 function onMessage(ev: MessageEvent<string>): void {
