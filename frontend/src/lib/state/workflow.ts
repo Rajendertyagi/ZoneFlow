@@ -61,7 +61,9 @@ export function hasNonDefaultRules(zone: ZoneDto): boolean {
     zone.trigger_title.trim() !== '' ||
     zone.macro_text.trim() !== '' ||
     zone.notes.trim() !== '' ||
-    zone.key_delay !== 0
+    // `Zone::default().key_delay` is 80 on the backend — treat that as the
+    // default so a freshly-created zone never triggers a false D3 prompt.
+    zone.key_delay !== 80
   );
 }
 

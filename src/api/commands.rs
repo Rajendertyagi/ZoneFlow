@@ -582,11 +582,14 @@ pub fn handle(
                 .iter_mut()
                 .find(|z| z.id == id)
                 .ok_or_else(|| not_found("zone"))?;
-            // D3: preserve geometry, id and position; reset automation rules.
+            // D3: preserve geometry, id and position; reset *all* automation
+            // rules to their `Zone::default()` values — including launch mode
+            // and the macro key delay, which are application-specific rules too.
             // The application library entry is never touched.
             z.label = spec.label;
             z.exe = spec.exe;
             z.path = spec.path;
+            z.launch_mode = crate::config::LaunchMode::default();
             z.url.clear();
             z.title_match.clear();
             z.tab_behavior = crate::config::TabBehavior::default();
@@ -594,6 +597,7 @@ pub fn handle(
             z.trigger_title.clear();
             z.macro_text.clear();
             z.notes.clear();
+            z.key_delay = crate::config::Zone::default().key_delay;
             let dto = ZoneDto::from(&*z);
             inner.push_history();
             inner.log("info", format!("Assigned {} to zone {id}", dto.exe));
@@ -1090,10 +1094,12 @@ mod tests {
         {
             let z = &mut inner.draft.active_mut().zones;
             let mut zone = Zone::new(1, "Old", "old.exe", 10.0, 20.0, 30.0, 40.0);
+            zone.launch_mode = crate::config::LaunchMode::Attach;
             zone.url = "https://old".into();
             zone.macro_enabled = true;
             zone.macro_text = "^t".into();
             zone.notes = "keep?".into();
+            zone.key_delay = 999;
             z.push(zone);
         }
         let mut ctx = test_context(&queue, &shutdown, &mut cache);
@@ -1114,10 +1120,12 @@ mod tests {
         assert_eq!(z.id, 1);
         assert_eq!((z.x, z.y, z.w, z.h), (10.0, 20.0, 30.0, 40.0));
         assert_eq!(z.exe, "new.exe");
+        assert_eq!(z.launch_mode, crate::config::LaunchMode::Launch);
         assert!(z.url.is_empty());
         assert!(!z.macro_enabled);
         assert!(z.macro_text.is_empty());
         assert!(z.notes.is_empty());
+        assert_eq!(z.key_delay, crate::config::Zone::default().key_delay);
     }
 
     #[test]

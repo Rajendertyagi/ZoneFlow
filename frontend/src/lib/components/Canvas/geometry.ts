@@ -270,7 +270,9 @@ export function blankZone(rect: RectPct, label = 'New zone'): ZoneDto {
     trigger_title: '',
     macro_text: '',
     notes: '',
-    key_delay: 0,
+    // Match `Zone::default().key_delay` (config.rs) so new zones carry the
+    // backend's real default and D3 confirmation never false-positives.
+    key_delay: 80,
     x: rect.x,
     y: rect.y,
     w: rect.w,

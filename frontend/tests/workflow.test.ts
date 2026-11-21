@@ -30,7 +30,7 @@ function zone(overrides: Partial<ZoneDto> = {}): ZoneDto {
     trigger_title: '',
     macro_text: '',
     notes: '',
-    key_delay: 0,
+    key_delay: 80, // Zone::default().key_delay on the backend
     x: 0,
     y: 0,
     w: 50,

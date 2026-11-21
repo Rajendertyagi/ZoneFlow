@@ -18,21 +18,30 @@
 
   const dirty = $derived(store.snapshot?.dirty ?? false);
 
-  async function persist(action: 'minimize' | 'exit'): Promise<void> {
-    if (!remember) return;
+  /**
+   * Mirror the existing egui close dialog (editor/dialogs.rs): set close_action
+   * to the chosen action when remembered (Ask otherwise) and persist the whole
+   * draft to disk. This both makes "Remember this choice" survive a restart and
+   * honours §2a's documented exception that Exit auto-saves a dirty draft.
+   * Returns false on failure so callers never discard data on a failed write.
+   */
+  async function persist(action: 'minimize' | 'exit'): Promise<boolean> {
     try {
       await api.setAppOptions({
         auto_start: store.snapshot?.draft.auto_start ?? false,
-        close_action: action,
+        close_action: remember ? action : 'ask',
         gap: store.snapshot?.draft.gap ?? 8,
       });
+      await api.save();
+      return true;
     } catch (error) {
-      toast('error', `Could not remember the choice: ${errorMessage(error)}`);
+      toast('error', `Could not persist the close choice: ${errorMessage(error)}`);
+      return false;
     }
   }
 
   async function minimize(): Promise<void> {
-    await persist('minimize');
+    if (!(await persist('minimize'))) return;
     onclose();
     // Closing a browser tab does not stop the Rust process (architecture §1).
     window.close();
@@ -41,7 +50,13 @@
 
   async function exit(): Promise<void> {
     busy = true;
-    await persist('exit');
+    // §2a: Exit with a dirty draft auto-saves it. `persist` saves the whole
+    // draft, so no separate save is needed — and a failed save aborts shutdown
+    // rather than silently losing the draft.
+    if (!(await persist('exit'))) {
+      busy = false;
+      return;
+    }
     try {
       await api.shutdown();
       toast('info', 'ZoneFlow is shutting down.');
