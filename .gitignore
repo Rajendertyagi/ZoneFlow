@@ -1,0 +1,7 @@
+/target
+*.log
+ScreenLayout.json
+*.bad
+*.tmp
+*-check.png
+ui-*.png

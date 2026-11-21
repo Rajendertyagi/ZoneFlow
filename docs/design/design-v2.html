@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZoneFlow — Studio v2</title>
+<style>
+:root{
+  --bg:#0B0C0E; --panel:#121417; --panel2:#171A1E; --card:#1C2026; --cardH:#232830;
+  --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+  --txt:#E8EAF0; --dim:#8A93A3; --dim2:#5E6675;
+  --acc:#7C9CF5; --acc2:#A8BFFF; --accBg:rgba(124,156,245,.14);
+  --ok:#4ADE80; --okBg:rgba(74,222,128,.12);
+  --warn:#FBBF24; --radius:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:13px/1.45 "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
+.mono{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums}
+.cap{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2)}
+
+/* TOP — deliberately minimal */
+.top{height:52px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:14px;letter-spacing:-.01em}
+.logo .mark{width:26px;height:26px;border-radius:7px;background:var(--acc);color:var(--bg);display:grid;place-items:center;font-size:14px;font-weight:800}
+.logo em{font-style:normal;color:var(--acc)}
+.top-mid{display:flex;align-items:center;gap:8px;color:var(--dim);font-size:12px}
+.top-mid .sep{width:1px;height:16px;background:var(--line2)}
+.top-actions{display:flex;gap:8px}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:8px;padding:7px 13px;font-size:12px;font-weight:500;cursor:pointer;transition:.14s;white-space:nowrap}
+.btn:hover{background:var(--cardH);border-color:var(--line2)}
+.btn.acc{background:var(--acc);color:var(--bg);border-color:transparent;font-weight:700}
+.btn.acc:hover{background:var(--acc2)}
+.btn.ghost{background:transparent}
+.btn.sm{padding:5px 10px;font-size:11px;border-radius:7px}
+.btn.icon{padding:6px 9px}
+
+/* SHELL */
+.shell{flex:1;display:grid;grid-template-columns:230px 1fr 300px;min-height:0}
+
+/* LEFT — app library */
+.left{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.left-head{padding:16px 14px 10px}
+.add-btn{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--accBg);color:var(--acc2);border:1px solid rgba(124,156,245,.3);border-radius:9px;padding:10px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.14s}
+.add-btn:hover{background:rgba(124,156,245,.22)}
+.search{margin-top:10px;width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--txt);font:inherit;outline:none}
+.search:focus{border-color:var(--acc)}
+.lib{flex:1;overflow:auto;padding:6px 10px}
+.lib-item{display:flex;align-items:center;gap:9px;padding:8px;border-radius:8px;cursor:grab;transition:.12s}
+.lib-item:hover{background:var(--card)}
+.lib-item .ico{width:26px;height:26px;border-radius:7px;background:var(--card);border:1px solid var(--line);display:grid;place-items:center;font-size:12px;color:var(--acc);flex-shrink:0}
+.lib-item .nm{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-item .ex{font-size:10px;color:var(--dim2);font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-item .plus{margin-left:auto;color:var(--dim2);opacity:0;font-size:14px}
+.lib-item:hover .plus{opacity:1;color:var(--acc)}
+.lib-empty{color:var(--dim2);font-size:11px;text-align:center;padding:24px 10px}
+.profiles{border-top:1px solid var(--line);padding:12px 14px}
+.prof{display:flex;align-items:center;justify-content:space-between;padding:7px 9px;border-radius:7px;color:var(--dim);font-size:12px;cursor:pointer}
+.prof:hover{background:var(--card);color:var(--txt)}
+.prof.on{background:var(--accBg);color:var(--acc2)}
+.prof .n{font:10px ui-monospace,monospace;color:var(--dim2)}
+
+/* CENTER */
+.center{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+.bar{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0}
+.bar .grp{display:flex;gap:6px;align-items:center}
+.bar .div{width:1px;height:18px;background:var(--line2);margin:0 4px}
+.stage{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:22px;min-height:0}
+.stage-head{width:100%;max-width:860px;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}
+.stage-head b{font-size:14px}
+.stage-head span{color:var(--dim);font-size:11px}
+.screen{position:relative;width:100%;max-width:860px;aspect-ratio:16/9;background:var(--bg);border:7px solid #1B1E23;border-radius:14px;box-shadow:0 20px 50px -12px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.03)}
+.zone{position:absolute;border-radius:9px;border:1px solid var(--line);background:var(--card);padding:11px;cursor:pointer;overflow:hidden;transition:background .14s,border-color .14s}
+.zone:hover{background:var(--cardH)}
+.zone.on{border:2px solid var(--acc);background:#1E2533}
+.zone.blank{display:grid;place-items:center;border-style:dashed;border-color:var(--line2);color:var(--dim);text-align:center;gap:6px}
+.zone.blank:hover{border-color:var(--acc);color:var(--acc2)}
+.zone.blank .big{font-size:24px;line-height:1}
+.zone.blank .t{font-size:12px}
+.zr{display:flex;align-items:center;gap:8px}
+.zr .num{width:20px;height:20px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);display:grid;place-items:center;font:11px ui-monospace,monospace;flex-shrink:0}
+.zone.on .zr .num{background:var(--acc);color:var(--bg);border-color:transparent}
+.zr .lbl{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.zex{font:11px ui-monospace,monospace;color:var(--acc);margin:5px 0 0 28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{display:inline-flex;align-items:center;gap:5px;margin:6px 0 0 28px;background:var(--okBg);color:var(--ok);border-radius:5px;padding:2px 7px;font-size:10px}
+.tag .d{width:5px;height:5px;border-radius:50%;background:var(--ok)}
+.zf{position:absolute;left:11px;right:11px;bottom:9px;border-top:1px solid var(--line);padding-top:6px;display:flex;justify-content:space-between;font:10px ui-monospace,monospace;color:var(--dim)}
+.zf .px{color:var(--acc)}
+.dv{position:absolute;z-index:20}
+.dv.v{width:16px;top:0;bottom:0;margin-left:-8px;cursor:col-resize}
+.dv.h{height:16px;left:0;right:0;margin-top:-8px;cursor:row-resize}
+.dv::after{content:"";position:absolute;background:var(--line2);border-radius:99px;transition:.14s}
+.dv.v::after{width:3px;height:30px;left:6px;top:50%;transform:translateY(-50%)}
+.dv.h::after{height:3px;width:30px;top:6px;left:50%;transform:translateX(-50%)}
+.dv:hover::after{background:var(--acc);width:4px;height:44px;box-shadow:0 2px 12px rgba(0,0,0,.6)}
+.dv.h:hover::after{width:44px;height:4px}
+.hud{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:30;background:#1E2533;border:1px solid var(--acc);border-radius:8px;padding:6px 12px;font:11px ui-monospace,monospace;display:none;align-items:center;gap:8px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.hud.on{display:flex}
+.hud i{width:6px;height:6px;border-radius:50%;background:var(--acc)}
+.taskbar{position:absolute;bottom:0;left:0;right:0;height:20px;background:#101216;border-top:1px solid var(--line);display:flex;align-items:center;gap:5px;padding:0 9px;z-index:5}
+.taskbar i{width:9px;height:9px;border-radius:2px;background:var(--acc);display:block}
+.taskbar i.d{background:var(--panel2)}
+.tip{color:var(--dim2);font-size:11px;margin-top:12px;text-align:center}
+
+/* assigned strip */
+.strip{border-top:1px solid var(--line);background:var(--panel);padding:10px 20px;flex-shrink:0;max-height:132px;overflow:auto}
+.strip-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.arow{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:8px;padding:7px 10px;margin-bottom:4px;font-size:12px}
+.arow .g{color:var(--dim2)}
+.arow .e{font:11px ui-monospace,monospace;color:var(--acc)}
+.arow .z{margin-left:auto;font-size:10px;color:var(--dim);background:var(--bg);padding:2px 8px;border-radius:5px}
+
+/* RIGHT — inspector */
+.right{background:var(--panel);border-left:1px solid var(--line);padding:16px;overflow:auto}
+.right h3{font-size:13px;margin-bottom:4px}
+.right .sub{font:10.5px ui-monospace,monospace;color:var(--acc);margin-bottom:12px}
+.fld{margin-bottom:11px}
+.fld label{display:block;font-size:10.5px;color:var(--dim);margin-bottom:4px}
+.fld input,.fld select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:7px 9px;color:var(--txt);font:inherit;outline:none}
+.fld input:focus,.fld select:focus{border-color:var(--acc)}
+.hr{height:1px;background:var(--line);margin:14px 0}
+.gt{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);margin-bottom:9px}
+.log{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px;height:96px;overflow:auto;font:10.5px ui-monospace,monospace;color:var(--dim);margin-top:8px}
+.log .g{color:var(--ok)}.log .a{color:var(--acc)}
+
+/* MODAL */
+.veil{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(3px)}
+.veil.on{display:flex}
+.modal{width:540px;max-height:82vh;background:var(--panel);border:1px solid var(--line2);border-radius:14px;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.7)}
+.mh{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.mh b{font-size:14px}
+.mb{padding:16px 18px;overflow:auto;flex:1}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.tab{padding:8px 13px;color:var(--dim);font-size:12px;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{color:var(--acc);border-color:var(--acc)}
+.srch{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--txt);outline:none;margin-bottom:10px;font:inherit}
+.ai{display:flex;align-items:center;gap:10px;padding:9px;border-radius:8px;cursor:pointer}
+.ai:hover{background:var(--card)}
+.ai .ic{width:28px;height:28px;border-radius:7px;background:var(--card);border:1px solid var(--line);display:grid;place-items:center;color:var(--acc)}
+.ai .d{font-size:10px;color:var(--dim2);font-family:ui-monospace,monospace}
+.mf{padding:12px 18px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mf .hint{font-size:11px;color:var(--dim2)}
+
+/* CONTEXT */
+.ctx{position:fixed;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:5px;min-width:190px;box-shadow:0 16px 40px rgba(0,0,0,.6);display:none;z-index:200}
+.ctx.on{display:block}
+.ci{padding:8px 10px;border-radius:6px;font-size:12px;cursor:pointer;display:flex;justify-content:space-between}
+.ci:hover{background:var(--card)}
+.ci span{color:var(--dim2);font-size:10px}
+.csep{height:1px;background:var(--line);margin:4px 0}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--card);border:1px solid var(--line2);border-radius:9px;padding:9px 16px;font-size:12px;z-index:300;opacity:0;transition:.2s;pointer-events:none}
+.toast.on{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="logo"><span class="mark">Z</span> Zone<em>Flow</em></div>
+  <div class="top-mid"><span id="topProfile">Website</span><span class="sep"></span><span class="mono" id="topRes">3840 × 2160</span></div>
+  <div class="top-actions">
+    <button class="btn ghost" onclick="act('Reverted')">Revert</button>
+    <button class="btn" onclick="saveAll()">Save &amp; Apply</button>
+    <button class="btn acc" onclick="act('Workspace launched')">▶ Launch</button>
+  </div>
+</div>
+
+<div class="shell">
+  <!-- LEFT -->
+  <aside class="left">
+    <div class="left-head">
+      <button class="add-btn" onclick="openPicker()">＋ &nbsp;Add app to workspace</button>
+      <input class="search" id="libSearch" placeholder="Search your apps…" oninput="renderLib()">
+    </div>
+    <div class="lib" id="lib"></div>
+    <div class="profiles">
+      <div class="cap" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+        <span>Profiles</span>
+        <span style="display:flex;gap:8px">
+          <button onclick="newProf()" title="New profile" style="background:none;border:0;color:var(--acc);cursor:pointer;font-size:11px">＋ New</button>
+          <button onclick="renameProf()" title="Rename profile" style="background:none;border:0;color:var(--dim);cursor:pointer;font-size:11px">✎</button>
+          <button onclick="deleteProf()" title="Delete profile" style="background:none;border:0;color:var(--dim);cursor:pointer;font-size:11px">🗑</button>
+        </span>
+      </div>
+      <div id="profs"></div>
+    </div>
+  </aside>
+
+  <!-- CENTER -->
+  <main class="center">
+    <div class="bar">
+      <div class="grp">
+        <button class="btn sm" onclick="tpl('duo')">Duo</button>
+        <button class="btn sm" onclick="tpl('debug')">Debug</button>
+        <button class="btn sm" onclick="tpl('three')">3 Columns</button>
+        <button class="btn sm" onclick="tpl('focus')">Focus</button>
+        <button class="btn sm" onclick="tpl('empty')">Empty</button>
+      </div>
+      <div class="div"></div>
+      <div class="grp">
+        <button class="btn sm" onclick="split('v')">⊞ Split</button>
+        <button class="btn sm" onclick="split('h')">⊟ Split</button>
+        <button class="btn sm" onclick="del()">Remove</button>
+      </div>
+      <div class="div"></div>
+      <div class="grp"><span class="cap">Gap</span><input type="range" min="0" max="40" value="8" id="gap" oninput="document.getElementById('gv').textContent=this.value+'px'"><span class="mono" id="gv" style="font-size:11px;color:var(--dim)">8px</span></div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-head"><b id="stageTitle">Website</b><span id="stageMeta">3 zones · drag apps from the left onto a zone</span></div>
+      <div class="screen" id="screen">
+        <div class="hud" id="hud"><i></i><span id="hudT"></span></div>
+        <div class="taskbar"><i></i><i class="d"></i><i class="d"></i><i class="d"></i></div>
+      </div>
+      <div class="tip">Drag a divider to resize · Right-click a zone for actions · Drag an app from the left to attach it</div>
+    </div>
+
+    <div class="strip">
+      <div class="strip-h"><span class="cap">Apps in this workspace</span><button class="btn sm" onclick="openPicker()">＋ Add app</button></div>
+      <div id="assigned"></div>
+    </div>
+  </main>
+
+  <!-- RIGHT -->
+  <aside class="right" id="insp"></aside>
+</div>
+
+<!-- PICKER -->
+<div class="veil" id="veil">
+  <div class="modal">
+    <div class="mh"><b>Choose an app</b><button class="btn sm ghost" onclick="closePicker()">✕</button></div>
+    <div class="mb">
+      <div class="tabs">
+        <div class="tab on" data-t="installed" onclick="tab('installed')">Installed</div>
+        <div class="tab" data-t="running" onclick="tab('running')">Running now</div>
+        <div class="tab" data-t="other" onclick="tab('other')">Browse…</div>
+      </div>
+      <input class="srch" id="q" placeholder="Search…" oninput="renderPicker()">
+      <div id="plist"></div>
+    </div>
+    <div class="mf"><span class="hint" id="pHint">Pick an app to place it in the selected zone</span><button class="btn" onclick="closePicker()">Cancel</button></div>
+  </div>
+</div>
+
+<div class="ctx" id="ctx">
+  <div class="ci" onclick="cx('add')">Add app… <span>choose</span></div>
+  <div class="ci" onclick="cx('rename')">Rename zone <span>F2</span></div>
+  <div class="csep"></div>
+  <div class="ci" onclick="cx('sv')">Split right</div>
+  <div class="ci" onclick="cx('sh')">Split down</div>
+  <div class="csep"></div>
+  <div class="ci" onclick="cx('del')">Remove zone</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const COL=['#7C9CF5','#4ADE80','#FBBF24','#C084FC','#F87171','#22D3EE','#F472B6','#A3E635'];
+const INST=[['Google Chrome','chrome.exe'],['Microsoft Edge','msedge.exe'],['Visual Studio Code','Code.exe'],['Obsidian','Obsidian.exe'],['Windows Terminal','WindowsTerminal.exe'],['File Explorer','explorer.exe'],['Spotify','Spotify.exe'],['Slack','Slack.exe'],['Notepad++','notepad++.exe'],['AyuGram','AyuGram.exe'],['Firefox','firefox.exe'],['Postman','Postman.exe']];
+const RUN=[['Google Chrome','chrome.exe'],['File Explorer','explorer.exe'],['Windows Terminal','WindowsTerminal.exe'],['Notepad++','notepad++.exe']];
+let P={
+  Website:[{id:1,label:'Primary Browser',exe:'chrome.exe',x:0,y:0,w:58,h:100,url:'https://developer.mozilla.org',title:'Documentation'},
+           {id:2,label:'Markdown Notes',exe:'Obsidian.exe',x:58,y:0,w:42,h:55},
+           {id:3,label:'File Explorer',exe:'explorer.exe',x:58,y:55,w:42,h:45}],
+  Coding:[{id:1,label:'VS Code',exe:'Code.exe',x:0,y:0,w:62,h:100},
+          {id:2,label:'Preview',exe:'msedge.exe',x:62,y:0,w:38,h:65,url:'http://localhost:3000'},
+          {id:3,label:'Terminal',exe:'WindowsTerminal.exe',x:62,y:65,w:38,h:35}],
+  Trading:[]
+};
+let cur='Website', sel=1, tabName='installed', drag=null;
+const Z=()=>P[cur];
+
+function renderAll(){renderTop();renderLib();renderProfs();renderScreen();renderAssigned();renderInsp()}
+function renderTop(){document.getElementById('topProfile').textContent=cur;document.getElementById('stageTitle').textContent=cur;document.getElementById('stageMeta').textContent=`${Z().length} zones · drag apps from the left onto a zone`}
+function renderLib(){
+  const q=document.getElementById('libSearch').value.toLowerCase();
+  const list=INST.filter(a=>a[0].toLowerCase().includes(q)||a[1].toLowerCase().includes(q));
+  document.getElementById('lib').innerHTML=list.length?list.map(a=>`<div class="lib-item" draggable="true" ondragstart="dragStart(event,'${a[0]}','${a[1]}')" ondblclick="quickAdd('${a[0]}','${a[1]}')"><div class="ico">▣</div><div style="min-width:0"><div class="nm">${a[0]}</div><div class="ex">${a[1]}</div></div><div class="plus">＋</div></div>`).join(''):'<div class="lib-empty">No apps match.</div>';
+}
+function renderProfs(){document.getElementById('profs').innerHTML=Object.keys(P).map(n=>`<div class="prof ${n===cur?'on':''}" onclick="sw('${n}')"><span>${n}</span><span class="n">${P[n].length}Z</span></div>`).join('')}
+function renderScreen(){
+  const s=document.getElementById('screen');s.querySelectorAll('.zone,.dv').forEach(e=>e.remove());
+  Z().forEach((z,i)=>{
+    const e=document.createElement('div');e.className='zone'+(z.id===sel?' on':'')+(!z.exe?' blank':'');
+    e.style.cssText=`left:${z.x}%;top:${z.y}%;width:${z.w}%;height:${z.h}%`;
+    if(!z.exe)e.innerHTML=`<div><div class="big">＋</div><div class="t">Choose an app</div></div>`;
+    else e.innerHTML=`<div class="zr"><div class="num">${z.id}</div><div class="lbl">${z.label}</div></div><div class="zex">${z.exe}</div><div class="tag"><span class="d"></span>Tiled</div><div class="zf"><span>${Math.round(z.w)}% × ${Math.round(z.h)}%</span><span class="px">${Math.round(z.w/100*3840)}×${Math.round(z.h/100*2112)} px</span></div>`;
+    e.onclick=()=>{sel=z.id;renderScreen();renderInsp()};
+    e.oncontextmenu=ev=>{ev.preventDefault();sel=z.id;showCtx(ev.clientX,ev.clientY)};
+    e.ondragover=ev=>ev.preventDefault();
+    e.ondrop=ev=>{ev.preventDefault();const d=ev.dataTransfer.getData('txt').split('|');attach(+d[2]||sel,d[0],d[1])};
+    s.appendChild(e);
+  });
+  bounds().forEach(b=>{const d=document.createElement('div');d.className='dv '+(b.v?'v':'h');
+    if(b.v){d.style.left=b.p+'%';d.style.top=b.a+'%';d.style.height=(b.b-b.a)+'%'}else{d.style.top=b.p+'%';d.style.left=b.a+'%';d.style.width=(b.b-b.a)+'%'}
+    d.onmousedown=ev=>startDrag(ev,b);s.appendChild(d)});
+}
+function bounds(){
+  const zs=Z(),o=[],t=1.5;
+  [...new Set(zs.map(z=>Math.round(z.x)))].filter(x=>x>5&&x<95).forEach(x=>{const A=zs.filter(z=>Math.abs(z.x+z.w-x)<=t),B=zs.filter(z=>Math.abs(z.x-x)<=t);if(A.length&&B.length){const all=[...A,...B];o.push({v:true,p:x,a:Math.min(...all.map(z=>z.y)),b:Math.max(...all.map(z=>z.y+z.h)),A:A.map(z=>z.id),B:B.map(z=>z.id)})}});
+  [...new Set(zs.map(z=>Math.round(z.y)))].filter(y=>y>5&&y<95).forEach(y=>{const A=zs.filter(z=>Math.abs(z.y+z.h-y)<=t),B=zs.filter(z=>Math.abs(z.y-y)<=t);if(A.length&&B.length){const all=[...A,...B];o.push({v:false,p:y,a:Math.min(...all.map(z=>z.x)),b:Math.max(...all.map(z=>z.x+z.w)),A:A.map(z=>z.id),B:B.map(z=>z.id)})}});
+  return o;
+}
+function renderAssigned(){
+  const rows=Z().filter(z=>z.exe).map(z=>`<div class="arow"><span class="g">⠿</span><span>${z.label}</span><span class="e">${z.exe}</span><span class="z">Zone ${z.id}</span></div>`).join('');
+  document.getElementById('assigned').innerHTML=rows||'<div style="color:var(--dim2);font-size:11px">No apps assigned yet — use “Add app” or drag one from the left.</div>';
+}
+function renderInsp(){
+  const z=Z().find(z=>z.id===sel),e=document.getElementById('insp');
+  if(!z){e.innerHTML='<h3>Zone &amp; Automation</h3><div style="color:var(--dim);font-size:11px;margin-top:10px">Select a zone to configure its app and rules.</div>';return}
+  e.innerHTML=`<h3>Zone &amp; Automation</h3><div class="sub">Zone ${z.id} · X:${Math.round(z.x/100*3840)} Y:${Math.round(z.y/100*2112)} · ${Math.round(z.w/100*3840)}×${Math.round(z.h/100*2112)} px</div>
+  <button class="btn sm" onclick="openPicker()">${z.exe?'Change app':'Choose app'}</button>
+  <div class="hr"></div><div class="gt">1 · Window &amp; process</div>
+  <div class="fld"><label>Label</label><input value="${z.label}"></div>
+  <div class="fld"><label>Executable</label><input class="mono" value="${z.exe}"></div>
+  <div class="fld"><label>Launch</label><select><option>Launch if closed</option><option>Attach if running</option></select></div>
+  <div class="hr"></div><div class="gt">2 · Browser tab &amp; URL</div>
+  <div class="fld"><label>URL</label><input class="mono" value="${z.url||''}" placeholder="https://…"></div>
+  <div class="fld"><label>Title match</label><input value="${z.title||''}"></div>
+  <div class="fld"><label>Tab rule</label><select><option>Focus or Ctrl+T</option><option>Reuse blank tab</option><option>Window tile only</option></select></div>
+  <div class="hr"></div><div class="gt">3 · Keystroke macro</div>
+  <div class="fld"><label>Trigger title</label><input placeholder="e.g. Sign In"></div>
+  <div class="fld"><label>Keys / PIN</label><input class="mono" placeholder="•••• or ^k"></div>
+  <button class="btn sm" onclick="act('Zone tested')">▶ Test zone</button>
+  <div class="hr"></div><div class="gt">Console</div>
+  <div class="log" id="log"><div class="a">[12:00:01] Studio ready.</div><div class="g">[12:00:02] 10 hotkeys active.</div></div>`;
+}
+function act(m){const l=document.getElementById('log');if(l)l.innerHTML+=`<div class="g">[${new Date().toTimeString().slice(0,8)}] ${m}</div>`;const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');clearTimeout(window._t);window._t=setTimeout(()=>t.classList.remove('on'),1800)}
+
+const KEY='zoneflow_profiles_v2';
+function saveAll(){try{localStorage.setItem(KEY,JSON.stringify({P,cur}));act('Saved & applied')}catch(e){act('Save failed')}}
+function loadAll(){try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.P&&Object.keys(d.P).length){Object.keys(P).forEach(k=>delete P[k]);Object.assign(P,d.P);cur=d.cur&&P[d.cur]?d.cur:Object.keys(P)[0]}}catch(e){}}
+function newProf(){const n=prompt('Profile name','New profile');if(!n||!n.trim()||P[n.trim()])return act('Name exists');P[n.trim()]=[];cur=n.trim();sel=0;saveAll();renderAll();act('Profile created')}
+function renameProf(){const n=prompt('Rename profile to',cur);if(!n||!n.trim()||P[n.trim()])return act('Name exists');const v=P[cur];delete P[cur];P[n.trim()]=v;cur=n.trim();saveAll();renderAll();act('Profile renamed')}
+function deleteProf(){if(Object.keys(P).length<=1)return act('Keep at least one profile');if(!confirm('Delete profile "'+cur+'"?'))return;delete P[cur];cur=Object.keys(P)[0];sel=Z()[0]?.id||0;saveAll();renderAll();act('Profile deleted')}
+function sw(n){cur=n;sel=Z()[0]?.id||0;renderAll()}
+function tpl(t){const L={duo:[[0,0,50,100],[50,0,50,100]],debug:[[0,0,60,100],[60,0,40,55],[60,55,40,45]],three:[[0,0,33,100],[33,0,34,100],[67,0,33,100]],focus:[[0,0,100,100]],empty:[]};const old=Z();P[cur]=(L[t]||[]).map((r,i)=>({id:i+1,label:old[i]?.label||'Zone '+(i+1),exe:old[i]?.exe||'',x:r[0],y:r[1],w:r[2],h:r[3],url:old[i]?.url||'',title:old[i]?.title||''}));sel=Z()[0]?.id||0;renderAll();act('Template applied')}
+function split(d){const z=Z().find(z=>z.id===sel);if(!z)return;const id=Math.max(0,...Z().map(z=>z.id))+1;
+  if(d==='v'){if(z.w<20)return act('Too narrow');const h=z.w/2;z.w=h;Z().push({id,label:'Zone '+id,exe:'',x:z.x+h,y:z.y,w:h,h:z.h})}
+  else{if(z.h<20)return act('Too short');const h=z.h/2;z.h=h;Z().push({id,label:'Zone '+id,exe:'',x:z.x,y:z.y+h,w:z.w,h:h})}
+  sel=id;renderAll()}
+function del(){if(Z().length<=1)return act('Last zone');const i=Z().findIndex(z=>z.id===sel),r=Z().splice(i,1)[0],n=Z()[Math.max(0,i-1)];n.w=Math.min(100-n.x,n.w+r.w);n.h=Math.min(100-n.y,n.h+r.h);sel=Z()[0].id;renderAll()}
+function attach(id,name,exe){const z=Z().find(z=>z.id===id);if(z){z.label=name;z.exe=exe;renderAll();act(name+' → zone '+id)}}
+function quickAdd(name,exe){attach(sel,name,exe)}
+
+function startDrag(ev,b){ev.preventDefault();const r=document.getElementById('screen').getBoundingClientRect();drag={b,s:b.v?ev.clientX:ev.clientY,p:b.p,r,
+  A:b.A.map(id=>({z:Z().find(z=>z.id===id),...Z().find(z=>z.id===id)})),B:b.B.map(id=>({z:Z().find(z=>z.id===id),...Z().find(z=>z.id===id)}))};
+  document.getElementById('hud').classList.add('on');window.addEventListener('mousemove',onDrag);window.addEventListener('mouseup',endDrag,{once:true})}
+function onDrag(ev){if(!drag)return;const{b,s,p,r}=drag,k=b.v?'x':'y',sz=b.v?'w':'h';const d=(b.v?ev.clientX-s:ev.clientY-s)/r[b.v?'width':'height']*100;
+  const mn=Math.max(...drag.A.map(o=>o[k]+15)),mx=Math.min(...drag.B.map(o=>o[k]+o[sz]-15)),np=Math.max(mn,Math.min(mx,p+d));
+  drag.A.forEach(o=>o.z[sz]=np-o[k]);drag.B.forEach(o=>{const edge=o[k]+o[sz];o.z[k]=np;o.z[sz]=edge-np});
+  document.getElementById('hudT').textContent=`Split ${b.v?'X':'Y'}: ${Math.round(np)}% (${Math.round(np/100*3840)}px | ${Math.round((100-np)/100*3840)}px)`;renderScreen()}
+function endDrag(){drag=null;document.getElementById('hud').classList.remove('on');renderAll();act('Zone dimensions updated')}
+
+function showCtx(x,y){const c=document.getElementById('ctx');c.style.left=x+'px';c.style.top=y+'px';c.classList.add('on')}
+document.addEventListener('click',()=>document.getElementById('ctx').classList.remove('on'));
+function cx(a){document.getElementById('ctx').classList.remove('on');if(a==='add')openPicker();if(a==='rename'){const z=Z().find(z=>z.id===sel);if(z){const n=prompt('Zone name',z.label);if(n){z.label=n;renderAll()}}}if(a==='sv')split('v');if(a==='sh')split('h');if(a==='del')del()}
+
+function openPicker(){document.getElementById('veil').classList.add('on');tab('installed')}
+function closePicker(){document.getElementById('veil').classList.remove('on')}
+function tab(t){tabName=t;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.dataset.t===t));renderPicker()}
+function renderPicker(){
+  const q=document.getElementById('q').value.toLowerCase();
+  if(tabName==='other'){document.getElementById('plist').innerHTML='<div style="color:var(--dim);font-size:12px;padding:16px;text-align:center;border:1px dashed var(--line2);border-radius:9px">Click <b style="color:var(--acc)">Browse…</b> below to pick a custom .exe file.</div>';return}
+  const list=(tabName==='running'?RUN:INST).filter(a=>a[0].toLowerCase().includes(q)||a[1].toLowerCase().includes(q));
+  document.getElementById('plist').innerHTML=list.map(a=>`<div class="ai" onclick="pick('${a[0]}','${a[1]}')"><div class="ic">▣</div><div><div>${a[0]}</div><div class="d">${a[1]}</div></div></div>`).join('')||'<div style="color:var(--dim);padding:12px">No apps found.</div>';
+}
+function pick(n,e){attach(sel,n,e);closePicker()}
+function dragStart(ev,n,e){ev.dataTransfer.setData('txt',n+'|'+e+'|'+sel)}
+loadAll();renderAll();
+</script>
+</body>
+</html>

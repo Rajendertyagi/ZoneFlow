@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Format, lint, test and build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      # Advisory only: a fresh project (or a transitive dependency) may have
+      # advisories on day one, so don't block the build on audit findings.
+      # Remove `continue-on-error` once the dependency tree is audited clean.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Security audit
+        run: cargo audit
+        continue-on-error: true
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: Upload release executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenlayout.exe
+          path: target/release/screenlayout.exe
+          if-no-files-found: error

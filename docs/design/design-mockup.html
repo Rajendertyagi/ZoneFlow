@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZoneFlow Studio — Target Design</title>
+<style>
+  :root{
+    --base:#0E0F11; --rail:#131518; --surface:#181A1E; --tile:#1F2228;
+    --tileHover:#252932; --tileActive:#222938; --well:#121316; --pill:#23262E;
+    --accent:#8AB4F8; --accentHover:#A8C7FA; --ink:#0B192C; --text:#ECEEF2; --muted:#7E8594;
+    --green:#10B981; --border:rgba(255,255,255,.06);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--base);color:var(--text);font:13px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+  .mono{font-family:"JetBrains Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+  .micro{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+
+  /* Header */
+  header{height:56px;background:var(--rail);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 18px;flex-shrink:0}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand-logo{width:32px;height:32px;border-radius:9px;background:var(--pill);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--accent)}
+  .brand h1{font-size:15px;font-weight:700;letter-spacing:-.02em}
+  .brand h1 span{color:var(--accent)}
+  .brand p{font-size:10px;color:var(--muted)}
+  .header-center{display:flex;gap:10px;align-items:center}
+  .pill{background:var(--pill);border:1px solid var(--border);border-radius:10px;padding:7px 12px;display:flex;align-items:center;gap:8px;font-size:12px}
+  .pill select{background:transparent;border:0;color:var(--text);font:inherit;outline:none;cursor:pointer}
+  .header-actions{display:flex;gap:8px}
+  .btn{border:1px solid var(--border);background:var(--pill);color:var(--text);border-radius:9px;padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:.15s}
+  .btn:hover{background:var(--tileHover)}
+  .btn.primary{background:var(--accent);color:var(--ink);border-color:transparent;font-weight:600}
+  .btn.primary:hover{background:var(--accentHover)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:5px 10px;font-size:11px;border-radius:7px}
+
+  /* Layout */
+  .main{flex:1;display:flex;min-height:0}
+  .rail{width:210px;background:var(--rail);border-right:1px solid var(--border);padding:14px;display:flex;flex-direction:column;flex-shrink:0}
+  .nav{display:flex;flex-direction:column;gap:3px;margin:8px 0 18px}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;color:var(--muted);cursor:pointer;font-size:12.5px;border:1px solid transparent}
+  .nav-item:hover{background:var(--surface);color:var(--text)}
+  .nav-item.active{background:var(--tileActive);color:var(--accent);border-color:rgba(138,180,248,.3)}
+  .section-title{display:flex;justify-content:space-between;align-items:center;margin:6px 0 8px}
+  .section-title button{background:none;border:0;color:var(--accent);font-size:11px;cursor:pointer}
+  .profile{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;border-radius:9px;cursor:pointer;color:var(--muted);font-size:12.5px;margin-bottom:2px}
+  .profile:hover{background:var(--surface);color:var(--text)}
+  .profile.active{background:var(--tileActive);color:var(--text);border:1px solid rgba(138,180,248,.3)}
+  .profile .count{font:10px var(--mono,monospace);background:var(--well);padding:2px 6px;border-radius:5px;color:var(--accent)}
+  .rail-status{margin-top:auto;border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:6px}
+  .status-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+  .status-row b{color:var(--green);font-weight:500}
+
+  /* Center */
+  .center{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--base)}
+  .toolbar{padding:12px 18px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:10px}
+  .toolbar-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .gap-wrap{display:flex;align-items:center;gap:8px;margin-left:6px}
+  input[type=range]{accent-color:var(--accent);width:120px}
+  .canvas-wrap{flex:1;overflow:auto;display:flex;flex-direction:column;align-items:center;padding:18px;min-height:0}
+  .canvas-head{width:100%;max-width:900px;display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .canvas-head .title{font-weight:600;font-size:14px}
+  .canvas-head .meta{color:var(--muted);font-size:11px}
+  .monitor{position:relative;width:100%;max-width:900px;aspect-ratio:16/9;background:var(--base);border:8px solid #1A1C20;border-radius:14px;box-shadow:0 12px 32px -8px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.04);user-select:none}
+  .zone{position:absolute;border-radius:8px;border:1px solid rgba(255,255,255,.08);background:var(--tile);padding:10px;cursor:pointer;overflow:hidden;transition:background .15s,border-color .15s}
+  .zone:hover{background:var(--tileHover)}
+  .zone.selected{border:2px solid var(--accent);background:var(--tileActive)}
+  .zone.empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;border-style:dashed;border-color:rgba(255,255,255,.14);color:var(--muted)}
+  .zone.empty:hover{border-color:var(--accent);color:var(--accent)}
+  .zone-head{display:flex;align-items:center;gap:8px}
+  .badge-num{width:20px;height:20px;border-radius:5px;background:var(--pill);display:flex;align-items:center;justify-content:center;font:11px monospace;color:var(--text);flex-shrink:0}
+  .zone.selected .badge-num{background:var(--accent);color:var(--ink)}
+  .zone-label{font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .zone-exe{font:11px monospace;color:var(--accent);margin-left:28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pill-status{display:inline-flex;align-items:center;gap:5px;margin-left:28px;margin-top:6px;background:rgba(16,185,129,.15);color:#6EE7B7;border:1px solid rgba(16,185,129,.2);border-radius:5px;padding:2px 7px;font-size:10px}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+  .zone-url{display:inline-block;margin-left:28px;margin-top:5px;background:var(--well);border:1px solid var(--border);border-radius:5px;padding:2px 7px;font:10px monospace;color:var(--accent)}
+  .zone-foot{position:absolute;left:10px;right:10px;bottom:8px;border-top:1px solid rgba(255,255,255,.06);padding-top:6px;display:flex;justify-content:space-between;font:10px monospace;color:var(--muted)}
+  .zone-foot .px{color:var(--accent)}
+  .divider{position:absolute;background:transparent;z-index:20;cursor:col-resize}
+  .divider::after{content:"";position:absolute;background:rgba(255,255,255,.14);border-radius:99px;transition:.15s}
+  .divider.v{width:14px;top:0;bottom:0;margin-left:-7px}
+  .divider.v::after{width:3px;height:32px;left:5px;top:50%;transform:translateY(-50%)}
+  .divider.h{height:14px;left:0;right:0;margin-top:-7px;cursor:row-resize}
+  .divider.h::after{height:3px;width:32px;top:5px;left:50%;transform:translateX(-50%)}
+  .divider:hover::after,.divider.dragging::after{background:var(--accent);width:4px;height:48px;box-shadow:0 2px 10px rgba(0,0,0,.6)}
+  .divider.h:hover::after,.divider.h.dragging::after{width:48px;height:4px}
+  .taskbar{position:absolute;bottom:0;left:0;right:0;height:22px;background:#131518;border-top:1px solid var(--border);display:flex;align-items:center;gap:6px;padding:0 10px;z-index:10}
+  .taskbar .ticon{width:10px;height:10px;border-radius:2px;background:var(--accent)}
+  .taskbar .ticon.dim{background:var(--pill)}
+  .hud{position:absolute;top:10px;right:10px;z-index:30;background:var(--tileActive);border:1px solid var(--accent);border-radius:9px;padding:6px 11px;font:11px monospace;display:none;align-items:center;gap:7px;box-shadow:0 8px 24px rgba(0,0,0,.45)}
+  .hud.show{display:flex}
+  .hud .dot{background:var(--accent)}
+
+  /* Apps list */
+  .apps-panel{max-height:170px;overflow:auto;border-top:1px solid var(--border);background:var(--surface);padding:10px 18px;flex-shrink:0}
+  .apps-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .app-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;background:var(--tile);margin-bottom:4px;cursor:grab;font-size:12px}
+  .app-row:hover{background:var(--tileHover)}
+  .app-row .grip{color:var(--muted)}
+  .app-row .aname{font-weight:500}
+  .app-row .aexe{font:11px monospace;color:var(--accent)}
+  .app-row .azone{margin-left:auto;font-size:11px;color:var(--muted);background:var(--well);padding:2px 8px;border-radius:5px}
+
+  /* Inspector */
+  .inspector{width:330px;background:var(--surface);border-left:1px solid var(--border);padding:16px;overflow:auto;flex-shrink:0}
+  .inspector h2{font-size:13px;font-weight:600;margin-bottom:10px}
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
+  .field input,.field select{width:100%;background:var(--well);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font:inherit;outline:none}
+  .field input:focus,.field select:focus{border-color:var(--accent)}
+  .divider-line{height:1px;background:var(--border);margin:14px 0}
+  .group-title{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .console{background:var(--well);border:1px solid var(--border);border-radius:8px;padding:10px;height:120px;overflow:auto;font:10.5px monospace;color:var(--muted);margin-top:8px}
+  .console .ok{color:#6EE7B7}.console .acc{color:var(--accent)}
+
+  /* Modal */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:100}
+  .overlay.show{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;width:560px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.6)}
+  .modal-head{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .modal-head h3{font-size:14px;font-weight:600}
+  .modal-body{padding:16px 18px;overflow:auto;flex:1}
+  .tabs{display:flex;gap:4px;margin-bottom:12px;border-bottom:1px solid var(--border)}
+  .tab{padding:8px 14px;color:var(--muted);cursor:pointer;font-size:12px;border-bottom:2px solid transparent}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+  .search{width:100%;background:var(--well);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);outline:none;margin-bottom:10px}
+  .app-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;cursor:pointer}
+  .app-item:hover{background:var(--tileHover)}
+  .app-item .ico{width:26px;height:26px;border-radius:6px;background:var(--pill);display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:12px}
+  .app-item .meta{font-size:10px;color:var(--muted)}
+  .modal-foot{padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+
+  /* Context menu */
+  .ctx{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:5px;min-width:180px;box-shadow:0 12px 32px rgba(0,0,0,.5);display:none;z-index:200}
+  .ctx.show{display:block}
+  .ctx-item{padding:8px 10px;border-radius:6px;font-size:12px;cursor:pointer;display:flex;justify-content:space-between}
+  .ctx-item:hover{background:var(--tileHover)}
+  .ctx-item .k{color:var(--muted);font-size:10px}
+  .ctx-sep{height:1px;background:var(--border);margin:4px 0}
+  .hint{font-size:11px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-logo">▦</div>
+    <div><h1>ZoneFlow <span>Studio</span></h1><p>Window Tiler &amp; Automation Studio</p></div>
+  </div>
+  <div class="header-center">
+    <div class="pill">◫ Profile: <select id="profileSel"><option>Website</option><option>Coding</option><option>Trading</option></select></div>
+    <div class="pill">▣ Display: <select><option>3840 × 2160</option></select></div>
+  </div>
+  <div class="header-actions">
+    <button class="btn ghost" onclick="toast('Reverted to saved state')">Revert</button>
+    <button class="btn" onclick="toast('Saved and applied')">Save &amp; Apply</button>
+    <button class="btn primary" onclick="launch()">▶ Launch Workspace</button>
+  </div>
+</header>
+
+<div class="main">
+  <!-- LEFT RAIL -->
+  <aside class="rail">
+    <div class="micro">Workspace</div>
+    <nav class="nav">
+      <div class="nav-item active">▦ &nbsp;Layout Canvas</div>
+      <div class="nav-item">▤ &nbsp;Apps</div>
+      <div class="nav-item">⌨ &nbsp;Global Hotkeys</div>
+      <div class="nav-item">⚙ &nbsp;Engine Settings</div>
+    </nav>
+    <div class="section-title"><span class="micro">Profiles</span><button onclick="newProfile()">+ New</button></div>
+    <div id="profileList"></div>
+    <div class="rail-status">
+      <div class="status-row"><span>Engine</span><b>● Ready</b></div>
+      <div class="status-row"><span>Ctrl+Drag</span><b>Snap</b></div>
+      <div class="status-row"><span>Hotkeys</span><b>10 active</b></div>
+    </div>
+  </aside>
+
+  <!-- CENTER -->
+  <main class="center">
+    <div class="toolbar">
+      <div class="toolbar-row">
+        <span class="micro">Templates</span>
+        <button class="btn sm" onclick="template('duo')">Duo</button>
+        <button class="btn sm" onclick="template('debug')">Debug</button>
+        <button class="btn sm" onclick="template('three')">Three columns</button>
+        <button class="btn sm" onclick="template('focus')">Focus</button>
+        <button class="btn sm" onclick="template('empty')">Empty</button>
+      </div>
+      <div class="toolbar-row">
+        <button class="btn sm" onclick="split('v')">⊞ Split right</button>
+        <button class="btn sm" onclick="split('h')">⊟ Split down</button>
+        <button class="btn sm" onclick="removeZone()">🗑 Remove zone</button>
+        <button class="btn sm" onclick="equalize()">Equalize</button>
+        <div class="gap-wrap"><span class="micro">Gap</span><input type="range" min="0" max="40" value="8" id="gap"><span class="mono" id="gapVal">8px</span></div>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <div class="canvas-head">
+        <div><span class="title" id="canvasTitle">Website</span> <span class="meta" id="canvasMeta">• 3840 × 2160 px • 3 zones</span></div>
+        <div class="meta">Drag dividers to resize · Right-click a zone for actions</div>
+      </div>
+      <div class="monitor" id="monitor">
+        <div class="hud" id="hud"><span class="dot"></span><span id="hudText"></span></div>
+        <div class="taskbar"><div class="ticon"></div><div class="ticon dim"></div><div class="ticon dim"></div><div class="ticon dim"></div></div>
+      </div>
+      <div class="hint">Empty zones show “Choose an app” — click one to open the app picker. Drag an app from the list onto a zone to attach it.</div>
+    </div>
+
+    <div class="apps-panel">
+      <div class="apps-head"><span class="micro">Apps in this workspace</span><button class="btn sm" onclick="openPicker()">+ Add app</button></div>
+      <div id="appsList"></div>
+    </div>
+  </main>
+
+  <!-- INSPECTOR -->
+  <aside class="inspector" id="inspector"></aside>
+</div>
+
+<!-- APP PICKER MODAL -->
+<div class="overlay" id="pickerOverlay">
+  <div class="modal">
+    <div class="modal-head"><h3>Choose an app</h3><button class="btn sm ghost" onclick="closePicker()">✕</button></div>
+    <div class="modal-body">
+      <div class="tabs">
+        <div class="tab active" data-tab="installed" onclick="pickerTab('installed')">Installed</div>
+        <div class="tab" data-tab="running" onclick="pickerTab('running')">Running</div>
+        <div class="tab" data-tab="other" onclick="pickerTab('other')">Other…</div>
+      </div>
+      <input class="search" id="appSearch" placeholder="Search apps…" oninput="renderPicker()">
+      <div id="pickerList"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" onclick="closePicker()">Cancel</button><button class="btn primary" onclick="closePicker()">Choose app</button></div>
+  </div>
+</div>
+
+<!-- CONTEXT MENU -->
+<div class="ctx" id="ctxMenu">
+  <div class="ctx-item" onclick="ctxAction('add')">Add App… <span class="k">click empty zone</span></div>
+  <div class="ctx-item" onclick="ctxAction('rename')">Rename…</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('splitv')">Split Right</div>
+  <div class="ctx-item" onclick="ctxAction('splith')">Split Down</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxAction('remove')">Remove Zone</div>
+</div>
+
+<script>
+// ---------- State ----------
+const PALETTE=['#4A90E2','#27AE60','#F39C12','#8E44AD','#E74C3C','#16A0B4','#D2529B','#7FB219'];
+let profiles={
+  Website:{zones:[
+    {id:1,label:'Primary Browser',exe:'chrome.exe',x:0,y:0,w:58,h:100,url:'https://developer.mozilla.org',title:'Documentation'},
+    {id:2,label:'Markdown Notes',exe:'Obsidian.exe',x:58,y:0,w:42,h:55},
+    {id:3,label:'File Explorer',exe:'explorer.exe',x:58,y:55,w:42,h:45}
+  ]},
+  Coding:{zones:[
+    {id:1,label:'VS Code',exe:'Code.exe',x:0,y:0,w:62,h:100},
+    {id:2,label:'Preview',exe:'msedge.exe',x:62,y:0,w:38,h:65,url:'http://localhost:3000'},
+    {id:3,label:'Terminal',exe:'WindowsTerminal.exe',x:62,y:65,w:38,h:35}
+  ]},
+  Trading:{zones:[]}
+};
+let active='Website', selected=1, ctxZone=null, pickerTabName='installed';
+const installed=[['Google Chrome','chrome.exe'],['Microsoft Edge','msedge.exe'],['Visual Studio Code','Code.exe'],['Obsidian','Obsidian.exe'],['Windows Terminal','WindowsTerminal.exe'],['File Explorer','explorer.exe'],['Spotify','Spotify.exe'],['Slack','Slack.exe'],['Notepad++','notepad++.exe'],['AyuGram','AyuGram.exe']];
+const running=[['Google Chrome','chrome.exe'],['File Explorer','explorer.exe'],['Windows Terminal','WindowsTerminal.exe'],['Notepad++','notepad++.exe']];
+
+// ---------- Render ----------
+function zones(){return profiles[active].zones}
+function renderProfiles(){
+  document.getElementById('profileList').innerHTML=Object.keys(profiles).map(n=>
+    `<div class="profile ${n===active?'active':''}" onclick="switchProfile('${n}')"><span>${n}</span><span class="count">${profiles[n].zones.length}Z</span></div>`).join('');
+}
+function renderCanvas(){
+  const m=document.getElementById('monitor');
+  m.querySelectorAll('.zone,.divider').forEach(e=>e.remove());
+  const zs=zones();
+  document.getElementById('canvasTitle').textContent=active;
+  document.getElementById('canvasMeta').textContent=`• 3840 × 2160 px • ${zs.length} zones`;
+  zs.forEach((z,i)=>{
+    const el=document.createElement('div');
+    el.className='zone'+(z.id===selected?' selected':'')+(!z.exe?' empty':'');
+    el.style.left=z.x+'%';el.style.top=z.y+'%';el.style.width=z.w+'%';el.style.height=z.h+'%';
+    if(!z.exe){
+      el.innerHTML=`<div style="text-align:center"><div style="font-size:22px">＋</div><div style="font-size:12px">Choose an app</div></div>`;
+      el.onclick=()=>{selected=z.id;openPicker()};
+    }else{
+      el.innerHTML=`
+        <div class="zone-head"><div class="badge-num">${z.id}</div><div class="zone-label">${z.label}</div></div>
+        <div class="zone-exe">${z.exe}</div>
+        <div class="pill-status"><span class="dot"></span>Tiled</div>
+        ${z.url?`<div class="zone-url">URL</div>`:''}
+        <div class="zone-foot"><span>${Math.round(z.w)}% × ${Math.round(z.h)}%</span><span class="px">${Math.round(z.w/100*3840)}×${Math.round(z.h/100*2112)} px</span></div>`;
+      el.onclick=(e)=>{selected=z.id;renderCanvas();renderInspector()};
+    }
+    el.oncontextmenu=(e)=>{e.preventDefault();selected=z.id;showCtx(e.clientX,e.clientY)};
+    m.appendChild(el);
+  });
+  // shared-boundary dividers
+  const bounds=findBoundaries(zs);
+  bounds.forEach(b=>{
+    const d=document.createElement('div');
+    d.className='divider '+(b.vertical?'v':'h');
+    if(b.vertical){d.style.left=b.pos+'%';d.style.top=b.minSpan+'%';d.style.height=(b.maxSpan-b.minSpan)+'%'}
+    else{d.style.top=b.pos+'%';d.style.left=b.minSpan+'%';d.style.width=(b.maxSpan-b.minSpan)+'%'}
+    d.onmousedown=(e)=>startDrag(e,b);
+    m.appendChild(d);
+  });
+}
+function findBoundaries(zs){
+  const out=[],tol=1.5;
+  const xs=[...new Set(zs.map(z=>Math.round(z.x)))].filter(x=>x>5&&x<95);
+  xs.forEach(bx=>{
+    const before=zs.filter(z=>Math.abs((z.x+z.w)-bx)<=tol), after=zs.filter(z=>Math.abs(z.x-bx)<=tol);
+    if(before.length&&after.length){const all=[...before,...after];out.push({vertical:true,pos:bx,minSpan:Math.min(...all.map(z=>z.y)),maxSpan:Math.max(...all.map(z=>z.y+z.h)),before:before.map(z=>z.id),after:after.map(z=>z.id)})}
+  });
+  const ys=[...new Set(zs.map(z=>Math.round(z.y)))].filter(y=>y>5&&y<95);
+  ys.forEach(by=>{
+    const before=zs.filter(z=>Math.abs((z.y+z.h)-by)<=tol), after=zs.filter(z=>Math.abs(z.y-by)<=tol);
+    if(before.length&&after.length){const all=[...before,...after];out.push({vertical:false,pos:by,minSpan:Math.min(...all.map(z=>z.x)),maxSpan:Math.max(...all.map(z=>z.x+z.w)),before:before.map(z=>z.id),after:after.map(z=>z.id)})}
+  });
+  return out;
+}
+function renderApps(){
+  const zs=zones();
+  document.getElementById('appsList').innerHTML=zs.filter(z=>z.exe).map(z=>
+    `<div class="app-row" draggable="true" ondragstart="dragApp(event,${z.id})"><span class="grip">⠿</span><span class="aname">${z.label}</span><span class="aexe">${z.exe}</span><span class="azone">Zone ${z.id}</span></div>`).join('')||'<div class="hint">No apps yet — click “+ Add app” or an empty zone.</div>';
+  // drop targets
+  document.querySelectorAll('.zone').forEach(el=>{
+    el.ondragover=e=>e.preventDefault();
+    el.ondrop=e=>{e.preventDefault();const id=+e.dataTransfer.getData('id');const app=zones().find(z=>z.id===id);const target=zones().find(z=>z.id===selected);if(app&&target&&app.id!==target.id){target.label=app.label;target.exe=app.exe;target.url=app.url||'';app.exe='';app.label='Zone '+app.id;renderAll();toast('App moved to zone')}};
+  });
+}
+function renderInspector(){
+  const z=zones().find(z=>z.id===selected);
+  const el=document.getElementById('inspector');
+  if(!z){el.innerHTML='<h2>Zone &amp; Automation</h2><div class="hint">Select a zone to edit its app and rules.</div>';return}
+  el.innerHTML=`
+    <h2>Zone &amp; Automation</h2>
+    <div class="mono" style="color:var(--accent);font-size:11px">Zone ${z.id} · X:${Math.round(z.x/100*3840)} Y:${Math.round(z.y/100*2112)} · ${Math.round(z.w/100*3840)}×${Math.round(z.h/100*2112)} px</div>
+    <button class="btn sm" style="margin-top:8px" onclick="openPicker()">${z.exe?'Change app':'Choose app'}</button>
+    <div class="divider-line"></div>
+    <div class="group-title">1. Window &amp; Process Binding</div>
+    <div class="field"><label>Zone label</label><input value="${z.label}"></div>
+    <div class="field"><label>Target executable</label><input class="mono" value="${z.exe}"></div>
+    <div class="field"><label>Launch behavior</label><select><option>Launch if closed</option><option>Attach if running</option></select></div>
+    <div class="divider-line"></div>
+    <div class="group-title">2. Browser Tab &amp; URL Rules</div>
+    <div class="field"><label>Target URL</label><input class="mono" value="${z.url||''}" placeholder="https://…"></div>
+    <div class="field"><label>Tab title match</label><input value="${z.title||''}"></div>
+    <div class="field"><label>Non-destructive tab</label><select><option>Focus or Ctrl+T</option><option>Reuse blank tab</option><option>Window tile only</option></select></div>
+    <div class="divider-line"></div>
+    <div class="group-title">3. Keystroke / Auto-Input Macro</div>
+    <div class="field"><label>Trigger title keyword</label><input placeholder="e.g. Sign In"></div>
+    <div class="field"><label>Input text / PIN / shortcut</label><input class="mono" placeholder="•••• or ^k"></div>
+    <button class="btn sm" onclick="toast('Zone tested')">▶ Test Zone</button>
+    <div class="divider-line"></div>
+    <div class="group-title">Live Execution Console</div>
+    <div class="console" id="console"><div class="acc">[12:00:01] ZoneFlow Studio ready.</div><div class="ok">[12:00:02] 10 hotkeys registered.</div></div>`;
+}
+function renderAll(){renderProfiles();renderCanvas();renderApps();renderInspector()}
+
+// ---------- Interactions ----------
+function switchProfile(n){active=n;selected=zones()[0]?.id||0;renderAll()}
+function newProfile(){const n='Profile '+(Object.keys(profiles).length+1);profiles[n]={zones:[]};active=n;selected=0;renderAll();toast('Created empty profile')}
+function template(t){
+  const layouts={duo:[[0,0,50,100],[50,0,50,100]],debug:[[0,0,60,100],[60,0,40,55],[60,55,40,45]],three:[[0,0,33,100],[33,0,34,100],[67,0,33,100]],focus:[[0,0,100,100]],empty:[]};
+  const old=zones();
+  profiles[active].zones=(layouts[t]||[]).map((r,i)=>({id:i+1,label:old[i]?.label||'Zone '+(i+1),exe:old[i]?.exe||'',x:r[0],y:r[1],w:r[2],h:r[3],url:old[i]?.url||'',title:old[i]?.title||''}));
+  selected=zones()[0]?.id||0;renderAll();toast('Template applied')
+}
+function split(dir){
+  const z=zones().find(z=>z.id===selected);if(!z)return;
+  const nid=Math.max(0,...zones().map(z=>z.id))+1;
+  if(dir==='v'){if(z.w<20){toast('Too narrow');return}const h=z.w/2;z.w=h;zones().push({id:nid,label:'Zone '+nid,exe:'',x:z.x+h,y:z.y,w:h,h:z.h})}
+  else{if(z.h<20){toast('Too short');return}const h=z.h/2;z.h=h;zones().push({id:nid,label:'Zone '+nid,exe:'',x:z.x,y:z.y+h,w:z.w,h:h})}
+  selected=nid;renderAll()
+}
+function removeZone(){
+  const zs=zones();if(zs.length<=1){toast('Cannot remove last zone');return}
+  const i=zs.findIndex(z=>z.id===selected);const r=zs.splice(i,1)[0];
+  const n=zs[Math.max(0,i-1)];n.w=Math.min(100-n.x,n.w+r.w);n.h=Math.min(100-n.y,n.h+r.h);
+  selected=zs[0].id;renderAll()
+}
+function equalize(){toast('Equalized')}
+function launch(){toast('Launching workspace — opening apps and placing windows');const c=document.getElementById('console');c.innerHTML+=`<div class="ok">[${new Date().toTimeString().slice(0,8)}] Launched ${active} — ${zones().filter(z=>z.exe).length} apps placed.</div>`}
+
+// divider drag
+let drag=null;
+function startDrag(e,b){
+  e.preventDefault();const m=document.getElementById('monitor').getBoundingClientRect();
+  drag={b,start:b.vertical?e.clientX:e.clientY,initial:b.pos,rect:m,
+    before:b.before.map(id=>({z:zones().find(z=>z.id===id),x:zones().find(z=>z.id===id).x,y:zones().find(z=>z.id===id).y,w:zones().find(z=>z.id===id).w,h:zones().find(z=>z.id===id).h})),
+    after:b.after.map(id=>({z:zones().find(z=>z.id===id),x:zones().find(z=>z.id===id).x,y:zones().find(z=>z.id===id).y,w:zones().find(z=>z.id===id).w,h:zones().find(z=>z.id===id).h}))};
+  document.getElementById('hud').classList.add('show');
+  e.target.classList.add('dragging');
+  window.addEventListener('mousemove',onDrag);window.addEventListener('mouseup',endDrag,{once:true});
+}
+function onDrag(e){
+  if(!drag)return;const{b,start,initial,rect}=drag;
+  const delta=(b.vertical?(e.clientX-start):(e.clientY-start))/rect[b.vertical?'width':'height']*100;
+  const key=b.vertical?'x':'y',size=b.vertical?'w':'h';
+  const min=Math.max(...drag.before.map(o=>o[key]+15)),max=Math.min(...drag.after.map(o=>o[key]+o[size]-15));
+  const pos=Math.max(min,Math.min(max,initial+delta));
+  drag.before.forEach(o=>{o.z[size]=pos-o[key]});
+  drag.after.forEach(o=>{const edge=o[key]+o[size];o.z[key]=pos;o.z[size]=edge-pos});
+  document.getElementById('hudText').textContent=`Split ${b.vertical?'X':'Y'}: ${Math.round(pos)}% (${Math.round(pos/100*3840)}px | ${Math.round((100-pos)/100*3840)}px)`;
+  renderCanvas();
+}
+function endDrag(){drag=null;document.getElementById('hud').classList.remove('show');renderAll();toast('Zone dimensions updated')}
+
+// context menu
+function showCtx(x,y){const c=document.getElementById('ctxMenu');c.style.left=x+'px';c.style.top=y+'px';c.classList.add('show')}
+document.addEventListener('click',()=>document.getElementById('ctxMenu').classList.remove('show'));
+function ctxAction(a){
+  document.getElementById('ctxMenu').classList.remove('show');
+  if(a==='add')openPicker();if(a==='rename'){const z=zones().find(z=>z.id===selected);if(z){const n=prompt('Zone name',z.label);if(n)z.label=n;renderAll()}}
+  if(a==='splitv')split('v');if(a==='splith')split('h');if(a==='remove')removeZone();
+}
+
+// app picker
+function openPicker(){document.getElementById('pickerOverlay').classList.add('show');pickerTab('installed')}
+function closePicker(){document.getElementById('pickerOverlay').classList.remove('show')}
+function pickerTab(t){pickerTabName=t;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===t));renderPicker()}
+function renderPicker(){
+  const q=document.getElementById('appSearch').value.toLowerCase();
+  let list=pickerTabName==='running'?running:installed;
+  if(pickerTabName==='other'){document.getElementById('pickerList').innerHTML='<div class="hint">Click “Other…” in the footer to browse for a custom .exe file.</div>';return}
+  document.getElementById('pickerList').innerHTML=list.filter(a=>a[0].toLowerCase().includes(q)||a[1].toLowerCase().includes(q)).map(a=>
+    `<div class="app-item" onclick="pickApp('${a[0]}','${a[1]}')"><div class="ico">▣</div><div><div>${a[0]}</div><div class="meta mono">${a[1]}</div></div></div>`).join('')||'<div class="hint">No apps found.</div>';
+}
+function pickApp(name,exe){const z=zones().find(z=>z.id===selected);if(z){z.label=name;z.exe=exe;renderAll();toast(name+' assigned to zone '+z.id)}closePicker()}
+function dragApp(e,id){e.dataTransfer.setData('id',id)}
+
+// gap + toast
+document.getElementById('gap').oninput=e=>document.getElementById('gapVal').textContent=e.target.value+'px';
+function toast(msg){const c=document.getElementById('console');if(c)c.innerHTML+=`<div class="acc">[${new Date().toTimeString().slice(0,8)}] ${msg}</div>`}
+
+renderAll();
+</script>
+</body>
+</html>
