@@ -193,6 +193,38 @@ impl Inner {
         }
     }
 
+    /// Re-read the authoritative config from disk (legacy "Reload config"
+    /// hotkey / tray item). Unlike [`Self::revert_draft`], this picks up external
+    /// edits and refreshes the dirty baseline, matching the pre-headless
+    /// behaviour. Applied/selected names are repaired if the reloaded config no
+    /// longer contains them.
+    pub fn reload_from_disk(&mut self) {
+        let cfg = crate::config::load_config();
+        if !cfg.profiles.contains_key(&self.applied_profile) {
+            self.applied_profile = cfg.active_profile.clone();
+        }
+        if !cfg.profiles.contains_key(&self.selected_profile) {
+            self.selected_profile = cfg.active_profile.clone();
+        }
+        self.draft = cfg.clone();
+        self.last_saved_json = serde_json::to_string(&cfg).unwrap_or_default();
+    }
+
+    /// Zone rectangles used for the drag overlay and drag-release hit testing.
+    ///
+    /// Both the overlay cache (worker → native `SetZones`) and the `MoveWindow`
+    /// command MUST derive their geometry from this single source. They key off
+    /// `selected_profile` (the operational profile used by every other action —
+    /// apply, launch, hotkeys), so a Home `select` that leaves the draft's
+    /// `active_profile` unchanged cannot make the overlay show one profile's
+    /// zones while the drop snaps to another's.
+    pub fn drag_zones(&self) -> Vec<(i32, crate::engine_core::Rect)> {
+        let mut cfg = self.draft.clone();
+        cfg.active_profile = self.selected_profile.clone();
+        let area = crate::engine::work_area();
+        crate::engine_core::compute_zones(cfg.active(), area, cfg.gap)
+    }
+
     /// Persist the current draft: write to disk, then update the dirty baseline.
     pub fn save(&mut self) -> Result<(), String> {
         crate::config::save_config(&self.draft).map_err(|e| e.to_string())?;
@@ -409,5 +441,34 @@ mod tests {
         assert_eq!(s.zone_count, 0);
         assert!(s.applied);
         assert!(!s.selected);
+    }
+
+    #[test]
+    fn drag_zones_follow_selected_profile_not_draft() {
+        let mut s = Inner::new(cfg());
+        // The draft's active profile and the selected profile have different
+        // zone ids. A Home `select` changes only `selected_profile`, so the
+        // overlay cache and the drag-release snap must both follow the selected
+        // profile — otherwise the drop lands in a rectangle the user never saw.
+        s.draft
+            .profiles
+            .get_mut("Website")
+            .unwrap()
+            .zones
+            .push(Zone::new(1, "Web", "web.exe", 0.0, 0.0, 100.0, 100.0));
+        s.draft
+            .profiles
+            .get_mut("Coding")
+            .unwrap()
+            .zones
+            .push(Zone::new(2, "Code", "code.exe", 0.0, 0.0, 50.0, 50.0));
+        s.selected_profile = "Coding".into();
+        assert_eq!(s.draft.active_profile, "Website");
+        let zones = s.drag_zones();
+        assert_eq!(zones.len(), 1);
+        assert_eq!(
+            zones[0].0, 2,
+            "drag zones must come from the selected profile"
+        );
     }
 }

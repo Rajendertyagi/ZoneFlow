@@ -53,13 +53,9 @@ pub fn spawn_worker(
                 if succeeded {
                     // Keep the native overlay's cached geometry in sync with
                     // the authoritative draft (reverse update, §3.3 step 4).
-                    let area = crate::engine::work_area();
-                    let zones = crate::engine_core::compute_zones(
-                        inner.draft.active(),
-                        area,
-                        inner.draft.gap,
-                    );
-                    notifier.set_zones(zones);
+                    // Same source as the MoveWindow drag-release handler so the
+                    // overlay always shows exactly where a drop will snap.
+                    notifier.set_zones(inner.drag_zones());
 
                     let event = serde_json::json!({
                         "type": "state-changed",

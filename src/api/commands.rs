@@ -688,10 +688,10 @@ pub fn handle(
             if !inner.layout_enabled {
                 return Ok(inactive_result(inner));
             }
-            let mut cfg = inner.draft.clone();
-            cfg.active_profile = inner.selected_profile.clone();
-            let area = crate::engine::work_area();
-            let zones = crate::engine_core::compute_zones(cfg.active(), area, cfg.gap);
+            // Use the same geometry the overlay displayed (Inner::drag_zones),
+            // otherwise a Home select can make the drop snap to a different
+            // profile's rectangles than the ones the user saw highlighted.
+            let zones = inner.drag_zones();
             if let Some(rect) = crate::engine_core::zone_by_id(&zones, zone_id) {
                 crate::engine::move_window_raw(hwnd, rect);
             } else {
@@ -746,7 +746,7 @@ fn handle_action(
             Ok(serde_json::to_value(result).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         Action::Reload => {
-            inner.revert_draft();
+            inner.reload_from_disk();
             inner.log("info", "Reloaded config from disk");
             ok()
         }
