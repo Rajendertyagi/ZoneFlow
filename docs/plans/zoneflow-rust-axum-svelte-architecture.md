@@ -1,7 +1,7 @@
 # ZoneFlow — Rust + Axum + Svelte Architecture
 
 **Status:** Authoritative architecture and migration plan. **No implementation is authorized by this file.**
-**Finalized:** 2026-11-22 · **Plan commit:** `fb5f8d4` (this finalization) · **Source baseline:** `5e74e85` (the pre-finalization state the research was performed against).
+**Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (the pre-finalization state the research was performed against).
 **Supersedes:** `slint-gui-migration-plan.md` as the active direction (retained as historical research). Product behavior remains governed by the frozen documents: `zoneflow-product-workflow.md` (D1–D6), `zoneflow-feature-preservation.md`, `zoneflow-implementation-roadmap.md`, and `zoneflow-gui-architecture.md` (egui-specific guidance, historical for the web UI).
 **Companion:** `zoneflow-rust-axum-svelte-implementation-plan.md` holds code-level API details, task breakdown and test classification. This document is the single authoritative definition of architecture decisions; the companion must not restate them differently.
 
@@ -58,7 +58,7 @@ The crate is a binary (`src/main.rs`, no `src/lib.rs`). The backend is already t
 │  │ Hidden message-only window (wake-up + safety timer)                │  │
 │  │ Overlay layered window (Ctrl+drag zone highlight)                  │  │
 │  │ MsgWaitForMultipleObjectsEx → PeekMessage → Translate/Dispatch     │  │
-│  │ WM_APP: drain queue · MsgWait timeout: drag poll · WM_STOP: quit  │  │
+│  │ WM_APP: drain queue · MsgWait timeout: drag poll · event/WM_STOP  │  │
 │  └───────┬──────────────────────────────────────────▲─────────────────┘  │
 │          │ Actions / MoveWindow (mpsc)             │ NativeUpdate (mpsc) │
 │          │                                         │ + PostMessageW wake │
@@ -113,14 +113,14 @@ There are exactly **three threads**. The main thread **is** the native thread; t
 An `mpsc` send does not wake a thread blocked in `GetMessageW`, and `PostThreadMessageW` messages are **lost** when the thread enters a modal loop such as `MessageBoxW` (Microsoft Learn, `PostThreadMessageW` remarks). Therefore:
 
 - **Hidden message-only window:** `RegisterClassW` (unique class name; tolerate `ERROR_CLASS_ALREADY_EXISTS` = 1410), `CreateWindowExW(..., Some(HWND_MESSAGE), ...)`. Message-only windows receive posted messages and are not visible/enumerable.
-- **Payload queue:** `Arc<Mutex<VecDeque<NativeMessage>>>`, bounded (e.g. 256). `WM_APP` is a **wake-up signal only** (no payload in `LPARAM`, avoiding pointer-ownership hazards). **Overflow behavior:** `NativeMessage` variants are either *replaceable state notifications* (`RebuildMenu`, `SetChecked`, `SetToggleLabel`, `ReregisterHotkeys`, `ShowOverlay`/`HideOverlay` — all idempotent full-state refreshes) or *must-not-drop events* (currently none in the queue; `Shutdown` is the `WM_STOP` window message, and command results use `oneshot`). On overflow, coalesce: remove older replaceable notifications of the same kind and keep the newest full-state value for each; never drop a must-not-drop event. Because every queued item is an idempotent refresh, applying only the newest of each kind leaves tray state, hotkey registrations and overlay state correct — no stale state from dropping an arbitrary oldest item.
+- **Payload queue:** `Arc<Mutex<VecDeque<NativeMessage>>>`, bounded (e.g. 256). `WM_APP` is a **wake-up signal only** (no payload in `LPARAM`, avoiding pointer-ownership hazards). **Overflow behavior:** `NativeMessage` variants are either *replaceable state notifications* (`RebuildMenu`, `SetChecked`, `SetToggleLabel`, `ReregisterHotkeys`, `ShowOverlay`/`HideOverlay` — all idempotent full-state refreshes) or *must-not-drop events* (currently none in the queue; shutdown uses the independent event + `WM_STOP` paths in §3.6, and command results use `oneshot`). On overflow, coalesce: remove older replaceable notifications of the same kind and keep the newest full-state value for each; never drop a must-not-drop event. Because every queued item is an idempotent refresh, applying only the newest of each kind leaves tray state, hotkey registrations and overlay state correct — no stale state from dropping an arbitrary oldest item.
 - **Posting:** producers check an `Arc<AtomicBool>` accepting flag, push the payload, then `PostMessageW(Some(hwnd), WM_APP, 0, 0)` and check the `Result`. On failure, log and rely on the safety timer — never spin.
 - **Safety timer (ID 1, always on):** `SetTimer(hidden_hwnd, TIMER_SAFETY_DRAIN=1, 100, None)` → `WM_TIMER` drains the queue. `WM_TIMER` is low-priority and coalesced, which is desirable for a safety net; it survives modal loops. This guarantees a payload is never silently stranded even if a `PostMessageW` wake-up is lost or rejected (queue full, 10,000-message limit).
-- **Drag polling is NOT a second `WM_TIMER`:** `WM_TIMER` is the lowest-priority message and is only generated when no higher-priority messages are pending, so a "30 ms" timer is neither 30 ms nor reliable during a drag. Instead the message loop uses `MsgWaitForMultipleObjectsEx` with a short timeout **only while a drag is armed/active** (§3.7). Idle uses `INFINITE` → zero CPU.
+- **Drag polling is NOT a second `WM_TIMER`:** `WM_TIMER` is the lowest-priority message and is only generated when no higher-priority messages are pending, so a "30 ms" timer is neither 30 ms nor reliable during a drag. Instead the message loop uses `MsgWaitForMultipleObjectsEx` with a variable timeout — 150 ms idle for gesture detection, 16 ms while active (§3.7). Idle polling is not zero CPU (~6–7 wakeups/s, negligible).
 - **WndProc:** `WM_APP` and `WM_TIMER(ID 1)` only drain the queue and dispatch to non-blocking handlers. No engine calls, no blocking I/O, no locks held across dispatch.
 - **D2 modal dialog:** `MessageBoxW` is modal but its loop dispatches window messages, so `WM_APP`/`WM_TIMER` still arrive. Use `None` (not `HWND_MESSAGE`) as the message box owner — `IsWindow(HWND_MESSAGE)` is false.
 - **HWND sharing:** `HwndSend` newtype wrapping the raw pointer (`HWND` is `!Send`/`!Sync`), with `unsafe impl Send/Sync` justified by the accepting flag and join ordering. `PostMessageW` from another thread is safe (OS marshals by HWND).
-- **Loop:** `MsgWaitForMultipleObjectsEx` with `QS_ALLINPUT` and a drag-dependent timeout (§3.7); drain queued messages with `PeekMessageW(..., PM_REMOVE)` → `TranslateMessage` → `DispatchMessageW`. Never filter `PeekMessageW` by the hidden HWND (that would hide `WM_QUIT`, whose `hwnd` is NULL) or by a range excluding `WM_APP`. Break when `WM_QUIT` is retrieved. (A plain `GetMessageW(&mut msg, None, 0, 0)` loop is the simpler alternative if drag polling is moved off-thread; §3.7 selects the `MsgWait` form for responsive, low-CPU drag.)
+- **Loop:** `MsgWaitForMultipleObjectsEx(Some(&[shutdown_event]), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE)` — the event handle is index 0, so `WAIT_OBJECT_0` means shutdown; `WAIT_OBJECT_0 + 1` means input available; `WAIT_TIMEOUT` is a poll tick (§3.7). Drain queued messages with `PeekMessageW(..., PM_REMOVE)` → `TranslateMessage` → `DispatchMessageW`. Never filter `PeekMessageW` by the hidden HWND (that would hide `WM_QUIT`, whose `hwnd` is NULL) or by a range excluding `WM_APP`. Break on `WAIT_OBJECT_0` or when `WM_QUIT` is retrieved.
 - **Teardown:** governed by §3.6 — the hidden window and its timers stay alive until every producer has been joined; `DestroyWindow` is the last native step, after which `PostQuitMessage(0)` is called on main.
 
 ### 3.5 Blocking-work isolation
@@ -131,29 +131,43 @@ The engine can block up to 8 s waiting for a launched window. All such calls run
 
 This is the **only** shutdown definition. All other sections reference it. It is driven by an idempotent `AtomicBool SHUTTING_DOWN` guard so tray Exit and API shutdown converge. Verified against Axum 0.8.9 `serve` source: `with_graceful_shutdown` stops accepting connections, then waits for **all** connection tasks via `close_tx.closed().await`; an endless SSE stream would hang that await forever, and there is **no built-in timeout**. Therefore SSE streams must be explicitly closed **before** firing graceful shutdown.
 
-**Triggers:** tray "Exit" (main thread) or `POST /api/shutdown` (Tokio thread). Both execute steps 1–2 then post `WM_STOP` to the hidden window; the rest runs on main after the message loop exits.
+**Triggers:** tray "Exit" (main thread) or `POST /api/shutdown` (Tokio thread). Both execute steps 1–3, then signal shutdown through **two independent paths** (step 4): a manual-reset event (`SetEvent`, the guaranteed path) and `WM_STOP` (best-effort, for the modal-dialog case). The rest runs on main after the message loop exits.
 
 1. **Guard + stop new work:** set `SHUTTING_DOWN = true`; set the native queue `accepting = false` (under its mutex, so an in-flight producer either completes its push before the flag flips or skips — no post-after-destroy race).
 2. **Close SSE streams:** `sse_tx.send_replace(true)` on a `tokio::sync::watch` channel each SSE handler selects on via `StreamExt::take_until`. This ends every SSE response so its connection task can finish. (Use `send_replace`, not `send`, which errors with no receivers.)
 3. **Signal Axum:** fire the `axum_shutdown` oneshot → axum stops accepting new connections and drops the listener itself, then waits for active connection tasks.
-4. **Wake native loop:** `PostMessageW(hidden_hwnd, WM_STOP, 0, 0)` (check result). The WndProc calls `PostQuitMessage(0)` **on main** — `WM_QUIT` is posted by the owning thread and is never dispatched as a normal window message. `WM_STOP` does **not** destroy any window.
-5. **Exit loop:** the `MsgWaitForMultipleObjectsEx` loop (§3.7) retrieves `WM_QUIT` via `PeekMessageW` and breaks; main leaves the loop. The hidden window and timers are still alive.
+4. **Wake native loop (two independent paths):**
+   - **Guaranteed path:** `SetEvent(shutdown_event)` on a manual-reset event created at startup (`CreateEventW(None, true, false, None)`). `SetEvent` is cross-thread, idempotent, and **not subject to the 10,000-message queue limit** — for a valid open handle it cannot fail from queue pressure. This is the primary guarantee that the native thread can leave its wait.
+   - **Best-effort path:** `PostMessageW(hidden_hwnd, WM_STOP, 0, 0)` — ignore failure (`ERROR_NOT_ENOUGH_QUOTA` when the queue is full); the event already covers the normal wait. `WM_STOP` exists for the modal-dialog case (see below). Its WndProc calls `PostQuitMessage(0)` **on main** — `WM_QUIT` is posted by the owning thread and is never dispatched as a normal window message. `WM_STOP` does **not** destroy any window.
+5. **Exit loop:** the `MsgWaitForMultipleObjectsEx` wait (§3.7) now includes the event handle in `phandles`. It breaks when either `WAIT_OBJECT_0` (event signaled, index 0) is returned or `WM_QUIT` is retrieved via `PeekMessageW`. The hidden window and timers are still alive. Because the event is manual-reset and left signaled (no `ResetEvent` for one-shot shutdown), a signal fired while the thread is busy is latched and observed on the next wait — no lost wake-up.
 6. **Join Tokio:** `server_thread.join()` — `axum::serve` returns only after all connection tasks (SSE now closed, in-flight requests drained) finish. No handler waits on main, so no deadlock.
 7. **Stop worker:** drop main's `cmd_tx` clone (all handler clones are already dropped with their finished requests); the worker drains queued commands and exits. `worker.join()` — the worker's native-update sender and SSE broadcast sender drop here, so **all producers to the native queue are now stopped**.
 8. **Final native drain:** drain any remaining payloads under the queue lock and apply them (idempotent). No producer can add more.
 9. **Kill timer:** `KillTimer(hidden, TIMER_SAFETY_DRAIN)`. Drag polling is a loop timeout, not a timer, so it stops when the loop exits at step 5. `DestroyWindow` also destroys timers, but explicit kill stops generation immediately; WndProc tolerates any already-queued `WM_TIMER`.
 10. **Destroy windows:** `DestroyWindow(overlay)` then `DestroyWindow(hidden)` — safe because every producer is joined and `accepting = false`.
 11. **Drop native objects:** let `System` (TrayIcon, Menu, GlobalHotKeyManager) drop on main — their `Drop` calls `DestroyWindow` on their own HWNDs, on the creating thread. `UnregisterClassW` is optional at process exit.
-12. **Exit:** main returns; process ends.
+12. **Close event last:** `CloseHandle(shutdown_event)` on main **only after** the wait loop has exited (step 5) and every producer holding a copy of the handle has been joined (steps 6–7). Closing while a wait is pending is undefined behavior; close exactly once. No `ResetEvent` — the event stays signaled for one-shot shutdown.
+13. **Exit:** main returns; process ends.
 
-**No circular wait:** Tokio waits only on connection tasks (which end at step 2); the worker waits only on its command channel (closed at step 7); main waits on Tokio then worker (steps 6–7) before touching any HWND (step 10). Each component terminates independently of the step that follows it.
+**Modal `MessageBoxW` (D2 dialog):** the system's modal loop dispatches posted window messages, so `WM_STOP` reaches the hidden window's WndProc and can latch a shutdown flag; a kernel event is not a message and does **not** wake the modal loop. Neither signal makes `MessageBoxW` return early — shutdown is deferred until the user dismisses the dialog, but both signals are latched (event stays signaled; flag stays set), so the request is never lost and the next wait exits immediately. Do not claim `WM_STOP` "breaks" the modal loop.
 
-### 3.7 Drag polling (responsive, low idle CPU)
+**Event sharing:** `HANDLE` is `!Send`/`!Sync` in windows-rs 0.62; share it via a `SharedEvent(HANDLE)` newtype with `unsafe impl Send/Sync` (maintainer-endorsed), justified because the event is process-wide, created by main, shared read-only, and closed by main only after joins. Producers call only `SetEvent`, never `CloseHandle`/`ResetEvent`. This does not weaken the existing HWND accepting-flag + join-before-destroy guarantees.
 
-Two distinct responsibilities, two mechanisms:
+**No circular wait:** Tokio waits only on connection tasks (which end at step 2); the worker waits only on its command channel (closed at step 7); main waits on Tokio then worker (steps 6–7) before touching any HWND (step 10) or closing the event (step 12). Each component terminates independently of the step that follows it.
 
-- **Safety drain:** always-on `WM_TIMER` ID 1 (§3.4). Low priority is fine.
-- **Drag detection / overlay updates:** the message loop calls `MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, default())`. When a drag is armed/active, `timeout = 16 ms` and a `WAIT_TIMEOUT` result calls `poll_drag_state()` (`GetAsyncKeyState(VK_CONTROL) < 0 && GetAsyncKeyState(VK_LBUTTON) < 0`, then `GetCursorPos`, then update the overlay). When idle, `timeout = INFINITE` → the thread blocks with zero CPU. Input messages wake the loop via `QS_ALLINPUT`; use `MWMO_INPUTAVAILABLE` if a drain-then-wait pattern is used. `GetAsyncKeyState` reflects state at call time (unlike `GetKeyState`); ignore its unreliable low bit. No low-level mouse hook (global, timeout-fragile) and no always-on drag timer.
+### 3.7 Gesture detection and drag polling (idle → active transition)
+
+The initial Ctrl+LeftButton press can occur over **any** application. Neither native window can see it: a message-only window receives no ordinary input, and the overlay is `WS_EX_TRANSPARENT` (mouse pass-through). A global mechanism is required. We keep `GetAsyncKeyState` — it reads global physical key state at call time, is focus-independent, and is already proven in the current app. No `WH_MOUSE_LL` hook (global, timeout-fragile, silently removable, system-wide cost, and would not remove the `GetAsyncKeyState` calls) and no raw input (device-registration overkill for two keys).
+
+**Idle → active transition (one loop, variable timeout):** the `MsgWaitForMultipleObjectsEx` wait uses a timeout that depends on drag state, and the key state is checked on **every** wake:
+
+- **Idle:** `timeout = 150 ms` (~6–7 wakeups/s). On each wake, check `gesture_down()` = `GetAsyncKeyState(VK_CONTROL) < 0 && GetAsyncKeyState(VK_LBUTTON) < 0` (test the `0x8000` high bit; ignore the unreliable low bit; `VIRTUAL_KEY` is a `u16` newtype, pass `vk.0 as i32`). If pressed → transition to active, show the overlay, update it from `GetCursorPos`.
+- **Active:** `timeout = 16 ms` (~60 Hz). On each `WAIT_TIMEOUT`, re-check the gesture; if released → hide overlay, return to idle; if still down → `GetCursorPos` + `UpdateLayeredWindow` to move the highlight.
+- **Messages:** `QS_ALLINPUT` wakes the wait immediately for the message-only window's own messages regardless of the timeout; use `MWMO_INPUTAVAILABLE` and drain with `PeekMessageW(..., PM_REMOVE)` each iteration so nothing is missed.
+
+**Honest CPU claim:** idle polling is **not zero CPU** — ~6–7 wakeups/s, roughly 0.01–0.1% of one core (negligible, and far below the current 60 Hz egui render loop). Active tracking is ~10× that but still a few percent at most. `INFINITE` is deliberately **not** used: it would give zero wakeups but could never detect the gesture start. The safety drain remains the always-on `WM_TIMER` ID 1 (§3.4); drag polling is a loop timeout, not a timer.
+
+**Known trade-off:** with polling, the initial click reaches the underlying app before the overlay appears (~150 ms worst case). This is acceptable for the described behavior (show overlay, track drag); it would only need revisiting if the initial click had to be suppressed, which would justify a hook.
 
 ---
 
@@ -309,6 +323,8 @@ A failing gate blocks the next phase.
 - [ ] API integration tests cover every §5 endpoint and D1–D6 error cases (409 dirty, disabled guards).
 - [ ] Native-loop tests: wake-up drains queue; message posted during D2 dialog is processed after it closes; safety timer drains a stranded payload; shutdown sequence joins all threads and destroys windows only after producers stop.
 - [ ] Shutdown test: SSE stream ends on `sse_tx.send_replace(true)` so `axum::serve` graceful shutdown returns (no hang); both tray Exit and `/api/shutdown` converge on §3.6.
+- [ ] Shutdown fallback test: with `PostMessageW` forced to fail (queue full / invalid handle injection), `SetEvent` alone wakes the native wait and the full §3.6 sequence completes; event closed only after joins.
+- [ ] Gesture test: start Ctrl+drag while idle with the cursor over another application — the 150 ms idle poll detects it, overlay appears, 16 ms active tracking follows, release returns to idle.
 - [ ] Browser loads from embedded assets with no Node/Bun and no separate server; closing it does not stop Rust.
 - [ ] All canvas interactions work; geometry matches `engine_core`; real drag functional test passes.
 - [ ] Three performance workloads measured and reported separately.
@@ -318,7 +334,8 @@ A failing gate blocks the next phase.
 
 ## 14. Official research sources
 
-- Microsoft Learn: message-only windows, `CreateWindowExW`, `RegisterClassW`, `PostMessageW`, `PostThreadMessageW` (modal-loop loss remark), `GetMessageW`, `PostQuitMessage`, `MessageBoxW`, `WM_QUIT`, "About Messages and Message Queues"; Raymond Chen (Old New Thing) on window vs thread messages and `HWND_MESSAGE` ownership.
+- Microsoft Learn: message-only windows, `CreateWindowExW`, `RegisterClassW`, `PostMessageW` (10,000-message queue limit), `PostThreadMessageW` (modal-loop loss remark), `GetMessageW`, `PostQuitMessage`, `MessageBoxW`, `WM_QUIT`, "About Messages and Message Queues", "About Dialog Boxes" (modal loop dispatches posted messages); `GetAsyncKeyState` (state at call time, high bit), `GetKeyState` contrast, `MsgWaitForMultipleObjectsEx` (timeout/return values), `SetTimer`/`WM_TIMER` (low priority), `WH_MOUSE_LL`/raw input (why not used); `CreateEventW`/`SetEvent`/`ResetEvent`/`CloseHandle` (manual-reset latching, cross-thread, close-after-wait); Raymond Chen (Old New Thing) on window vs thread messages and `HWND_MESSAGE` ownership.
+- windows-rs 0.62 canonical docs: `MsgWaitForMultipleObjectsEx` (4-arg Rust signature with `dwflags`, `nCount` from slice), `HANDLE` `!Send`/`!Sync` and maintainer-endorsed `Send`/`Sync` wrapper (issue #3169), `VIRTUAL_KEY` newtype, `WAIT_EVENT` constants.
 - windows-rs 0.62 docs/source: window/message APIs, `WNDCLASSW`, `WNDPROC`, `HWND` `!Send`/`!Sync`, required Cargo features.
 - `tray-icon` 0.26 / `global-hotkey` 0.10 / muda 0.21 docs + published source: thread requirements, `set_menu`, `CheckMenuItem::set_checked`, `with_id`, `set_event_handler` OnceCell behavior, `register_all` fail-fast, `Send`/`Sync`, `Drop` behavior.
 - crates.io/docs.rs: axum 0.8.9, tokio 1.54.1, rust-embed 8.14.0, open 5.4.5, getrandom 0.3.4, tokio-stream 0.1.19, tower 0.5.3, http-body-util 0.1.5.

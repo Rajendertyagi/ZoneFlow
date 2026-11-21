@@ -1,7 +1,7 @@
 # ZoneFlow — Rust + Axum + Svelte: Detailed Implementation Plan
 
 **Status:** Implementation-ready companion to the architecture plan. **No implementation is authorized by this file.**
-**Finalized:** 2026-11-22 · **Plan commit:** `fb5f8d4` (this finalization) · **Source baseline:** `5e74e85` (pre-finalization state; tests below were executed there).
+**Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (pre-finalization state; tests below were executed there).
 **Relationship:** Implements `zoneflow-rust-axum-svelte-architecture.md`, which is the **single authoritative source** for architecture decisions (thread ownership, startup/shutdown, message mechanism, API contracts, D1–D6). This document contains code-level API details, task breakdown, test classification and acceptance criteria. It must not restate architecture decisions differently — if they disagree, the architecture document wins.
 
 ---
@@ -126,6 +126,8 @@ const CLASS: PCWSTR = w!("ZoneFlow.MsgHost.7f3a9b7c");
 const WM_WAKE: u32 = WM_APP + 1;
 const WM_STOP: u32 = WM_APP + 2;
 const TIMER_SAFETY_DRAIN: usize = 1;   // always-on 100 ms queue safety net
+const IDLE_MS: u32 = 150;              // ~6-7 wakeups/s gesture detection
+const ACTIVE_MS: u32 = 16;             // ~60 Hz drag tracking
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
@@ -144,11 +146,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 - `CreateWindowExW(WINDOW_EX_STYLE(0), CLASS, w!(""), WINDOW_STYLE(0), 0,0,0,0, Some(HWND_MESSAGE), None, Some(hinstance.into()), None)`.
 - `PostMessageW(Some(hwnd), WM_WAKE, WPARAM(0), LPARAM(0))` — check `Result`; on failure log and rely on the safety timer. Queue limit is 10,000; unreachable here but checked.
 - `SetTimer(hidden_hwnd, TIMER_SAFETY_DRAIN, 100, None)` → `WM_TIMER` drains the queue as a safety net so no payload is stranded. `WM_TIMER` is low-priority/coalesced (fine for a safety net) and survives modal loops. `KillTimer` does not remove already-queued `WM_TIMER`s, so the WndProc branch is idempotent.
-- **Drag polling is not a second `WM_TIMER`:** use `MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, default())` in the message loop — `timeout = 16 ms` while a drag is active (on `WAIT_TIMEOUT`, poll `GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 && GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0` + `GetCursorPos` + update overlay), `INFINITE` when idle (zero CPU). `GetAsyncKeyState` reflects state at call time; ignore its low bit. No low-level mouse hook.
+- **Gesture detection + drag polling (idle → active):** the message-only window and pass-through overlay cannot see the initial Ctrl+click over another app, so use global `GetAsyncKeyState` (state at call time; test `0x8000` high bit; `VIRTUAL_KEY` is a `u16` newtype → `vk.0 as i32`; ignore the low bit). The `MsgWaitForMultipleObjectsEx` timeout varies: `IDLE_MS = 150` when idle, `ACTIVE_MS = 16` when a drag is active. Check `gesture_down()` on **every** wake: idle press → show overlay + switch to 16 ms; release → hide + back to 150 ms; active tick → `GetCursorPos` + `UpdateLayeredWindow`. `INFINITE` is not used (could never detect the start). Idle CPU is **not zero** — ~6–7 wakeups/s, ~0.01–0.1% of a core, negligible and far below the old 60 Hz egui loop. No `WH_MOUSE_LL` hook (fragile, system-wide, would not remove these calls) and no raw input.
+- **Shutdown event (guaranteed wake-up):** create a manual-reset event `CreateEventW(None, true, false, None)` (feature `Win32_System_Threading`). Include it as handle index 0 in `MsgWaitForMultipleObjectsEx(Some(&[event]), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE)`: `WAIT_OBJECT_0` = shutdown, `WAIT_OBJECT_0 + 1` = input, `WAIT_TIMEOUT` = poll tick. `SetEvent(event)` is cross-thread, idempotent, and not subject to the 10,000-message queue limit — the guaranteed path. `PostMessageW(WM_STOP)` remains best-effort for the modal `MessageBoxW` case (its modal loop dispatches window messages but not kernel events; neither makes the dialog return early — both signals are latched and observed after dismissal). Leave the event signaled (no `ResetEvent`); `CloseHandle` on main only after the wait loop exits and all producers are joined. Share via `SharedEvent(HANDLE)` with `unsafe impl Send/Sync` (maintainer-endorsed; `HANDLE` is `!Send`/`!Sync`).
 - `GetMessageW(&mut msg, None, 0, 0)` — never pass the hidden HWND as filter; check `-1 / 0 / > 0`. (When using the `MsgWaitForMultipleObjectsEx` loop, drain with `PeekMessageW(..., PM_REMOVE)` instead; both patterns are in architecture §3.7.)
 - `HwndSend(*mut c_void)` newtype with `unsafe impl Send/Sync`, justified by an `Arc<AtomicBool>` accepting flag and join-before-destroy ordering.
 - D2 `MessageBoxW` owner = `None` (not `HWND_MESSAGE`); its modal loop dispatches window messages so `WM_WAKE`/`WM_TIMER` still arrive.
-- **Teardown is the single ordered sequence in architecture §3.6** — do not destroy the window here. `WM_STOP` → `PostQuitMessage(0)` on main → loop exits → close SSE → fire Axum shutdown → join Tokio → drop `cmd_tx` → join worker → final drain → kill timers → `DestroyWindow(overlay)` → `DestroyWindow(hidden)` → drop `System` on main → `UnregisterClassW` (optional).
+- **Teardown is the single ordered sequence in architecture §3.6** — do not destroy the window here. `SetEvent` (guaranteed) + `PostMessageW(WM_STOP)` (best-effort) → loop exits on `WAIT_OBJECT_0` or `WM_QUIT` → close SSE → fire Axum shutdown → join Tokio → drop `cmd_tx` → join worker → final drain → kill timer → `DestroyWindow(overlay)` → `DestroyWindow(hidden)` → drop `System` on main → `CloseHandle(event)` last → `UnregisterClassW` (optional).
 
 ### 1.3 Tray and hotkeys (verified tray-icon 0.26 / global-hotkey 0.10 / muda 0.21)
 
@@ -222,8 +225,8 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 | B4 | `api/events.rs` | SSE broadcast, keep-alive, session reaper | Two subscribers receive one event; lagged subscriber skips |
 | B5 | `web/assets.rs` | rust-embed static handler, Content-Type, SPA fallback | `/` → index.html; `/assets/x.js` → JS type; missing asset 404 |
 | B6 | `session.rs` | Browser launch (`open::that_detached` via `spawn_blocking`), session lifecycle | Session created/reaped; browser close does not stop Rust (manual) |
-| B7 | `native_loop.rs` (overlay part) | Overlay layered window on main, `UpdateLayeredWindow` per-zone alpha, `MsgWaitForMultipleObjectsEx` drag poll (16 ms active / INFINITE idle) | Manual: Ctrl+drag highlight, click-through, no taskbar entry; idle CPU ~0 |
-| B8 | `main.rs`, `native_loop.rs` | Main=native thread, message window, queue, safety timer ID 1, startup/shutdown per architecture §3.6, reverse updates | Native-loop unit tests (wake-up, modal-dialog message, safety timer, shutdown ordering); manual tray/hotkey/shutdown with all threads joined |
+| B7 | `native_loop.rs` (overlay part) | Overlay layered window on main, `UpdateLayeredWindow` per-zone alpha, `GetAsyncKeyState` gesture detection with variable `MsgWaitForMultipleObjectsEx` timeout (150 ms idle → 16 ms active) | Manual: start Ctrl+drag while idle over another app, overlay appears, tracks, releases; click-through, no taskbar entry; idle CPU negligible (not zero) |
+| B8 | `main.rs`, `native_loop.rs` | Main=native thread, message window, queue, safety timer ID 1, manual-reset shutdown event, startup/shutdown per architecture §3.6, reverse updates | Native-loop unit tests (wake-up, modal-dialog message, safety timer, shutdown ordering, event fallback when PostMessageW fails); manual tray/hotkey/shutdown with all threads joined |
 | B9 | `system.rs`, `native_loop.rs` | Dynamic tray menu, applied/selected markers, D2 native dialog, hotkey re-registration | Menu rebuild after CRUD; checkmark; D2 matrix; Disable/Enable; Open editor/Settings/Exit |
 | F1 | `frontend/` scaffold | Vite/Svelte/Tailwind/shadcn config, scripts | `npm run check` clean; `npm run build` emits `dist/`; no Node needed to serve |
 | F2 | `api/client.ts`, `api/events.ts`, `state/app.svelte.ts` | Bootstrap, cookie session, SSE, mirrored state, dirty flag | Store reactivity; dirty flag; SSE reconnect; auth failure paths |
@@ -275,7 +278,7 @@ These test the **current egui app and backend**, not the new architecture. No ne
 
 ### 6.2 Planned tests (not yet written or run)
 
-- **Backend unit/integration:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop wake-up, modal-dialog message and safety-timer tests; shutdown-sequence test (SSE ends → `serve` returns → worker joins → windows destroyed after producers stop); static handler Content-Type tests.
+- **Backend unit/integration:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop wake-up, modal-dialog message and safety-timer tests; shutdown-sequence test (SSE ends → `serve` returns → worker joins → windows destroyed after producers stop); shutdown-fallback test (`PostMessageW` forced to fail → `SetEvent` alone wakes the wait and the sequence completes); gesture test (idle Ctrl+drag over another app → 150 ms detection → 16 ms tracking → release); static handler Content-Type tests.
 - **Frontend:** `svelte-check` + `tsc` clean; store reactivity and dirty flag; SSE reconnect; auth failure paths. Vitest only if justified before adding.
 - **Real editing functional test (dev-only):** browser automation (e.g. Playwright, test-only dependency) performs a real SVG zone-boundary drag, asserts the frontend interaction completes and the backend persists the geometry. This is a functional test, not the `PointerActivity` benchmark.
 - **Manual Windows journeys:** tray-only operation; hotkeys with browser closed; browser open/close lifecycle; overlay Ctrl+drag; full edit→save→apply→launch→tray→disable→enable; unsaved-change prompts including tray Discard/Cancel; rename a profile in the browser and confirm the tray updates with no other input; graceful shutdown with all threads joined.
