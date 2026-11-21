@@ -380,13 +380,14 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 
 **Design (matches architecture plan §3.2):**
 - A **dedicated native thread** creates the `System` (tray + hotkey managers) and runs the message pump: `GetMessageW` → `TranslateMessage` → `DispatchMessageW` on that same thread. If it blocks on handles, use `MsgWaitForMultipleObjectsEx`.
+- **Wake-up:** an `mpsc` send alone does not wake `GetMessageW`. The native thread owns a `Mutex<VecDeque<NativeMessage>>` payload queue; every producer enqueues the payload and then calls `PostThreadMessageW(native_thread_id, WM_APP, 0, 0)`. On `WM_APP` the loop drains the queue. The thread ID is captured with `GetCurrentThreadId()` at startup and shared as a `Send`-safe handle. The native thread never blocks on an 8 s engine call — it sends a command and returns to the loop; the result arrives via this wake-up (this is what keeps the D2 `409` confirmation responsive).
 - The **Tokio runtime runs on a separate thread** and owns axum. It never owns the tray/hotkey managers. The **command worker thread** (Task B1) owns authoritative state and runs synchronous engine calls. The main thread only starts and joins threads.
 - `System::poll()` is called from the native loop, not a Tokio timer. `Action`s go to the command worker over `mpsc`; API handlers send `Command { payload, reply: oneshot }` to the same worker.
 - **Reverse path (API → native):** after any profile CRUD/selection, hotkey edit, settings change or Disable/Enable, the worker sends a `NativeUpdate` over a second `mpsc` channel to the native thread. The native thread rebuilds the tray profile submenu, updates the applied-profile checkmark, toggles the Disable/Enable label and re-registers hotkeys. It never reads shared state directly.
 - **Shutdown:** tray "Exit" or close request posts `WM_QUIT` to the native loop and fires the axum `oneshot` shutdown signal. The main thread joins native → worker → Tokio in order; closing each channel terminates its receiver. No detached threads.
 - **Runtime choice:** benchmark `current_thread` against `rt-multi-thread` (§4) before locking the feature set. Start with `rt-multi-thread`, then measure.
 
-**Test:** full manual journey — tray-only operation, hotkeys while browser closed, graceful exit; unit tests that (a) the native loop forwards a synthetic `Action` to the command channel and (b) a `NativeUpdate` from an API command rebuilds the tray menu and re-registers hotkeys.
+**Test:** full manual journey — tray-only operation, hotkeys while browser closed, graceful exit; unit tests that (a) the native loop forwards a synthetic `Action` to the command channel, (b) a `NativeUpdate` from an API command rebuilds the tray menu and re-registers hotkeys, and (c) enqueuing a payload plus `PostThreadMessageW(WM_APP)` wakes an idle native loop and the payload is drained. Manual check: rename a profile in the browser and confirm the tray menu updates without any other Windows input.
 
 ### Task B9 — Dynamic tray menu and profile workflow
 **Files:** modify `src/system.rs` (menu construction), `src/native_loop.rs` (update handling).

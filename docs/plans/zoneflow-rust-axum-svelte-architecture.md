@@ -106,7 +106,11 @@ The authoritative application state lives in Rust, not the browser. The browser 
 4. **Reverse path (API → native) — critical:** profile create/rename/delete/select, hotkey edits, settings changes and Disable/Enable all originate as API commands. After the worker mutates state it sends a `NativeUpdate` over an `mpsc` channel **back to the native thread**, which rebuilds the tray profile submenu, updates the applied-profile checkmark, toggles the Disable/Enable label, and re-registers hotkeys. The native thread never reads shared state directly — it applies updates only from its channel. This keeps tray and hotkeys in sync with API changes without shared mutable GUI state.
 5. **Shutdown:** tray "Exit" or a close request posts `WM_QUIT` to the native loop and fires the axum `oneshot` shutdown signal. The main thread then joins native, worker and Tokio threads in that order; each channel closes so receivers terminate. No thread is left detached.
 
-This design uses only `mpsc`/`oneshot` channels and clear ownership — no elaborate event framework.
+**Native wake-up (required — an `mpsc` send does not wake `GetMessageW`):** a thread blocked in `GetMessageW` stays asleep until a Windows message arrives, so a queued `NativeUpdate` or command result would otherwise sit unprocessed until unrelated input. The native thread therefore owns a thread-safe queue (`Mutex<VecDeque<NativeMessage>>`) for the **payloads**, and every producer that enqueues a message also calls `PostThreadMessageW(native_thread_id, WM_APP, 0, 0)` as a **wake-up signal only**. On `WM_APP` the native loop drains the queue and processes each item (rebuild tray menu, re-register hotkeys, deliver a command result to its waiting `oneshot`). The native thread ID is captured at startup with `GetCurrentThreadId()` and shared with producers as a small `Send`-safe handle. Shutdown still uses `WM_QUIT`.
+
+The native thread **never blocks synchronously** on an engine operation (which can take 8 s): it sends a command to the worker and returns immediately to the message loop; the result arrives later through the queue + `WM_APP` wake-up. This is what makes the D2 `409` confirmation responsive — the native thread is free to show the dialog while the worker checks dirty state, and receives the result via the wake-up.
+
+This design uses only `mpsc`/`oneshot` channels, a small payload queue, and `PostThreadMessageW` — no elaborate event framework.
 
 ### 3.3 Tray and profile workflow (D1–D6)
 
