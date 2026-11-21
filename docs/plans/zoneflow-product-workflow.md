@@ -324,4 +324,4 @@ Currently absent from both the Rust app and the AHK original. Required by the in
 ### Remaining genuinely unresolved technical questions (not product decisions)
 1. **Same app in multiple zones within one profile** (§3b): backend returns a single HWND per exe/path — document the limitation and warn in the editor; proper multi-window matching is a deferred capability. No product decision needed — the safe behavior is defined.
 2. **Responsive breakpoints vs minimum window size** (GUI architecture §2.3): **resolved** — minimum window size lowered to 700pt so the 700–799pt breakpoint is reachable. No decision needed.
-3. **Repository default branch** (see final report): `main` is empty and default; `master` holds the project. Recommendation to make `master` default requires authorization — no change made.
+3. **Repository default branch** — **resolved (2026-11-21):** GitHub default branch changed to `master`; empty `main` left untouched per user decision. No history rewrite, force-push, or branch deletion.

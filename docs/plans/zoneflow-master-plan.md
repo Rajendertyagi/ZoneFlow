@@ -14,7 +14,7 @@ Status: data model LOCKED; UI stack LOCKED (pure eframe/egui 0.37 + glow, no HTM
 
 **Key correction:** earlier "Phases 1–7 complete" referred to the *implementation* work; the four `docs/plans/` documents are the **new source of truth for the next iteration** (product/GUI redesign + bug fixes). Multi-monitor explicitly OUT OF SCOPE. All six product decisions (D1 Apply modes, D2 unsaved changes, D3 assignment replacement, D4 Disable scope, D5 Launch/Preview, D6 rail/Home/tray switching) are **APPROVED** — no decisions pending. No implementation authorized yet.
 
-**Audit disclosure:** commit `3e02a25` was not documentation-only — it also modified six application source files (`src/editor/canvas.rs`, `inspector.rs`, `mod.rs`, `rail.rs`, `theme.rs`, `toolbar.rs`) as an authorized bug-fix bundle. The two later commits (`504b3aa`, `7ab9a36`) are documentation-only. GitHub default branch is still empty `main`; `master` holds the project. Making `master` default requires explicit authorization — no branch, history, or GitHub setting was changed by the planning work.
+**Audit disclosure:** commit `3e02a25` was not documentation-only — it also modified six application source files (`src/editor/canvas.rs`, `inspector.rs`, `mod.rs`, `rail.rs`, `theme.rs`, `toolbar.rs`) as an authorized bug-fix bundle. The two later commits (`504b3aa`, `7ab9a36`) are documentation-only. **Repository default branch resolved (2026-11-21):** GitHub default branch changed to `master`; empty `main` left untouched per user decision. No history rewrite, force-push, or branch deletion was performed.
 
 ---
 
