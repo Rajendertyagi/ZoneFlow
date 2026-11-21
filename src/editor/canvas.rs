@@ -37,10 +37,10 @@ impl Editor {
         });
 
         let avail = ui.available_size();
-        // Fill the stage: the canvas grows with the window and only the fixed
-        // lower bars (action bar) are reserved.
+        // Fill the stage: reserve space for the hint line, action bar and the
+        // fixed-height assigned-apps strip so all three stay visible.
         let w = (avail.x - 20.0).max(160.0);
-        let h = (avail.y - 48.0).max(140.0);
+        let h = (avail.y - self.cfg().settings.stage_lower_h).max(140.0);
         let (screen, response) =
             ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click_and_drag());
 
@@ -639,14 +639,36 @@ impl Editor {
                 let mut exe_text = z.exe.clone();
 
                 // Truncate cleanly if zone width is small
-                if painter.layout_no_wrap(title_text.clone(), font_title.clone(), t.ink).size().x > max_text_w {
-                    while !title_text.is_empty() && painter.layout_no_wrap(format!("{}...", title_text), font_title.clone(), t.ink).size().x > max_text_w {
+                if painter
+                    .layout_no_wrap(title_text.clone(), font_title.clone(), t.ink)
+                    .size()
+                    .x
+                    > max_text_w
+                {
+                    while !title_text.is_empty()
+                        && painter
+                            .layout_no_wrap(format!("{}...", title_text), font_title.clone(), t.ink)
+                            .size()
+                            .x
+                            > max_text_w
+                    {
                         title_text.pop();
                     }
                     title_text.push_str("...");
                 }
-                if painter.layout_no_wrap(exe_text.clone(), font_exe.clone(), tint).size().x > max_text_w {
-                    while !exe_text.is_empty() && painter.layout_no_wrap(format!("{}...", exe_text), font_exe.clone(), tint).size().x > max_text_w {
+                if painter
+                    .layout_no_wrap(exe_text.clone(), font_exe.clone(), tint)
+                    .size()
+                    .x
+                    > max_text_w
+                {
+                    while !exe_text.is_empty()
+                        && painter
+                            .layout_no_wrap(format!("{}...", exe_text), font_exe.clone(), tint)
+                            .size()
+                            .x
+                            > max_text_w
+                    {
                         exe_text.pop();
                     }
                     exe_text.push_str("...");

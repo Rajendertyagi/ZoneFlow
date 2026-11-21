@@ -952,6 +952,7 @@ impl Editor {
                 self.canvas_view(ui);
                 ui.add_space(SPACE_XS);
                 self.action_bar(ui);
+                self.apps_strip(ui);
             }
             View::Hotkeys => self.hotkeys_view(ui),
             View::Settings => self.settings_view(ui),

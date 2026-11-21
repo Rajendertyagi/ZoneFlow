@@ -4,6 +4,7 @@ use super::state::LogClass;
 use super::tokens::*;
 use super::Editor;
 use eframe::egui;
+use shadcn_egui::components::button::ButtonSize;
 use shadcn_egui::components::button::{Button, ButtonVariant};
 use shadcn_egui::components::checkbox::Checkbox;
 use shadcn_egui::components::field::Field;
@@ -12,7 +13,6 @@ use shadcn_egui::components::separator::Separator;
 use shadcn_egui::components::slider::Slider;
 use shadcn_egui::icons::lucide;
 use shadcn_egui::{layout, Theme};
-use shadcn_egui::components::button::ButtonSize;
 
 impl Editor {
     pub(super) fn toolbar(&mut self, ui: &mut egui::Ui) {

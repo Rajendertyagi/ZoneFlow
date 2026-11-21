@@ -67,7 +67,6 @@ pub(super) struct CanvasTheme {
     pub(super) r_lg: f32,
     pub(super) r_xl: f32,
     pub(super) f_small: f32,
-    pub(super) f_body: f32,
     pub(super) tints: Vec<egui::Color32>,
 }
 
@@ -115,7 +114,6 @@ impl CanvasTheme {
             r_lg: 12.0,
             r_xl: 16.0,
             f_small: 10.5,
-            f_body: 12.0,
             tints,
         }
     }

@@ -124,10 +124,7 @@ impl Editor {
                                 InspectorTab::Automation => 2,
                             };
                             if ui
-                                .add(Tabs::new(
-                                    &mut tab_idx,
-                                    &["Process", "Browser", "Macro"],
-                                ))
+                                .add(Tabs::new(&mut tab_idx, &["Process", "Browser", "Macro"]))
                                 .changed()
                             {
                                 self.inspector_tab = match tab_idx {
@@ -149,9 +146,27 @@ impl Editor {
                                                 "Executable and window matching rules.",
                                             );
                                             separator(ui);
-                                            self.text_field(ui, "Label", StrField::Label, zone.id, false);
-                                            self.text_field(ui, "Executable", StrField::Exe, zone.id, true);
-                                            self.text_field(ui, "Path", StrField::Path, zone.id, true);
+                                            self.text_field(
+                                                ui,
+                                                "Label",
+                                                StrField::Label,
+                                                zone.id,
+                                                false,
+                                            );
+                                            self.text_field(
+                                                ui,
+                                                "Executable",
+                                                StrField::Exe,
+                                                zone.id,
+                                                true,
+                                            );
+                                            self.text_field(
+                                                ui,
+                                                "Path",
+                                                StrField::Path,
+                                                zone.id,
+                                                true,
+                                            );
                                             self.launch_combo(ui, &zone);
                                         });
                                     });
@@ -160,12 +175,15 @@ impl Editor {
                                     Card::new().show(ui, |ui| {
                                         layout::vstack(ui, SPACE_12, |ui| {
                                             card_title(ui, "Browser Tab & URL");
-                                            card_description(
-                                                ui,
-                                                "Target URL and reuse strategy.",
-                                            );
+                                            card_description(ui, "Target URL and reuse strategy.");
                                             separator(ui);
-                                            self.text_field(ui, "URL", StrField::Url, zone.id, true);
+                                            self.text_field(
+                                                ui,
+                                                "URL",
+                                                StrField::Url,
+                                                zone.id,
+                                                true,
+                                            );
                                             self.text_field(
                                                 ui,
                                                 "Title match",

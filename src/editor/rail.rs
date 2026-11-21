@@ -759,10 +759,7 @@ impl Editor {
                                 },
                                 |ui| {
                                     if on {
-                                        ui.add(
-                                            Badge::new("Active")
-                                                .variant(BadgeVariant::Default),
-                                        );
+                                        ui.add(Badge::new("Active").variant(BadgeVariant::Default));
                                     } else {
                                         ui.add(
                                             Badge::new(format!("{}z", nz))
