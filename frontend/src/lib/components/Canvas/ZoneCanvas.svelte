@@ -538,7 +538,9 @@
         onZoneContextMenu={(z, event) => {
           event.preventDefault();
           contextZoneId = z.id;
-          selectedId = z.id;
+          // Do not overwrite `selectedId` here: "Merge into selected" needs the
+          // previously selected zone to remain the merge target. All other
+          // context actions operate on `contextZoneId` directly.
         }}
         onZoneDragOver={onZoneDragOver}
         onZoneDragLeave={onZoneDragLeave}
