@@ -4,7 +4,10 @@
 //! thread. HTTP handlers never touch authoritative state directly — they send a
 //! `Command` and await a oneshot reply.
 
-use super::dto::{ApplyResultDto, AssignDto, MergeDto, PreviewDto, RectDto, SplitDto, ZoneDto};
+use super::dto::{
+    ApplyResultDto, AssignDto, MergeDto, PreviewDto, RectDto, SplitDto, ZoneDto,
+    ZoneGeometryUpdateDto,
+};
 use super::state::Inner;
 use super::ApiError;
 use crate::apps::{self, AppEntry};
@@ -39,6 +42,7 @@ pub enum CommandPayload {
     ZonesList,
     ZoneCreate { zone: ZoneDto },
     ZoneUpdate { id: i32, zone: ZoneDto },
+    ZonesBatchUpdate { updates: Vec<ZoneGeometryUpdateDto> },
     ZoneDelete { id: i32 },
     ZoneSplit { id: i32, spec: SplitDto },
     ZoneMerge { spec: MergeDto },
@@ -389,6 +393,45 @@ pub fn handle(
             inner.push_history();
             Ok(serde_json::to_value(ZoneDto::from(&z))
                 .map_err(|e| ApiError::Internal(e.to_string()))?)
+        }
+        CommandPayload::ZonesBatchUpdate { updates } => {
+            {
+                let zones = &mut inner.draft.active_mut().zones;
+                // Validate every id before touching anything: a single unknown
+                // id must leave the draft completely unchanged (no partial
+                // mutation) and must not create an undo point.
+                for u in &updates {
+                    if !zones.iter().any(|z| z.id == u.id) {
+                        return Err(not_found("zone"));
+                    }
+                }
+                for u in &updates {
+                    if let Some(z) = zones.iter_mut().find(|z| z.id == u.id) {
+                        z.x = u.x;
+                        z.y = u.y;
+                        z.w = u.w;
+                        z.h = u.h;
+                    }
+                }
+            }
+            // One history entry for the entire batch, regardless of how many
+            // zones were affected. `push_history` is a no-op when nothing
+            // actually changed, matching every other mutating command.
+            inner.push_history();
+            let updated: Vec<ZoneDto> = updates
+                .iter()
+                .map(|u| {
+                    inner
+                        .draft
+                        .active()
+                        .zones
+                        .iter()
+                        .find(|z| z.id == u.id)
+                        .map(ZoneDto::from)
+                        .unwrap()
+                })
+                .collect();
+            Ok(serde_json::to_value(updated).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::ZoneDelete { id } => {
             let zones = &mut inner.draft.active_mut().zones;
@@ -1067,6 +1110,136 @@ mod tests {
         )
         .unwrap();
         assert_eq!(inner.draft.active().zones.len(), 1);
+    }
+
+    /// Seed the active profile with two adjacent zones (a vertical divider).
+    /// The seeded state becomes the undo baseline for the batch tests.
+    fn seed_two_zones(inner: &mut Inner) {
+        let zones = &mut inner.draft.active_mut().zones;
+        zones.push(Zone::new(1, "A", "a.exe", 0.0, 0.0, 50.0, 100.0));
+        zones.push(Zone::new(2, "B", "b.exe", 50.0, 0.0, 50.0, 100.0));
+        inner.push_history();
+    }
+
+    #[test]
+    fn batch_zone_update_creates_exactly_one_history_entry() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_two_zones(&mut inner);
+        let before = inner.history.len();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let v = handle(
+            CommandPayload::ZonesBatchUpdate {
+                updates: vec![
+                    ZoneGeometryUpdateDto {
+                        id: 1,
+                        x: 0.0,
+                        y: 0.0,
+                        w: 40.0,
+                        h: 100.0,
+                    },
+                    ZoneGeometryUpdateDto {
+                        id: 2,
+                        x: 40.0,
+                        y: 0.0,
+                        w: 60.0,
+                        h: 100.0,
+                    },
+                ],
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            inner.history.len(),
+            before + 1,
+            "a 2-zone divider drag must add exactly one undo point"
+        );
+        let updated: Vec<ZoneDto> = serde_json::from_value(v).unwrap();
+        assert_eq!(updated.len(), 2);
+        assert_eq!(updated[0].w, 40.0);
+        assert_eq!(updated[1].x, 40.0);
+    }
+
+    #[test]
+    fn batch_zone_update_invalid_id_returns_error_without_partial_mutation() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_two_zones(&mut inner);
+        let before = inner.history.len();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let err = handle(
+            CommandPayload::ZonesBatchUpdate {
+                updates: vec![
+                    ZoneGeometryUpdateDto {
+                        id: 1,
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: 10.0,
+                    },
+                    ZoneGeometryUpdateDto {
+                        id: 999,
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: 10.0,
+                    },
+                ],
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)));
+        let z1 = inner
+            .draft
+            .active()
+            .zones
+            .iter()
+            .find(|z| z.id == 1)
+            .unwrap();
+        assert_eq!(
+            (z1.x, z1.y, z1.w, z1.h),
+            (0.0, 0.0, 50.0, 100.0),
+            "the valid zone must not be mutated when a later id is invalid"
+        );
+        assert_eq!(inner.history.len(), before, "no undo point on error");
+    }
+
+    #[test]
+    fn undo_after_batch_restores_all_zones_atomically() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_two_zones(&mut inner);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        handle(
+            CommandPayload::ZonesBatchUpdate {
+                updates: vec![
+                    ZoneGeometryUpdateDto {
+                        id: 1,
+                        x: 0.0,
+                        y: 0.0,
+                        w: 30.0,
+                        h: 100.0,
+                    },
+                    ZoneGeometryUpdateDto {
+                        id: 2,
+                        x: 30.0,
+                        y: 0.0,
+                        w: 70.0,
+                        h: 100.0,
+                    },
+                ],
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        let zones = &inner.draft.active().zones;
+        let z1 = zones.iter().find(|z| z.id == 1).unwrap();
+        let z2 = zones.iter().find(|z| z.id == 2).unwrap();
+        assert_eq!((z1.x, z1.y, z1.w, z1.h), (0.0, 0.0, 50.0, 100.0));
+        assert_eq!((z2.x, z2.y, z2.w, z2.h), (50.0, 0.0, 50.0, 100.0));
     }
 
     #[test]

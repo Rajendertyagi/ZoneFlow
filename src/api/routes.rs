@@ -1,7 +1,7 @@
 //! All §5 HTTP endpoints. Handlers only send commands and await oneshot
 //! replies — no blocking engine work runs on the Tokio thread.
 
-use super::dto::{AssignDto, MergeDto, SettingsDto, SplitDto, ZoneDto};
+use super::dto::{AssignDto, MergeDto, SettingsDto, SplitDto, ZoneDto, ZoneGeometryUpdateDto};
 use super::worker::Command;
 use super::{events, middleware, ApiError, AppState};
 use crate::api::commands::CommandPayload;
@@ -241,6 +241,17 @@ async fn update_zone(
     }
 }
 
+/// `PUT /api/zones/batch` — apply several geometry updates as one undo step.
+async fn update_zones_batch(
+    State(state): State<AppState>,
+    Json(updates): Json<Vec<ZoneGeometryUpdateDto>>,
+) -> Response {
+    match call(&state, CommandPayload::ZonesBatchUpdate { updates }).await {
+        Ok(v) => json_response(v),
+        Err(e) => e.into_response(),
+    }
+}
+
 async fn delete_zone(State(state): State<AppState>, Path(id): Path<i32>) -> Response {
     match call(&state, CommandPayload::ZoneDelete { id }).await {
         Ok(v) => json_response(v),
@@ -429,6 +440,7 @@ pub fn build(state: AppState) -> Router {
         .route("/profiles/{name}/select", post(select_profile))
         .route("/profiles/{name}/apply", post(apply_profile))
         .route("/zones", get(list_zones).post(create_zone))
+        .route("/zones/batch", put(update_zones_batch))
         .route("/zones/{id}", put(update_zone).delete(delete_zone))
         .route("/zones/{id}/split", post(split_zone))
         .route("/zones/merge", post(merge_zones))
@@ -676,6 +688,69 @@ mod tests {
             .unwrap();
         assert_ne!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_ne!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn batch_zone_update_route_is_one_undo_step() {
+        let h = harness();
+        // Seed two adjacent zones in the active profile.
+        for (label, x) in [("A", 0.0), ("B", 50.0)] {
+            let res = h
+                .router
+                .clone()
+                .oneshot(authed(
+                    "/api/zones",
+                    &h.token,
+                    "POST",
+                    Body::from(format!(
+                        r#"{{"id":0,"label":"{label}","exe":"z.exe","path":"","x":{x},"y":0,"w":50,"h":100}}"#
+                    )),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+
+        // One PUT updates both zones. The static /zones/batch route must win
+        // over /zones/{id} (which would try to parse "batch" as an i32).
+        let res = h
+            .router
+            .clone()
+            .oneshot(authed(
+                "/api/zones/batch",
+                &h.token,
+                "PUT",
+                Body::from(
+                    r#"[{"id":1,"x":0,"y":0,"w":30,"h":100},{"id":2,"x":30,"y":0,"w":70,"h":100}]"#,
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json = body_json(res).await;
+        assert_eq!(json.as_array().unwrap().len(), 2);
+
+        // A single undo restores both zones to their pre-drag geometry.
+        let res = h
+            .router
+            .clone()
+            .oneshot(authed("/api/undo", &h.token, "POST", Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = h
+            .router
+            .clone()
+            .oneshot(authed("/api/state", &h.token, "GET", Body::empty()))
+            .await
+            .unwrap();
+        let json = body_json(res).await;
+        let zones = json["zones"].as_array().unwrap();
+        let z1 = zones.iter().find(|z| z["id"] == 1).unwrap();
+        let z2 = zones.iter().find(|z| z["id"] == 2).unwrap();
+        assert_eq!(z1["w"], 50.0);
+        assert_eq!(z2["x"], 50.0);
     }
 
     #[tokio::test]

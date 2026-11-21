@@ -281,6 +281,19 @@ pub struct StateSnapshot {
 
 /* ------------------------------ command I/O ------------------------------ */
 
+/// One geometry-only update in a `PUT /api/zones/batch` request.
+///
+/// Divider drags move two zones at once. Sending the whole batch in one request
+/// lets the command worker record a single undo point for the whole gesture.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ZoneGeometryUpdateDto {
+    pub id: i32,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
 /// Payload for `POST /api/zones/{id}/split`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SplitDto {
@@ -383,6 +396,25 @@ mod tests {
         assert_eq!(back.notes, "merged");
         assert_eq!(back.key_delay, 123);
         assert_eq!((back.x, back.y, back.w, back.h), (10.0, 20.0, 30.0, 40.0));
+    }
+
+    #[test]
+    fn zone_geometry_update_dto_round_trips() {
+        let update = ZoneGeometryUpdateDto {
+            id: 7,
+            x: 12.5,
+            y: 0.0,
+            w: 37.5,
+            h: 100.0,
+        };
+        let json = serde_json::to_value(update).unwrap();
+        assert_eq!(json["id"], 7);
+        assert_eq!(json["x"], 12.5);
+        assert_eq!(json["y"], 0.0);
+        assert_eq!(json["w"], 37.5);
+        assert_eq!(json["h"], 100.0);
+        let back: ZoneGeometryUpdateDto = serde_json::from_value(json).unwrap();
+        assert_eq!(back, update);
     }
 
     #[test]

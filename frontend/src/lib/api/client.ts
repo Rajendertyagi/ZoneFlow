@@ -143,6 +143,15 @@ export interface StateSnapshot {
   can_redo: boolean;
 }
 
+/** One geometry-only update in a batch. Mirrors `dto::ZoneGeometryUpdateDto`. */
+export interface ZoneGeometryUpdateDto {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface SplitDto {
   axis: string;
   ratio: number;
@@ -405,6 +414,9 @@ export const api = {
     apiFetch<ZoneDto>('/api/zones', { method: 'POST', body: JSON.stringify(zone) }),
   updateZone: (id: number, zone: ZoneDto) =>
     apiFetch<ZoneDto>(`/api/zones/${id}`, { method: 'PUT', body: JSON.stringify(zone) }),
+  /** Apply several geometry updates as one undo step (e.g. a divider drag). */
+  updateZonesBatch: (updates: ZoneGeometryUpdateDto[]) =>
+    apiFetch<ZoneDto[]>('/api/zones/batch', { method: 'PUT', body: JSON.stringify(updates) }),
   deleteZone: (id: number) => apiFetch<OkResult>(`/api/zones/${id}`, { method: 'DELETE' }),
   splitZone: (id: number, spec: SplitDto) =>
     apiFetch<SplitResult>(`/api/zones/${id}/split`, {

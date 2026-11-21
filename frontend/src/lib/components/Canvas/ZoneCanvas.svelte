@@ -7,7 +7,12 @@
    * committed through the typed client on `pointerup` — never per pointermove.
    */
   import ContextMenu from '$lib/components/ui/context-menu.svelte';
-  import { api, type AssignDto, type ZoneDto } from '$lib/api/client';
+  import {
+    api,
+    type AssignDto,
+    type ZoneDto,
+    type ZoneGeometryUpdateDto,
+  } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
   import { patchZoneLocal, store } from '$lib/state/app.svelte';
   import DragPreview from './DragPreview.svelte';
@@ -221,7 +226,9 @@
           await refreshState();
         }
       } else if (current.kind === 'resize' && result) {
-        let changed = false;
+        // A divider drag moves both sides. Commit every changed zone in ONE
+        // request so the backend records a single undo point for the gesture.
+        const updates: ZoneGeometryUpdateDto[] = [];
         for (const [idString, geometry] of Object.entries(result.zones)) {
           const id = Number(idString);
           const original = current.origZones.find((z) => z.id === id);
@@ -232,11 +239,17 @@
             Math.abs(geometry.w - original.w) < 0.01 &&
             Math.abs(geometry.h - original.h) < 0.01;
           if (same) continue;
-          await api.updateZone(id, { ...original, ...geometry });
-          patchZoneLocal(id, geometry);
-          changed = true;
+          updates.push({ id, x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h });
         }
-        if (changed) await refreshState();
+        if (updates.length > 0) {
+          await api.updateZonesBatch(updates);
+          // Keep the optimistic local patch so the zones don't snap back while
+          // the authoritative SSE refresh is in flight.
+          for (const u of updates) {
+            patchZoneLocal(u.id, { x: u.x, y: u.y, w: u.w, h: u.h });
+          }
+          await refreshState();
+        }
       } else if (current.kind === 'draw' && result?.draw) {
         const rect = result.draw;
         if (rect.w >= settings.min_zone_pct - 0.01 && rect.h >= settings.min_zone_pct - 0.01) {
