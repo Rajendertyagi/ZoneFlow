@@ -15,38 +15,64 @@ use shadcn_egui::layout;
 
 impl Editor {
     pub(super) fn action_bar(&mut self, ui: &mut egui::Ui) {
-        layout::row(ui, SPACE_8, |ui| {
-            ui_label(ui, "Workspace");
-            let clean = !self.dirty();
-            if ui
-                .add_enabled(
-                    !clean,
-                    Button::new("Revert")
-                        .icon(lucide::ROTATE_CCW)
-                        .variant(ButtonVariant::Ghost),
-                )
-                .clicked()
-            {
-                self.revert();
-            }
-            let save_label = if clean { "Saved" } else { "Save & Apply" };
-            if ui
-                .add(
-                    Button::new(save_label)
-                        .icon(lucide::SAVE)
-                        .variant(if clean {
-                            ButtonVariant::Secondary
-                        } else {
-                            ButtonVariant::Default
-                        }),
-                )
-                .clicked()
-            {
-                self.save_apply();
-            }
-            if ui.add(Button::new("Launch").icon(lucide::PLAY)).clicked() {
-                self.run_sequence("launch");
-            }
+        let p = *shadcn_egui::Theme::current(ui.ctx()).palette();
+        let frame = egui::Frame::new()
+            .fill(p.card)
+            .stroke(egui::Stroke::new(1.0, p.border))
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(10, 4));
+
+        frame.show(ui, |ui| {
+            layout::space_between(
+                ui,
+                |ui| {
+                    ui_label(ui, "Workspace Actions");
+                },
+                |ui| {
+                    layout::row(ui, SPACE_SM, |ui| {
+                        let clean = !self.dirty();
+                        if ui
+                            .add_enabled(
+                                !clean,
+                                Button::new("Revert")
+                                    .icon(lucide::ROTATE_CCW)
+                                    .variant(ButtonVariant::Ghost)
+                                    .size(ButtonSize::Sm),
+                            )
+                            .clicked()
+                        {
+                            self.revert();
+                        }
+                        let save_label = if clean { "Saved" } else { "Save & Apply" };
+                        if ui
+                            .add(
+                                Button::new(save_label)
+                                    .icon(lucide::SAVE)
+                                    .variant(if clean {
+                                        ButtonVariant::Secondary
+                                    } else {
+                                        ButtonVariant::Default
+                                    })
+                                    .size(ButtonSize::Sm),
+                            )
+                            .clicked()
+                        {
+                            self.save_apply();
+                        }
+                        if ui
+                            .add(
+                                Button::new("Launch")
+                                    .icon(lucide::PLAY)
+                                    .variant(ButtonVariant::Default)
+                                    .size(ButtonSize::Sm),
+                            )
+                            .clicked()
+                        {
+                            self.run_sequence("launch");
+                        }
+                    });
+                },
+            );
         });
     }
 

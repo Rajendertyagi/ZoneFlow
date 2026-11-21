@@ -36,27 +36,22 @@ pub(crate) const SPACE_20: f32 = 20.0;
  * ------------------------------------------------------------------------ */
 
 /// Default width of the left (library / profiles) panel.
-pub(crate) const PANEL_LEFT_W: f32 = 212.0;
+pub(crate) const PANEL_LEFT_W: f32 = 240.0;
 /// Minimum width of the left panel.
-pub(crate) const PANEL_LEFT_MIN_W: f32 = 170.0;
+pub(crate) const PANEL_LEFT_MIN_W: f32 = 190.0;
 /// Maximum width of the left panel.
-pub(crate) const PANEL_LEFT_MAX_W: f32 = 360.0;
+pub(crate) const PANEL_LEFT_MAX_W: f32 = 380.0;
 /// Default width of the right (inspector) panel.
-pub(crate) const PANEL_RIGHT_W: f32 = 290.0;
+pub(crate) const PANEL_RIGHT_W: f32 = 320.0;
 /// Minimum width of the right panel.
-pub(crate) const PANEL_RIGHT_MIN_W: f32 = 230.0;
+pub(crate) const PANEL_RIGHT_MIN_W: f32 = 260.0;
 /// Maximum width of the right panel.
-pub(crate) const PANEL_RIGHT_MAX_W: f32 = 440.0;
+pub(crate) const PANEL_RIGHT_MAX_W: f32 = 460.0;
 
 /* --------------------------------------------------------------------------
  * SCROLL AREA HEIGHTS
  * ------------------------------------------------------------------------ */
 
-/// Max height of the profiles list in the left panel. Also the space reserved
-/// at the bottom of the app library so the profiles panel is never pushed off.
-pub(crate) const PROFILES_H: f32 = 150.0;
-/// Minimum height of the app library scroll area.
-pub(crate) const LIB_MIN_H: f32 = 80.0;
 /// Max height of the assigned-apps strip under the canvas.
 pub(crate) const APPS_STRIP_H: f32 = 105.0;
 /// Max height of the console log in the inspector.

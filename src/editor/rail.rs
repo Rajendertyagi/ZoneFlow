@@ -1,15 +1,17 @@
 //! Side rail UI: app library, profiles and tools dock.
 
-use super::state::{AppEntry, TextDialogKind, TextDialogState, View};
+use super::state::{AppEntry, RailTab, TextDialogKind, TextDialogState, View};
 use super::tokens::*;
 use super::Editor;
 use eframe::egui;
+use shadcn_egui::components::badge::{Badge, BadgeVariant};
 use shadcn_egui::components::button::{Button, ButtonSize, ButtonVariant};
 use shadcn_egui::components::input::Input;
 use shadcn_egui::components::item::{Item, ItemSize};
 use shadcn_egui::components::label::label as ui_label;
 use shadcn_egui::components::scroll_area::ScrollArea;
 use shadcn_egui::components::separator::separator;
+use shadcn_egui::components::tabs::Tabs;
 use shadcn_egui::icons::lucide;
 use shadcn_egui::layout;
 
@@ -571,163 +573,213 @@ impl Editor {
 
     pub(super) fn left_panel(&mut self, ui: &mut egui::Ui) {
         ui.add_space(SPACE_SM);
-        ui_label(ui, "APP LIBRARY");
-        ui.add_space(SPACE_XS);
+
+        // Top Tabs Switcher: Apps vs Profiles
+        let mut tab_idx = match self.rail_tab {
+            RailTab::Apps => 0,
+            RailTab::Profiles => 1,
+        };
         if ui
-            .add(
-                Button::new("Add app to workspace")
-                    .icon(lucide::PLUS)
-                    .variant(ButtonVariant::Outline),
-            )
-            .clicked()
+            .add(Tabs::new(&mut tab_idx, &["App Library", "Profiles"]))
+            .changed()
         {
-            self.picker_open = true;
+            self.rail_tab = match tab_idx {
+                0 => RailTab::Apps,
+                _ => RailTab::Profiles,
+            };
         }
-        ui.add_space(SPACE_SM);
-        ui.add(
-            Input::new(&mut self.lib_search)
-                .hint("Search your apps...")
-                .max_width(f32::INFINITY),
-        );
 
         ui.add_space(SPACE_SM);
-        let q = self.lib_search.to_lowercase();
-        let apps = installed_apps();
-        // Reserve room at the bottom for the Profiles panel so it is never pushed off.
-        let lib_h = (ui.available_height() - PROFILES_H).max(LIB_MIN_H);
-        ScrollArea::vertical()
-            .id_salt("lib_scroll")
-            .auto_shrink([false, false])
-            .max_height(lib_h)
-            .show(ui, |ui| {
-                if apps.is_empty() {
-                    ui.label(egui::RichText::new("No apps found - use Browse...").weak());
-                }
-                for app in apps {
-                    if !app.label.to_lowercase().contains(&q)
-                        && !app.exe.to_lowercase().contains(&q)
-                    {
-                        continue;
-                    }
-                    let resp = ui.add(
-                        Item::new()
-                            .icon(lucide::APP_WINDOW)
-                            .title(app.label.as_str())
-                            .description(app.exe.as_str())
-                            .size(ItemSize::Sm)
-                            .sense(egui::Sense::click_and_drag())
-                            .id_salt(("lib_row", app.label.as_str())),
-                    );
-                    resp.dnd_set_drag_payload(app.clone());
-                    if resp.double_clicked() {
-                        self.attach_app_to_selected(
-                            app.label.clone(),
-                            app.exe.clone(),
-                            app.path.clone(),
-                        );
-                    }
-                }
-            });
 
-        // Profiles
-        ui.add_space(SPACE_SM);
-        layout::space_between(
-            ui,
-            |ui| {
-                ui_label(ui, "PROFILES");
-            },
-            |ui| {
+        // Reserve 54px for the bottom Tools dock and separator so it never collides
+        let main_h = (ui.available_height() - 56.0).max(120.0);
+
+        match self.rail_tab {
+            RailTab::Apps => {
                 if ui
                     .add(
-                        Button::new("New profile")
+                        Button::new("Add custom app...")
                             .icon(lucide::PLUS)
-                            .size(ButtonSize::Icon)
-                            .variant(ButtonVariant::Ghost),
+                            .variant(ButtonVariant::Outline),
                     )
-                    .on_hover_text("New profile")
                     .clicked()
                 {
-                    self.text_dialog = Some(TextDialogState {
-                        kind: TextDialogKind::NewProfile,
-                        value: String::new(),
-                    });
+                    self.picker_open = true;
                 }
-                if ui
-                    .add(
-                        Button::new("Duplicate profile")
-                            .icon(lucide::COPY)
-                            .size(ButtonSize::Icon)
-                            .variant(ButtonVariant::Ghost),
-                    )
-                    .on_hover_text("Duplicate profile")
-                    .clicked()
-                {
-                    self.duplicate_profile();
-                }
-                if ui
-                    .add(
-                        Button::new("Rename profile")
-                            .icon(lucide::PENCIL)
-                            .size(ButtonSize::Icon)
-                            .variant(ButtonVariant::Ghost),
-                    )
-                    .on_hover_text("Rename profile")
-                    .clicked()
-                {
-                    self.text_dialog = Some(TextDialogState {
-                        kind: TextDialogKind::RenameProfile,
-                        value: self.cfg().active_profile.clone(),
-                    });
-                }
-                if ui
-                    .add(
-                        Button::new("Delete profile")
-                            .icon(lucide::TRASH)
-                            .size(ButtonSize::Icon)
-                            .variant(ButtonVariant::Ghost),
-                    )
-                    .on_hover_text("Delete profile")
-                    .clicked()
-                {
-                    self.delete_profile();
-                }
-            },
-        );
-        ui.add_space(SPACE_XS);
-        let active = self.cfg().active_profile.clone();
-        let names: Vec<String> = self.cfg().profiles.keys().cloned().collect();
-        ScrollArea::vertical()
-            .id_salt("prof_scroll")
-            .max_height(PROFILES_H)
-            .show(ui, |ui| {
-                for name in names {
-                    let on = name == active;
-                    if ui
-                        .add(
-                            Button::new(name.as_str())
-                                .variant(if on {
-                                    ButtonVariant::Secondary
-                                } else {
-                                    ButtonVariant::Ghost
-                                })
-                                .size(ButtonSize::Sm),
-                        )
-                        .clicked()
-                    {
-                        self.cfg_mut().active_profile = name.clone();
-                        self.selected_zone =
-                            self.cfg().active().zones.first().map(|z| z.id).unwrap_or(0);
-                        self.fields_zone = -1;
-                        self.push_history();
-                    }
-                }
-            });
+                ui.add_space(SPACE_SM);
+                ui.add(
+                    Input::new(&mut self.lib_search)
+                        .hint("Search applications...")
+                        .max_width(f32::INFINITY),
+                );
 
-        // Tools dock at the bottom
+                ui.add_space(SPACE_SM);
+                let q = self.lib_search.to_lowercase();
+                let apps = installed_apps();
+                ScrollArea::vertical()
+                    .id_salt("lib_scroll")
+                    .auto_shrink([false, false])
+                    .max_height(main_h)
+                    .show(ui, |ui| {
+                        if apps.is_empty() {
+                            ui.label(egui::RichText::new("No apps found - use Browse...").weak());
+                        }
+                        for app in apps {
+                            if !app.label.to_lowercase().contains(&q)
+                                && !app.exe.to_lowercase().contains(&q)
+                            {
+                                continue;
+                            }
+                            let resp = ui.add(
+                                Item::new()
+                                    .icon(lucide::APP_WINDOW)
+                                    .title(app.label.as_str())
+                                    .description(app.exe.as_str())
+                                    .size(ItemSize::Sm)
+                                    .sense(egui::Sense::click_and_drag())
+                                    .id_salt(("lib_row", app.label.as_str())),
+                            );
+                            resp.dnd_set_drag_payload(app.clone());
+                            if resp.double_clicked() {
+                                self.attach_app_to_selected(
+                                    app.label.clone(),
+                                    app.exe.clone(),
+                                    app.path.clone(),
+                                );
+                            }
+                        }
+                    });
+            }
+            RailTab::Profiles => {
+                layout::space_between(
+                    ui,
+                    |ui| {
+                        ui_label(ui, "Workspaces");
+                    },
+                    |ui| {
+                        if ui
+                            .add(
+                                Button::new("New")
+                                    .icon(lucide::PLUS)
+                                    .size(ButtonSize::Icon)
+                                    .variant(ButtonVariant::Ghost),
+                            )
+                            .on_hover_text("New profile")
+                            .clicked()
+                        {
+                            self.text_dialog = Some(TextDialogState {
+                                kind: TextDialogKind::NewProfile,
+                                value: String::new(),
+                            });
+                        }
+                        if ui
+                            .add(
+                                Button::new("Duplicate")
+                                    .icon(lucide::COPY)
+                                    .size(ButtonSize::Icon)
+                                    .variant(ButtonVariant::Ghost),
+                            )
+                            .on_hover_text("Duplicate profile")
+                            .clicked()
+                        {
+                            self.duplicate_profile();
+                        }
+                        if ui
+                            .add(
+                                Button::new("Rename")
+                                    .icon(lucide::PENCIL)
+                                    .size(ButtonSize::Icon)
+                                    .variant(ButtonVariant::Ghost),
+                            )
+                            .on_hover_text("Rename profile")
+                            .clicked()
+                        {
+                            self.text_dialog = Some(TextDialogState {
+                                kind: TextDialogKind::RenameProfile,
+                                value: self.cfg().active_profile.clone(),
+                            });
+                        }
+                        if ui
+                            .add(
+                                Button::new("Delete")
+                                    .icon(lucide::TRASH)
+                                    .size(ButtonSize::Icon)
+                                    .variant(ButtonVariant::Ghost),
+                            )
+                            .on_hover_text("Delete profile")
+                            .clicked()
+                        {
+                            self.delete_profile();
+                        }
+                    },
+                );
+                ui.add_space(SPACE_SM);
+                let active = self.cfg().active_profile.clone();
+                let names: Vec<String> = self.cfg().profiles.keys().cloned().collect();
+                ScrollArea::vertical()
+                    .id_salt("prof_scroll")
+                    .auto_shrink([false, false])
+                    .max_height(main_h)
+                    .show(ui, |ui| {
+                        for name in names {
+                            let on = name == active;
+                            let nz = self
+                                .cfg()
+                                .profiles
+                                .get(&name)
+                                .map(|p| p.zones.len())
+                                .unwrap_or(0);
+
+                            layout::space_between(
+                                ui,
+                                |ui| {
+                                    if ui
+                                        .add(
+                                            Button::new(name.as_str())
+                                                .variant(if on {
+                                                    ButtonVariant::Secondary
+                                                } else {
+                                                    ButtonVariant::Ghost
+                                                })
+                                                .size(ButtonSize::Sm),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.cfg_mut().active_profile = name.clone();
+                                        self.selected_zone = self
+                                            .cfg()
+                                            .active()
+                                            .zones
+                                            .first()
+                                            .map(|z| z.id)
+                                            .unwrap_or(0);
+                                        self.fields_zone = -1;
+                                        self.push_history();
+                                    }
+                                },
+                                |ui| {
+                                    if on {
+                                        ui.add(
+                                            Badge::new("Active")
+                                                .variant(BadgeVariant::Default),
+                                        );
+                                    } else {
+                                        ui.add(
+                                            Badge::new(format!("{}z", nz))
+                                                .variant(BadgeVariant::Secondary),
+                                        );
+                                    }
+                                },
+                            );
+                            ui.add_space(SPACE_XS);
+                        }
+                    });
+            }
+        }
+
+        // Tools dock pinned cleanly at the bottom
         ui.add_space(SPACE_SM);
         separator(ui);
-        ui.add_space(SPACE_XS);
-        ui_label(ui, "TOOLS");
         ui.add_space(SPACE_XS);
         layout::row(ui, SPACE_SM, |ui| {
             let canvas_on = self.view == View::Canvas;

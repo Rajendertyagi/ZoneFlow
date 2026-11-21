@@ -76,6 +76,8 @@ pub struct Editor {
     exec_next: Instant,
 
     lib_search: String,
+    rail_tab: state::RailTab,
+    inspector_tab: state::InspectorTab,
     toast: Option<(String, Instant)>,
 
     /// Short-TTL cache for the "Running now" picker tab. Unlike installed apps
@@ -159,6 +161,8 @@ impl Default for Editor {
             exec_queue: VecDeque::new(),
             exec_next: Instant::now(),
             lib_search: String::new(),
+            rail_tab: state::RailTab::Apps,
+            inspector_tab: state::InspectorTab::Process,
             toast: None,
             running_apps_cache: None,
             system: None,
@@ -946,8 +950,8 @@ impl Editor {
                 self.toolbar(ui);
                 ui.add_space(SPACE_SM);
                 self.canvas_view(ui);
+                ui.add_space(SPACE_XS);
                 self.action_bar(ui);
-                self.apps_strip(ui);
             }
             View::Hotkeys => self.hotkeys_view(ui),
             View::Settings => self.settings_view(ui),

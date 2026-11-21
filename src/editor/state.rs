@@ -94,6 +94,21 @@ pub(super) type AppEntry = DragApp;
  * STATE TYPES
  * ========================================================================== */
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum InspectorTab {
+    #[default]
+    Process,
+    Browser,
+    Automation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum RailTab {
+    #[default]
+    Apps,
+    Profiles,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum View {
     Canvas,

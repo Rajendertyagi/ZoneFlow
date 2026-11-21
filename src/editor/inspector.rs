@@ -1,6 +1,6 @@
 //! Inspector panel UI (zone & automation settings).
 
-use super::state::{LogClass, StrField};
+use super::state::{InspectorTab, LogClass, StrField};
 use super::tokens::*;
 use super::Editor;
 use crate::config::{LaunchMode, TabBehavior, Zone};
@@ -16,6 +16,7 @@ use shadcn_egui::components::scroll_area::ScrollArea;
 use shadcn_egui::components::select::Select;
 use shadcn_egui::components::separator::separator;
 use shadcn_egui::components::slider::Slider;
+use shadcn_egui::components::tabs::Tabs;
 use shadcn_egui::icons::lucide;
 use shadcn_egui::{layout, Theme};
 
@@ -116,111 +117,136 @@ impl Editor {
 
                             separator(ui);
 
-                            // Section 1 - Window & process
-                            Card::new().show(ui, |ui| {
-                                layout::vstack(ui, SPACE_12, |ui| {
-                                    card_title(ui, "Window & process");
-                                    card_description(
-                                        ui,
-                                        "The executable and window matching rules.",
-                                    );
-                                    separator(ui);
-                                    self.text_field(ui, "Label", StrField::Label, zone.id, false);
-                                    self.text_field(ui, "Executable", StrField::Exe, zone.id, true);
-                                    self.text_field(ui, "Path", StrField::Path, zone.id, true);
-                                    self.launch_combo(ui, &zone);
-                                });
-                            });
+                            // Section Tabs: Process | Browser | Macro
+                            let mut tab_idx = match self.inspector_tab {
+                                InspectorTab::Process => 0,
+                                InspectorTab::Browser => 1,
+                                InspectorTab::Automation => 2,
+                            };
+                            if ui
+                                .add(Tabs::new(
+                                    &mut tab_idx,
+                                    &["Process", "Browser", "Macro"],
+                                ))
+                                .changed()
+                            {
+                                self.inspector_tab = match tab_idx {
+                                    0 => InspectorTab::Process,
+                                    1 => InspectorTab::Browser,
+                                    _ => InspectorTab::Automation,
+                                };
+                            }
 
-                            // Section 2 - Browser tab & URL
-                            Card::new().show(ui, |ui| {
-                                layout::vstack(ui, SPACE_12, |ui| {
-                                    card_title(ui, "Browser tab & URL");
-                                    card_description(
-                                        ui,
-                                        "Open a URL and control how its tab is reused.",
-                                    );
-                                    separator(ui);
-                                    self.text_field(ui, "URL", StrField::Url, zone.id, true);
-                                    self.text_field(
-                                        ui,
-                                        "Title match",
-                                        StrField::Title,
-                                        zone.id,
-                                        false,
-                                    );
-                                    self.tab_combo(ui, &zone);
-                                });
-                            });
+                            ui.add_space(SPACE_SM);
 
-                            // Section 3 - Keystroke macro
-                            Card::new().show(ui, |ui| {
-                                layout::vstack(ui, SPACE_12, |ui| {
-                                    card_title(ui, "Keystroke macro");
-                                    card_description(
-                                        ui,
-                                        "Send keys when a matching window appears.",
-                                    );
-                                    separator(ui);
-                                    let mut on = zone.macro_enabled;
-                                    Field::new().horizontal().label("Enable macro").show(
-                                        ui,
-                                        |ui| {
-                                            if ui.add(Checkbox::new(&mut on)).changed() {
-                                                if let Some(z) = self
-                                                    .cfg_mut()
-                                                    .active_mut()
-                                                    .zones
-                                                    .iter_mut()
-                                                    .find(|z| z.id == zone.id)
-                                                {
-                                                    z.macro_enabled = on;
-                                                }
-                                                self.push_history();
-                                            }
-                                        },
-                                    );
-                                    self.text_field(
-                                        ui,
-                                        "Trigger title",
-                                        StrField::Trigger,
-                                        zone.id,
-                                        false,
-                                    );
-                                    self.text_field(
-                                        ui,
-                                        "Keys / PIN",
-                                        StrField::Macro,
-                                        zone.id,
-                                        true,
-                                    );
-                                    Field::new().title("Delay (ms)").show(ui, |ui| {
-                                        if ui
-                                            .add(
-                                                Slider::new(
-                                                    &mut self.edit_bufs.delay,
-                                                    10.0..=1000.0,
-                                                )
-                                                .step(10.0)
-                                                .label("Delay"),
-                                            )
-                                            .changed()
-                                        {
-                                            let d = self.edit_bufs.delay as u32;
-                                            if let Some(z) = self
-                                                .cfg_mut()
-                                                .active_mut()
-                                                .zones
-                                                .iter_mut()
-                                                .find(|z| z.id == zone.id)
-                                            {
-                                                z.key_delay = d;
-                                            }
-                                            self.push_history();
-                                        }
+                            match self.inspector_tab {
+                                InspectorTab::Process => {
+                                    Card::new().show(ui, |ui| {
+                                        layout::vstack(ui, SPACE_12, |ui| {
+                                            card_title(ui, "Window & Process");
+                                            card_description(
+                                                ui,
+                                                "Executable and window matching rules.",
+                                            );
+                                            separator(ui);
+                                            self.text_field(ui, "Label", StrField::Label, zone.id, false);
+                                            self.text_field(ui, "Executable", StrField::Exe, zone.id, true);
+                                            self.text_field(ui, "Path", StrField::Path, zone.id, true);
+                                            self.launch_combo(ui, &zone);
+                                        });
                                     });
-                                });
-                            });
+                                }
+                                InspectorTab::Browser => {
+                                    Card::new().show(ui, |ui| {
+                                        layout::vstack(ui, SPACE_12, |ui| {
+                                            card_title(ui, "Browser Tab & URL");
+                                            card_description(
+                                                ui,
+                                                "Target URL and reuse strategy.",
+                                            );
+                                            separator(ui);
+                                            self.text_field(ui, "URL", StrField::Url, zone.id, true);
+                                            self.text_field(
+                                                ui,
+                                                "Title match",
+                                                StrField::Title,
+                                                zone.id,
+                                                false,
+                                            );
+                                            self.tab_combo(ui, &zone);
+                                        });
+                                    });
+                                }
+                                InspectorTab::Automation => {
+                                    Card::new().show(ui, |ui| {
+                                        layout::vstack(ui, SPACE_12, |ui| {
+                                            card_title(ui, "Keystroke Macro");
+                                            card_description(
+                                                ui,
+                                                "Send keys when a matching window appears.",
+                                            );
+                                            separator(ui);
+                                            let mut on = zone.macro_enabled;
+                                            Field::new().horizontal().label("Enable macro").show(
+                                                ui,
+                                                |ui| {
+                                                    if ui.add(Checkbox::new(&mut on)).changed() {
+                                                        if let Some(z) = self
+                                                            .cfg_mut()
+                                                            .active_mut()
+                                                            .zones
+                                                            .iter_mut()
+                                                            .find(|z| z.id == zone.id)
+                                                        {
+                                                            z.macro_enabled = on;
+                                                        }
+                                                        self.push_history();
+                                                    }
+                                                },
+                                            );
+                                            self.text_field(
+                                                ui,
+                                                "Trigger title",
+                                                StrField::Trigger,
+                                                zone.id,
+                                                false,
+                                            );
+                                            self.text_field(
+                                                ui,
+                                                "Keys / PIN",
+                                                StrField::Macro,
+                                                zone.id,
+                                                true,
+                                            );
+                                            Field::new().title("Delay (ms)").show(ui, |ui| {
+                                                if ui
+                                                    .add(
+                                                        Slider::new(
+                                                            &mut self.edit_bufs.delay,
+                                                            10.0..=1000.0,
+                                                        )
+                                                        .step(10.0)
+                                                        .label("Delay"),
+                                                    )
+                                                    .changed()
+                                                {
+                                                    let d = self.edit_bufs.delay as u32;
+                                                    if let Some(z) = self
+                                                        .cfg_mut()
+                                                        .active_mut()
+                                                        .zones
+                                                        .iter_mut()
+                                                        .find(|z| z.id == zone.id)
+                                                    {
+                                                        z.key_delay = d;
+                                                    }
+                                                    self.push_history();
+                                                }
+                                            });
+                                        });
+                                    });
+                                }
+                            }
 
                             // Console
                             Card::new().show(ui, |ui| {

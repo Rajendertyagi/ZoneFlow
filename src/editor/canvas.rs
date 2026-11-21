@@ -29,7 +29,6 @@ impl Editor {
 
     pub(super) fn canvas_view(&mut self, ui: &mut egui::Ui) {
         let taskbar_h = self.cfg().settings.taskbar_h;
-        let stage_lower_h = self.cfg().settings.stage_lower_h;
         let profile = self.cfg().active_profile.clone();
         let nz = self.cfg().active().zones.len();
         layout::row(ui, SPACE_8, |ui| {
@@ -39,29 +38,31 @@ impl Editor {
 
         let avail = ui.available_size();
         // Fill the stage: the canvas grows with the window and only the fixed
-        // lower bars (hint, action bar, apps strip) are reserved. Zone rects are
-        // normalised percentages, so the screen aspect ratio is not significant.
+        // lower bars (action bar) are reserved.
         let w = (avail.x - 20.0).max(160.0);
-        let h = (avail.y - stage_lower_h).max(140.0);
+        let h = (avail.y - 48.0).max(140.0);
         let (screen, response) =
             ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click_and_drag());
+
+        // Draw modern monitor shell background & border
+        let p = *shadcn_egui::Theme::current(ui.ctx()).palette();
+        let painter = ui.painter();
+        painter.rect_filled(screen, 12.0, p.card);
+        painter.rect_stroke(
+            screen,
+            12.0,
+            egui::Stroke::new(1.5, p.border),
+            egui::StrokeKind::Inside,
+        );
+
         // Zones live above the taskbar strip; pointer math uses the same rect.
         let zone_area = egui::Rect::from_min_max(
-            screen.min,
-            egui::pos2(screen.max.x, screen.max.y - taskbar_h),
+            screen.min + egui::vec2(6.0, 6.0),
+            egui::pos2(screen.max.x - 6.0, screen.max.y - taskbar_h - 4.0),
         );
 
         self.canvas_interact(ui, zone_area, &response);
         self.canvas_paint(ui, screen, zone_area, &response);
-
-        let tip = if self.merge_mode {
-            "Merge mode - click a target zone to merge into it. Esc cancels"
-        } else if self.draw_active {
-            "Draw mode - drag on the grid to create a zone. Toggle Draw off to resize dividers"
-        } else {
-            "Drag a divider to resize - Drag a zone to swap - Right-click a zone for options - Drag an app from the left to attach"
-        };
-        ui_label(ui, tip);
     }
 
     fn canvas_interact(
@@ -552,9 +553,9 @@ impl Editor {
             let fill = if is_drop {
                 t.accent_bg
             } else if sel {
-                mix_color(t.raised, tint, 0.10)
+                mix_color(t.raised, tint, 0.15)
             } else {
-                t.surface2
+                t.raised
             };
             painter.rect_filled(r, t.r_lg, fill);
             let stroke_col = if is_drop || is_merge_src {
@@ -564,14 +565,14 @@ impl Editor {
             } else if sel {
                 tint
             } else {
-                t.line
+                t.line2
             };
             painter.rect_stroke(
                 r,
                 t.r_lg,
                 egui::Stroke::new(
                     if sel || is_drop || is_merge_src {
-                        2.0
+                        2.5
                     } else {
                         1.0
                     },
@@ -584,18 +585,33 @@ impl Editor {
             painter.rect_filled(bar, 3.0, tint);
 
             if z.exe.is_empty() {
-                // Blank zone: "Choose an app"
+                // Blank zone: modern drop target styling with plus
+                let center = r.center();
+                let circle_r = 16.0;
+                painter.circle_filled(center - egui::vec2(0.0, 8.0), circle_r, t.bg);
+                painter.circle_stroke(
+                    center - egui::vec2(0.0, 8.0),
+                    circle_r,
+                    egui::Stroke::new(1.0, t.line),
+                );
                 painter.text(
-                    r.center(),
+                    center - egui::vec2(0.0, 9.0),
                     egui::Align2::CENTER_CENTER,
-                    "+\nChoose an app",
-                    egui::FontId::proportional(t.f_body),
+                    "+",
+                    egui::FontId::proportional(18.0),
+                    if is_merge_tgt { t.accent2 } else { t.muted },
+                );
+                painter.text(
+                    center + egui::vec2(0.0, 16.0),
+                    egui::Align2::CENTER_CENTER,
+                    "Drop app or click to assign",
+                    egui::FontId::proportional(11.0),
                     if is_merge_tgt { t.accent2 } else { t.muted },
                 );
             } else {
-                let pad = 9.0;
+                let pad = 12.0;
                 let mut cy = r.min.y + pad;
-                let badge_size = 18.0;
+                let badge_size = 20.0;
                 let badge = egui::Rect::from_min_size(
                     egui::pos2(r.min.x + pad, cy),
                     egui::vec2(badge_size, badge_size),
@@ -611,26 +627,47 @@ impl Editor {
                     badge.center(),
                     egui::Align2::CENTER_CENTER,
                     z.id.to_string(),
-                    egui::FontId::proportional(10.0),
+                    egui::FontId::proportional(10.5),
                     if sel { t.bg } else { tint },
                 );
-                let tx = badge.max.x + 7.0;
+                let tx = badge.max.x + 8.0;
+                let font_title = egui::FontId::proportional(12.5);
+                let font_exe = egui::FontId::proportional(10.5);
+
+                let max_text_w = (r.max.x - pad - tx).max(10.0);
+                let mut title_text = z.label.clone();
+                let mut exe_text = z.exe.clone();
+
+                // Truncate cleanly if zone width is small
+                if painter.layout_no_wrap(title_text.clone(), font_title.clone(), t.ink).size().x > max_text_w {
+                    while !title_text.is_empty() && painter.layout_no_wrap(format!("{}...", title_text), font_title.clone(), t.ink).size().x > max_text_w {
+                        title_text.pop();
+                    }
+                    title_text.push_str("...");
+                }
+                if painter.layout_no_wrap(exe_text.clone(), font_exe.clone(), tint).size().x > max_text_w {
+                    while !exe_text.is_empty() && painter.layout_no_wrap(format!("{}...", exe_text), font_exe.clone(), tint).size().x > max_text_w {
+                        exe_text.pop();
+                    }
+                    exe_text.push_str("...");
+                }
+
                 painter.text(
                     egui::pos2(tx, cy + 1.0),
                     egui::Align2::LEFT_TOP,
-                    &z.label,
-                    egui::FontId::proportional(11.5),
+                    title_text,
+                    font_title,
                     t.ink,
                 );
-                cy += 15.0;
+                cy += 16.0;
                 painter.text(
                     egui::pos2(tx, cy + 1.0),
                     egui::Align2::LEFT_TOP,
-                    &z.exe,
-                    egui::FontId::proportional(10.0),
+                    exe_text,
+                    font_exe,
                     tint,
                 );
-                cy += 16.0;
+                cy += 18.0;
                 let pill = egui::Rect::from_min_size(
                     egui::pos2(r.min.x + pad, cy),
                     egui::vec2(46.0, 15.0),
@@ -657,9 +694,9 @@ impl Editor {
                         t.accent,
                     );
                 }
-                // Footer: % and px - 8px extra bottom padding keeps text clear of edges.
-                let fy = r.max.y - pad - 19.0;
-                if fy > cy + 16.0 {
+                // Footer: % and px - only rendered if zone height has ample clearance
+                let fy = r.max.y - pad - 16.0;
+                if fy > cy + 22.0 && r.height() >= 90.0 {
                     painter.line_segment(
                         [
                             egui::pos2(r.min.x + pad, fy - 4.0),
@@ -819,10 +856,10 @@ impl Editor {
 
         // Taskbar strip - sits below the zone area, never overlapping zone footers.
         let tb = egui::Rect::from_min_max(
-            egui::pos2(screen.min.x, screen.max.y - taskbar_h),
-            screen.max,
+            egui::pos2(screen.min.x + 6.0, screen.max.y - taskbar_h - 4.0),
+            egui::pos2(screen.max.x - 6.0, screen.max.y - 4.0),
         );
-        painter.rect_filled(tb, 0.0, t.bg);
+        painter.rect_filled(tb, 4.0, t.bg);
         painter.line_segment(
             [
                 egui::pos2(tb.min.x, tb.min.y),
