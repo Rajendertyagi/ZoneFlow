@@ -53,17 +53,6 @@ pub struct System {
 }
 
 impl System {
-    /// Constructs the system, loading hotkey bindings from the on-disk config.
-    ///
-    /// Kept with the original zero-argument signature for call-site compatibility
-    /// (`editor.rs::with_system`). Use [`System::with_config`] when a config is
-    /// already in memory.
-    #[allow(dead_code)] // compatibility constructor for the retained egui editor
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let cfg = crate::config::load_config();
-        Self::with_config(&cfg)
-    }
-
     /// Constructs the tray icon and hotkey manager, registering hotkeys from
     /// `cfg.hotkeys` (§2c). Tray creation is fatal; individual hotkey failures
     /// are logged and recorded in [`System::failures`] but never abort startup.
@@ -362,18 +351,9 @@ fn normalize_binding(binding: &str) -> String {
     out
 }
 
-/// Display-change debounce in milliseconds, sourced from config (§2.2).
-///
-/// The editor reads `cfg.settings.display_debounce_ms` directly for its
-/// work-area polling loop; this helper is kept as a convenience accessor.
-#[allow(dead_code)]
-pub fn display_debounce_ms(cfg: &AppConfig) -> u64 {
-    cfg.settings.display_debounce_ms
-}
-
 /// Tray icon brand colours. These are the fixed app-icon identity (a raster
 /// asset), not UI theme colours, so they are intentionally not sourced from the
-/// shadcn palette or config. Named constants keep the literals out of the
+/// web UI palette or config. Named constants keep the literals out of the
 /// drawing loop.
 const TRAY_BORDER_RGB: (u8, u8, u8) = (120, 180, 240);
 const TRAY_FILL_RGB: (u8, u8, u8) = (31, 78, 121);

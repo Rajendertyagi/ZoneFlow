@@ -1,7 +1,7 @@
 [package]
 name = "screenlayout"
 version = "0.1.0"
-description = "Lightweight Windows window-tiling studio (egui + glow), AHK replacement"
+description = "Lightweight Windows window-tiling studio (headless Rust + Axum + Svelte), AHK replacement"
 license = "MIT"
 authors = ["RTPC"]
 rust-version = "1.85"
@@ -9,9 +9,6 @@ rust-version = "1.85"
 edition = "2021"
 
 [dependencies]
-eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11"] }
-egui = "0.37"
-shadcn-egui = { version = "0.8", features = ["font-jetbrains-mono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.18"

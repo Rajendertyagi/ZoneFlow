@@ -1,50 +1,64 @@
 # ZoneFlow Studio (Rust)
 
-A lightweight Windows window-tiling and automation studio — a pure-Rust replacement for the original AutoHotkey script. It ships as a **single ~10 MB `.exe`** with no runtime to install: the UI is built with **eframe/egui 0.37 + the glow renderer**, so no HTML, CSS, JavaScript, or webview is bundled or shipped. The design references live in [`docs/design/`](docs/design/) (`design-mockup.html`, `design-v2.html`, `design-v3.html`); they are never loaded by the app.
+A lightweight Windows window-tiling and automation studio — a pure-Rust replacement for the original AutoHotkey script. It ships as a **single ~3.65 MB `.exe`** with no runtime to install: a **headless Rust background process** (Axum HTTP API on loopback) with an **on-demand Svelte 5 editor** served from embedded assets. There is no Electron, Tauri, WebView or embedded browser in the installed app — the browser opens only when you ask for the editor, and closing it never stops Rust. The design references live in [`docs/design/`](docs/design/) (`design-mockup.html`, `design-v2.html`, `design-v3.html`); they are never loaded by the app.
 
-> **Architecture direction (2026-11-21):** the shipped app described above is the current, working egui build. The approved next direction is a **headless Rust + Axum background process with an on-demand Svelte editor** served from embedded assets — see [`docs/plans/zoneflow-rust-axum-svelte-architecture.md`](docs/plans/zoneflow-rust-axum-svelte-architecture.md). No source or dependency changes have been made for it yet; egui remains the shipped UI until the migration is implemented. Measured figures in this README (~10 MB, ~49 MB private RAM, 30 tests) are stale — see [`docs/performance/results.md`](docs/performance/results.md) for current measurements (14.21 MiB exe, ~59–62 MiB private, 43 tests).
+> **Architecture (implemented, 2026-11-22):** the headless Rust + Axum + Svelte direction described in [`docs/plans/zoneflow-rust-axum-svelte-architecture.md`](docs/plans/zoneflow-rust-axum-svelte-architecture.md) is now the shipped implementation (Phases 1–6 complete). The former egui/eframe UI and overlay were removed in Phase 6. Measured figures and test counts in this README are the actual Phase 6 values; see [`docs/performance/results.md`](docs/performance/results.md) for the measurement record.
 
 Your original AHK files are untouched at `E:\Apps\Hotkeys\ScreenLayout.ahk` (and `E:\Apps\Hotkeys\ScreenLayoutGUI\`). Stop the AHK script before running ZoneFlow — it grabs the same global hotkeys. Hotkey registration fails gracefully (and logs a warning) if a binding is already taken.
 
 ## Features
 
+- **Always-on background process** — tray, global hotkeys, window management and a loopback HTTP server run with no GUI toolkit resident. Measured background footprint: **~2 MiB private / ~12 MiB working set**, 0.00–0.10% CPU.
+- **On-demand browser editor** — a Svelte 5 single-page app (SVG canvas, shadcn-svelte, Tailwind 4) served from assets embedded in the `.exe`. Open it from the tray; closing the browser leaves Rust running.
 - **Three-pane studio** — app library + profiles rail, zone canvas, and zone/automation inspector.
 - **Profiles & zones** — named workspaces, each containing zones stored as percentages of the work area. One app per zone.
 - **Layout wizard (`＋ Layout`)** — start from a template (Duo / Debug / 3 Columns / Focus / Empty), a custom grid, a single-zone preset, or draw zones on a grid.
 - **Draw mode** — drag directly on the canvas to paint new zones, with optional 25/50/75 snap guides.
-- **App picker** — assign apps from Start Menu shortcuts, registry Uninstall keys, currently running apps, or an exact `.exe` via **Browse**. Drag an app onto a zone to attach it.
-- **Drag-to-snap overlay** — `Ctrl`+drag any window title bar to show translucent zone overlays; release to snap into a zone.
+- **App picker** — assign apps from Start Menu shortcuts, registry Uninstall keys, currently running apps, or an exact `.exe` via **Browse** (native picker, Rust-side). Drag an app onto a zone to attach it.
+- **Drag-to-snap overlay** — `Ctrl`+drag any window title bar to show translucent zone overlays; release to snap into a zone. The overlay is a native layered window owned by the main thread.
 - **Global hotkeys** — 17 keyboard bindings plus the `Ctrl`+drag mouse gesture (see table below). All bindings are stored in config and editable in the Hotkeys view.
 - **Undo/redo** — `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) over zone and profile edits, with a configurable undo depth.
-- **Tray menu** — Settings / Re-tile / Reload / Exit, plus close-to-tray with a "remember my choice" option.
+- **Tray menu** — dynamic profile list with applied/selected markers, Disable/Enable, Open editor, Settings, Re-tile, Reload and Exit.
 - **Autostart** — optional launch at Windows login, plus optional auto-launch-and-snap of bound apps on startup.
 - **Config persistence** — versioned JSON config (schema v1) with empty-by-default starter profiles and automatic migration of older configs.
 
 ## Build
 
-Requires a current **stable** Rust toolchain, pinned by `rust-toolchain.toml` (`channel = "stable"`, with `rustfmt` and `clippy`). egui 0.37 needs a recent stable release.
+Requires a current **stable** Rust toolchain, pinned by `rust-toolchain.toml` (`channel = "stable"`, with `rustfmt` and `clippy`). The frontend is built with **Bun** (build-time only — no Node/Bun is needed to run the app).
 
 ```powershell
+# Frontend (build-time only) — emits frontend/dist/, embedded by rust-embed
+cd frontend
+bun install
+bun run build
+cd ..
+
+# Rust release binary
 cargo build --release
 ```
 
-The executable is produced at `target\release\screenlayout.exe` (roughly **10 MB**; about **49 MB** private RAM at runtime with the glow renderer). The release profile uses `opt-level = 2`, `lto = true`, and `strip = true`.
+The executable is produced at `target\release\screenlayout.exe` (**3,827,200 bytes / 3.65 MiB** in the measured Phase 6 build). The release profile uses `opt-level = 2`, `lto = true`, and `strip = true`. The crate stays on **edition 2021** deliberately: edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default, which breaks the Win32 `extern "system"` callbacks in `engine.rs` and `native_loop.rs`.
 
 For development checks:
 
 ```powershell
 cargo fmt --check
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 cargo test
+cargo build --release
+# frontend
+cd frontend; bun run check; bun test; bun run build
 ```
 
 ## Run
 
-Double-click `target\release\screenlayout.exe`. It opens the studio window; right-click the tray icon for Settings / Re-tile / Reload / Exit. Closing the window offers Minimize to tray / Exit / Cancel (with "remember my choice").
+Double-click `target\release\screenlayout.exe`. **No window opens** — the app lives in the system tray. Right-click the tray icon to **Open editor…** (launches the browser editor), open Settings, Re-tile, Reload config, Disable/Enable layout, or Exit. Closing the browser editor does not stop Rust; use the tray Exit or `POST /api/shutdown` to quit.
+
+The editor URL carries a per-launch 256-bit token in its fragment; the SPA exchanges it for an `HttpOnly; SameSite=Strict` session cookie and then clears the fragment. The HTTP server binds only `127.0.0.1` on an ephemeral port.
 
 ## Config & logs
 
-- **`ScreenLayout.json`** — created next to the `.exe` on first run. Plain JSON, schema version **1**; back it up freely. New installs start with three empty starter profiles (Website / Coding / Trading) and no hardcoded apps, URLs, or titles. Older v0 configs are migrated forward without losing profiles or zones; an unreadable file is renamed to `ScreenLayout.json.bad` rather than wiped.
+- **`ScreenLayout.json`** — created next to the `.exe` on first run. Plain JSON, schema version **1**; back it up freely. New installs start with three empty starter profiles (Website / Coding / Trading) and no hardcoded apps, URLs, or titles. Older v0 configs are migrated forward without losing profiles or zones; an unreadable file is renamed to `ScreenLayout.json.bad` rather than wiped. The on-disk schema is unchanged by the migration — the config round-trip integration tests verify no data loss.
 - **`zoneflow.log`** — written next to the `.exe`. Log level is controlled by the `RUST_LOG` environment variable (default `info`), e.g. `RUST_LOG=debug screenlayout.exe`.
 
 ## Hotkeys
@@ -64,44 +78,55 @@ These defaults mirror the original AHK script and can be changed in the Hotkeys 
 | `Ctrl+Alt+R` | Reload script/config |
 | `Ctrl` + drag window title bar | Drag-to-snap with zone overlays |
 
-That is **17 keyboard bindings** (9 + 1 + 4 + 2 + 1) plus **1 mouse gesture**. `Win+Up` / `Win+Down` may be reserved by Windows and fail to register; all other bindings work. `Ctrl`+drag is a low-level mouse gesture detected in the frame loop, not a global shortcut.
+That is **17 keyboard bindings** (9 + 1 + 4 + 2 + 1) plus **1 mouse gesture**. `Win+Up` / `Win+Down` may be reserved by Windows and fail to register; all other bindings work. `Ctrl`+drag is detected globally with `GetAsyncKeyState` (150 ms idle poll → 16 ms active tracking), not as a global shortcut.
 
 ## Adding apps
 
-1. Click **`＋ Layout`** to create a profile and choose a starting layout (or pick an existing profile).
+1. Open the editor from the tray and click **`＋ Layout`** to create a profile and choose a starting layout (or pick an existing profile).
 2. Click an empty zone (or use the app picker) to **Choose an app**. The picker lists installed apps (Start Menu + registry), running apps, and a **Browse** tab for an exact `.exe` path.
 3. **Drag an app** from the library onto a zone to attach it, or use Browse to pick the precise executable when a shortcut name is ambiguous.
 4. Edit the zone in the inspector (launch mode, URL/tab rules, macro, geometry), then **Save & Apply**.
 
 ## Architecture
 
-The crate is a binary (`src/main.rs`, no `src/lib.rs`). Modules:
+The crate is a binary (`src/main.rs`, no `src/lib.rs`). It runs **three long-lived threads**:
 
-- **Domain model** — a *Profile* is a named workspace containing *Zones*; each zone is a percentage rectangle with **one app binding** (plus launch mode, URL/tab rules, and macro fields). There is no separate apps list — a zone *is* an app's place on screen. Geometry presets rearrange zones while preserving their bindings.
+1. **Main / native** — owns the tray, global hotkeys, the hidden message-only window and the layered drag overlay; runs the `MsgWaitForMultipleObjectsEx` message loop (150 ms idle gesture poll → 16 ms active tracking).
+2. **Command worker** — authoritative state, history and synchronous engine calls; receives commands over an mpsc channel and broadcasts SSE events.
+3. **Tokio (current_thread)** — Axum HTTP API (`/api/*`, SSE `/api/events`) and embedded static assets on `127.0.0.1:0`.
+
+Modules:
+
 - **`src/config.rs`** — versioned JSON schema (`schema_version` v1), `#[serde(default)]` on all structs, v0 → v1 migration, atomic writes, and the `Settings` struct holding every tunable. Hotkey defaults live in `default_hotkeys()`.
 - **`src/engine_core.rs`** — pure zone math: boundary detection, 25/50/75 snapping, percent↔pixel helpers. No Win32 calls; unit-tested in isolation.
-- **Win32 engine** — `src/engine.rs` (window enumeration, snapping, DWM, execute/retile/restore), `src/system.rs` (global hotkeys, tray, actions), `src/overlay.rs` (drag-to-snap overlay), and `src/autostart.rs` (login autostart).
-- **`src/editor/`** — the egui UI, split into focused modules: `mod.rs` (the `Editor` and frame loop), `state.rs` (view/state types), `canvas.rs` (hand-painted zone canvas), `rail.rs` (profiles + app library), `inspector.rs` (zone/automation inspector), `views.rs` (Hotkeys / Settings views), `toolbar.rs`, `top_bar.rs`, `action_bar.rs`, `dialogs.rs` (wizard, picker, help, confirmations), `history.rs` (undo/redo), `theme.rs`, and `tokens.rs` (layout/color tokens).
+- **`src/engine.rs`** — Win32 window enumeration, snapping, DWM, execute/retile/restore.
+- **`src/system.rs`** — dynamic tray menu, global hotkeys, actions and the D2 native confirmation dialog.
+- **`src/native_loop.rs`** — native message loop, payload queue, safety timer, manual-reset shutdown event, ordered shutdown sequence and the layered drag overlay.
+- **`src/api/`** — HTTP router, middleware (token/session/Host guard), DTOs, SSE events, authoritative state and the command worker.
+- **`src/web/`** — `rust-embed` static asset handler with SPA fallback.
+- **`src/session.rs`** — per-launch token, session registry, reaper and browser launch.
+- **`src/apps.rs`** — pure-Rust runtime app discovery for `/api/apps` and `/api/apps/browse`.
+- **`src/autostart.rs`** — login autostart.
+- **`frontend/`** — Svelte 5 SPA (Vite 8, Tailwind 4, shadcn-svelte, Bits UI, Paneforge, Lucide icons). Built to `frontend/dist/` at build time and embedded into the `.exe`; no separate server and no Node/Bun at runtime.
 
 All tunables live in the `Settings` struct in `src/config.rs` — never as literals in code. Key ones: `snap_points`, `grid_cols` / `grid_rows`, `min_zone_pct`, `resize_step_pct`, `boundary_tolerance_pct`, `undo_depth`, `display_debounce_ms`, `overlay_inactive_alpha` / `overlay_active_alpha`, `dwm_snap_retries`, `min_window_px`, `zone_tints`, `auto_launch_on_startup`, `resolutions`, `app_list_cap`, `running_apps_ttl_secs`, `taskbar_h`, and `stage_lower_h`. Add new configurables there.
 
-The **glow** renderer is intentional (`default-features = false, features = ["glow", ...]` in `Cargo.toml`); wgpu was rejected because it used ~323 MB RAM versus ~49 MB with glow. The crate stays on **edition 2021** deliberately: edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default, which breaks the Win32 `extern "system"` callbacks in `engine.rs`.
-
 ## Testing
 
-**30 tests** pass: **27 inline** `#[cfg(test)]` tests (9 in `config.rs`, 15 in `engine_core.rs`, 1 in `engine.rs`, 2 in `system.rs`) plus **3 integration** tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale.
+**128 Rust tests pass** — 125 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, session, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale. The **frontend adds 36 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
 
 ```powershell
 cargo test
+cd frontend; bun test
 ```
 
 ## Known limitations
 
 - **Primary monitor only** — the work area is the primary display's work area.
+- **Browser-on-demand UX** — the editor opens in the default browser rather than a native window; the tray is the primary interface.
 - The **running-apps** list is a ~2-second cached snapshot (`running_apps_ttl_secs`), not live.
 - Installed-app `.lnk` targets are **guessed from shortcut names**; use the Browse tab for an exact executable path.
-- The **Launch** button is a console simulation; real execution is driven by the global hotkeys.
-- **Icons are Unicode-free** — the UI uses Lucide icons via `shadcn-egui::icons::lucide` (no Unicode glyphs or bundled SVGs).
+- **Same-executable multi-window** limitation remains documented; no multi-window claim.
 - **Display changes** are handled by polling the work area every `display_debounce_ms` (default 200 ms) and re-tiling on change — no Win32 message hook.
 - **Path-based window matching** is supported: when a zone has a `path`, an exact full-path match is preferred with an exe-name fallback (`find_window_by_path_min`).
-- Installer/signing, release-tag artifact attachment, and i18n label centralization are not yet done.
+- Installer/signing, release-tag artifact attachment, and i18n label centralization are not yet done (Phase 7).

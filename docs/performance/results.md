@@ -1,7 +1,9 @@
 # ZoneFlow — Performance results (three-workload model)
 
-**Status:** measurement record for the Rust + Axum + Svelte architecture evaluation.
-**Method:** `docs/performance/benchmark.ps1` (new three-workload harness) and the
+**Status:** measurement record for the Rust + Axum + Svelte architecture. Phase 6
+(2026-11-22) measured the **Background** workload on the final egui-free release
+binary; the two browser-dependent workloads remain **NOT MEASURED** (reasons below).
+**Method:** `docs/performance/benchmark.ps1` (three-workload harness) and the
 historical `docs/performance/baseline.ps1` (egui baseline). All figures measured
 on the same machine; raw values are recorded, not targets.
 
@@ -37,33 +39,60 @@ is **not** the memory consumption of the complete application.
 |---|---|---|---|---|---|
 | Current egui app (GUI resident, `1976f67`) | 109.4 / 58.8 MiB | 111.8 / 61.6 MiB | 111.4 / 61.3 MiB | 0.26–0.47% | 14,901,248 B (14.21 MiB) |
 | Headless Rust + Axum spike | 12.5 / 2.1 MiB | 10.9 / 2.0 MiB | 10.9 / 2.0 MiB | 0.05–0.42% | 1,490,432 B (1.42 MiB) |
+| **Final implementation (Phase 6, egui removed)** | **12.0 / 2.0 MiB** | **11.9 / 2.0 MiB** | **11.9 / 2.0 MiB** | **0.00–0.10%** | **3,827,200 B (3.65 MiB)** |
 
 The spike contains the real backend modules (`config`, `engine_core`, `engine`,
 `system`, `autostart`), tray, global hotkeys, an axum server on an ephemeral
 loopback port, and a 50 ms poll loop. It was verified live: tray/hotkeys
 initialised without error and HTTP responded. It has **no GUI toolkit**.
 
+The **final implementation** row is the actual Phase 6 measurement of the shipped
+binary (`target\release\screenlayout.exe`, SHA-256
+`D11618346125C83382268449EC55EB09900D62758BBBAFE49831D65A2722B43E`), taken with
+`docs/performance/benchmark.ps1 -Mode Background -Exe target\release\screenlayout.exe`
+run three consecutive times. It is the complete always-on process: command
+worker, Tokio/Axum server, dynamic tray, global hotkeys, native message loop and
+the layered drag overlay — with the egui/eframe/shadcn-egui dependencies and code
+removed. Range: **11.9–12.0 MiB working set, 2.0 MiB private, 0.00–0.10% CPU**.
+
 Interpretation: removing the resident GUI cuts the always-on process from
-~60 MiB private to ~2 MiB private. This is the architectural motivation for the
-new direction. It is a floor measurement, not the final application.
+~60 MiB private to ~2 MiB private and the executable from 14.21 MiB to 3.65 MiB.
+This is the always-on process only — **not** the memory of the complete
+application with the browser editor open (Workload 2, not measured).
 
 ### Workload 2 — Editor open
 
-**Not yet measured.** The Svelte frontend does not exist yet. The harness is
-ready (`-Mode EditorOpen -Url <tokenised-url>`); record results here when the
-frontend is built. Measure the Rust process and the browser process tree
-separately — summing them into one figure hides the trade-off.
+**NOT MEASURED (Phase 6).** The Svelte frontend and the `-Mode EditorOpen` harness
+both exist, but a faithful measurement was not feasible in this environment:
+
+1. The per-launch session token is **not written to the log** (only the bound
+   port is), so the tokenised editor URL cannot be reconstructed from
+   `zoneflow.log`. The URL is held only in process memory and passed to the
+   command worker.
+2. The tray **"Open editor…"** action could not be driven reliably from the
+   benchmark harness: the native `muda` popup menu is not exposed through UI
+   Automation, and synthetic keystroke navigation did not fire the action.
+3. **33 pre-existing Microsoft Edge processes** (long-running user sessions)
+   were present. `benchmark.ps1` attributes browser cost only to **new** PIDs
+   created by the run; opening a URL reuses the existing Edge instance, so
+   browser WS/private/CPU would be reported as 0 — a misleading figure. Closing
+   those sessions to get clean attribution is out of scope for this task.
+
+No numbers are claimed for this workload. To measure it later: log the editor
+URL (or expose it via a dev-only hook), close all browser windows first, then run
+`benchmark.ps1 -Mode EditorOpen -Url <tokenised-url>` ≥3 times and record the Rust
+process and browser process tree **separately**.
 
 ### Workload 3 — Pointer activity (not editing)
 
-**Not yet measured.** Requires the frontend. The harness mode is
-`-Mode PointerActivity`; it moves the cursor randomly for 20 s and reports
-`Pointer*` fields sampled **after** the movement. It does **not** drag or resize
-a zone, so it measures cursor-driven repaint cost only. Browser processes are
-attributed only to PIDs created by the run — close all browser windows first, or
-the script warns that attribution may be incomplete. The historical egui
+**NOT MEASURED (Phase 6).** Same blockers as Workload 2: no way to obtain the
+tokenised URL, no reliable automated tray action, and 33 pre-existing Edge
+processes that defeat the harness's new-PID-only browser attribution. The harness
+mode (`-Mode PointerActivity`) moves the cursor randomly for 20 s and reports
+`Pointer*` fields sampled **after** the movement; it does **not** drag or resize
+a zone, so it would measure cursor-driven repaint cost only. The historical egui
 active-CPU figures (1.01–46.14%) were noisy under synthetic cursor input and are
-**not** comparable to a real SVG-canvas editing workload.
+**not** comparable to a real SVG-canvas editing workload. No numbers are claimed.
 
 **Real editing verification (separate functional test, not a benchmark):** a
 dev-only browser automation script (e.g. Playwright, test-only dependency) should

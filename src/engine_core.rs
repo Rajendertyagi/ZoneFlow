@@ -9,9 +9,9 @@
 //! polling) are Win32-specific and stay in `engine.rs`, which calls into these
 //! helpers where useful. Do not move Win32 calls into this module.
 //!
-//! Several helpers are library-style APIs intended for the editor/UI layer
-//! (currently being rebuilt by another agent), so they are not all called from
-//! the binary yet. Allow dead_code here rather than dropping tested logic.
+//! Several helpers are library-style APIs intended for the UI/API layer, so
+//! they are not all called from the binary yet. Allow dead_code here rather
+//! than dropping tested logic.
 
 #![allow(dead_code)]
 

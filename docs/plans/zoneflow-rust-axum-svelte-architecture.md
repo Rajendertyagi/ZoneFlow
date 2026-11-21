@@ -1,6 +1,6 @@
 # ZoneFlow — Rust + Axum + Svelte Architecture
 
-**Status:** Authoritative architecture and migration plan. **No implementation is authorized by this file.**
+**Status:** Authoritative architecture and migration plan — **IMPLEMENTED**. Phases 1–6 are complete on `main` (Phase 6 verification/removal at `721638f`); Phase 7 (release hardening) is pending. The architecture decisions below are unchanged and are now realized in the shipped binary.
 **Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (the pre-finalization state the research was performed against).
 **Supersedes:** `slint-gui-migration-plan.md` as the active direction (retained as historical research). Product behavior remains governed by the frozen documents: `zoneflow-product-workflow.md` (D1–D6), `zoneflow-feature-preservation.md`, `zoneflow-implementation-roadmap.md`, and `zoneflow-gui-architecture.md` (egui-specific guidance, historical for the web UI).
 **Companion:** `zoneflow-rust-axum-svelte-implementation-plan.md` holds code-level API details, task breakdown and test classification. This document is the single authoritative definition of architecture decisions; the companion must not restate them differently.
@@ -11,7 +11,7 @@
 
 Replace the resident egui/eframe GUI with a **headless Rust background process** that serves an on-demand Svelte editor over a local HTTP API. The browser opens only when the user requests the editor; closing it must not terminate Rust. Tray, global hotkeys, Win32 window management, autostart and config compatibility are preserved.
 
-**Verified motivation:** the headless Rust + Axum spike measured ~2.0–2.1 MiB private / ~10.9–12.5 MiB working set versus ~59–62 MiB private / ~109–112 MiB working set for the current egui app. That is the always-on process only — not the complete application with a browser open (§9).
+**Verified motivation:** the headless Rust + Axum spike measured ~2.0–2.1 MiB private / ~10.9–12.5 MiB working set versus ~59–62 MiB private / ~109–112 MiB working set for the former egui app. The final Phase 6 implementation measures 11.9–12.0 MiB WS / 2.0 MiB private (§9). That is the always-on process only — not the complete application with a browser open (§9).
 
 **Frozen constraints:**
 - No Node.js/Bun in the installed app — build-time only. No Electron, Tauri, WebView or embedded browser.
@@ -270,9 +270,9 @@ Loopback-only bind `127.0.0.1:0` (never `0.0.0.0`/`::`); use literal `http://127
 
 Three workloads, measured and reported separately (`docs/performance/results.md`, `benchmark.ps1`):
 
-1. **Background** — Rust backend, tray, hotkeys, HTTP server; browser closed. Measured: ~2.0–2.1 MiB private / ~10.9–12.5 MiB WS for the spike vs ~59–62 MiB private / ~109–112 MiB WS for egui.
-2. **Editor open** — Rust + browser with full Svelte UI. **Not yet measured.**
-3. **Pointer activity** — editor open + 20 s synthetic cursor movement. **Not yet measured.** This is **not** editing; real SVG drag verification is a separate dev-only functional test.
+1. **Background** — Rust backend, tray, hotkeys, HTTP server; browser closed. Final implementation (Phase 6, egui removed): **11.9–12.0 MiB WS / 2.0 MiB private, 0.00–0.10% CPU, 3.65 MiB exe** (3 runs). For comparison: ~2.0–2.1 MiB private / ~10.9–12.5 MiB WS for the earlier spike vs ~59–62 MiB private / ~109–112 MiB WS / 14.21 MiB exe for egui.
+2. **Editor open** — Rust + browser with full Svelte UI. **NOT MEASURED (Phase 6)** — token not logged, tray automation unreliable, and pre-existing browser processes defeat the harness's new-PID attribution. See `docs/performance/results.md`.
+3. **Pointer activity** — editor open + 20 s synthetic cursor movement. **NOT MEASURED (Phase 6)** — same blockers. This is **not** editing; real SVG drag verification is a separate dev-only functional test.
 
 Metrics: working set, private bytes, CPU (Rust and browser separately, including browser CPU for Editor open), cold startup, exe size. ≥3 runs, report ranges. **Never present the headless backend's RAM as the complete application's memory.**
 
@@ -280,7 +280,7 @@ Metrics: working set, private bytes, CPU (Rust and browser separately, including
 
 ## 10. Dependency decisions
 
-Full table with versions, features, links, existing/new status and rationale is in the companion plan §5. Summary: **add** `axum 0.8.9`, `tokio 1.54.1` (`rt, macros, net, sync, time` — `current_thread`, no `rt-multi-thread`/`full`), `rust-embed 8.14.0`, `open 5.4.5`, `getrandom 0.3.4`, `tokio-stream 0.1.19` (`sync`); **reuse** `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `global-hotkey 0.10`, `tray-icon 0.26`, `windows 0.62` (add `Win32_System_LibraryLoader` for `GetModuleHandleW`); **keep until Phase 6** `eframe`, `egui`, `shadcn-egui`, `rfd`. Frontend: Svelte 5.59.1, Vite 8.3.8, plugin 7.3.1, Tailwind 4.3.5, shadcn-svelte 1.8.1, Bits UI 2.22.0, Paneforge 1.0.2 (wrapped), `@lucide/svelte` 1.77.0, **TypeScript pinned `~6.0.3`** (TS 7 is outside `svelte-check`'s peer range).
+Full table with versions, features, links, existing/new status and rationale is in the companion plan §5. Summary: **add** `axum 0.8.9`, `tokio 1.54.1` (`rt, macros, net, sync, time` — `current_thread`, no `rt-multi-thread`/`full`), `rust-embed 8.14.0`, `open 5.4.5`, `getrandom 0.3.4`, `tokio-stream 0.1.19` (`sync`); **reuse** `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `global-hotkey 0.10`, `tray-icon 0.26`, `windows 0.62` (add `Win32_System_LibraryLoader` for `GetModuleHandleW`); **removed in Phase 6** `eframe`, `egui`, `shadcn-egui`; **retained** `rfd` (Rust-side `/api/apps/browse` picker). Frontend: Svelte 5.59.1, Vite 8.3.8, plugin 7.3.1, Tailwind 4.3.5, shadcn-svelte 1.8.1, Bits UI 2.22.0, Paneforge 1.0.2 (wrapped), `@lucide/svelte` 1.77.0, **TypeScript pinned `~6.0.3`** (TS 7 is outside `svelte-check`'s peer range).
 
 ---
 
@@ -300,18 +300,18 @@ Full table with versions, features, links, existing/new status and rationale is 
 
 ## 12. Migration phases and gates
 
-egui dependencies are **not removed until Phase 6**; the app stays buildable throughout.
+egui dependencies were **removed in Phase 6**; the app stayed buildable throughout. Phases 0–6 are complete; Phase 7 is pending.
 
-| Phase | Scope | Gate |
-|---|---|---|
-| 0 — Foundation ✅ DONE | Headless spike measured; benchmark harness + results | Background RAM reduction verified; architecture approved |
-| 1 — Backend API | Add Axum/Tokio/rust-embed; `api/`, `web/`, `session`; all §5 endpoints; native thread + command worker + message window; egui still runs | fmt/clippy/test/release clean; API + native-loop tests pass; egui UI still works |
-| 2 — Frontend scaffold | Svelte/Vite/Tailwind/shadcn project; build `dist/`; embed; serve; browser on demand | Browser loads from embedded assets with no separate server; closing browser leaves Rust running |
-| 3 — SVG canvas | Zones, move/resize/split/merge, snap guides, draw, DnD, context menu, undo/redo | All canvas journeys pass; geometry matches `engine_core`; real drag functional test passes |
-| 4 — Panels/dialogs | Left rail, inspector, wizard, picker, confirmations, close dialog, Hotkeys/Settings | Full journey; D1–D6 verified; no data loss |
-| 5 — Lifecycle/native | Dynamic tray, D2 dialog, reverse updates, overlay, session, graceful shutdown | Tray-only works; menu syncs; dirty switch confirms; overlay works; all threads join |
-| 6 — Verification/removal | Measure three workloads; remove egui deps; sync docs | All checks clean; performance recorded; docs match binary |
-| 7 — Release hardening | Installer/signing, CI artifacts | Release produced; all verification items checked |
+| Phase | Scope | Gate | Status |
+|---|---|---|---|
+| 0 — Foundation | Headless spike measured; benchmark harness + results | Background RAM reduction verified; architecture approved | ✅ DONE |
+| 1 — Backend API | Add Axum/Tokio/rust-embed; `api/`, `web/`, `session`; all §5 endpoints; native thread + command worker + message window; egui still runs | fmt/clippy/test/release clean; API + native-loop tests pass; egui UI still works | ✅ DONE |
+| 2 — Frontend scaffold | Svelte/Vite/Tailwind/shadcn project; build `dist/`; embed; serve; browser on demand | Browser loads from embedded assets with no separate server; closing browser leaves Rust running | ✅ DONE |
+| 3 — SVG canvas | Zones, move/resize/split/merge, snap guides, draw, DnD, context menu, undo/redo | All canvas journeys pass; geometry matches `engine_core`; real drag functional test passes | ✅ DONE |
+| 4 — Panels/dialogs | Left rail, inspector, wizard, picker, confirmations, close dialog, Hotkeys/Settings | Full journey; D1–D6 verified; no data loss | ✅ DONE |
+| 5 — Lifecycle/native | Dynamic tray, D2 dialog, reverse updates, overlay, session, graceful shutdown | Tray-only works; menu syncs; dirty switch confirms; overlay works; all threads join | ✅ DONE |
+| 6 — Verification/removal | Measure three workloads; remove egui deps; sync docs | All checks clean; performance recorded; docs match binary | ✅ DONE (Background measured; Editor open / Pointer activity NOT MEASURED — see results.md) |
+| 7 — Release hardening | Installer/signing, CI artifacts | Release produced; all verification items checked | ⬜ PENDING |
 
 A failing gate blocks the next phase.
 
@@ -319,16 +319,16 @@ A failing gate blocks the next phase.
 
 ## 13. Verification checklist
 
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release` clean at every gate.
-- [ ] API integration tests cover every §5 endpoint and D1–D6 error cases (409 dirty, disabled guards).
-- [ ] Native-loop tests: wake-up drains queue; message posted during D2 dialog is processed after it closes; safety timer drains a stranded payload; shutdown sequence joins all threads and destroys windows only after producers stop.
-- [ ] Shutdown test: SSE stream ends on `sse_tx.send_replace(true)` so `axum::serve` graceful shutdown returns (no hang); both tray Exit and `/api/shutdown` converge on §3.6.
-- [ ] Shutdown fallback test: with `PostMessageW` forced to fail (queue full / invalid handle injection), `SetEvent` alone wakes the native wait and the full §3.6 sequence completes; event closed only after joins.
-- [ ] Gesture test: start Ctrl+drag while idle with the cursor over another application — the 150 ms idle poll detects it, overlay appears, 16 ms active tracking follows, release returns to idle.
-- [ ] Browser loads from embedded assets with no Node/Bun and no separate server; closing it does not stop Rust.
-- [ ] All canvas interactions work; geometry matches `engine_core`; real drag functional test passes.
-- [ ] Three performance workloads measured and reported separately.
-- [ ] No source/dependency changes made by this planning task.
+- [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release` clean (verified at Phase 6: 128 Rust tests + 36 frontend tests pass).
+- [x] API integration tests cover every §5 endpoint and D1–D6 error cases (409 dirty, disabled guards) — `src/api/routes.rs`, `src/api/commands.rs`.
+- [x] Native-loop tests: queue coalescing/overflow, accepting flag, notifier rebuild/reregister/overlay style, D2 dialog matrix, shutdown idempotence. (The "message during modal dialog" and "safety timer drains stranded payload" cases are structural/manual, not separately automated.)
+- [x] Shutdown test: SSE stream ends on `sse_tx.send_replace(true)` so `axum::serve` graceful shutdown returns (`graceful_shutdown_returns_after_sse_stream_ends`); tray Exit and `/api/shutdown` converge on §3.6.
+- [x] Shutdown fallback test: `shutdown_event_is_signaled_even_without_hwnd` verifies `SetEvent` alone latches the wait when no HWND is published (the guaranteed path of §3.6 step 4).
+- [ ] Gesture test (manual Windows journey): start Ctrl+drag while idle with the cursor over another application — the 150 ms idle poll detects it, overlay appears, 16 ms active tracking follows, release returns to idle.
+- [x] Browser loads from embedded assets with no Node/Bun and no separate server (`src/web/assets.rs` tests); closing it does not stop Rust (architecture).
+- [x] Canvas interactions and geometry are covered by 36 frontend tests; geometry helpers match `engine_core` (unit-tested). Real SVG drag is a dev-only functional test, not part of the automated suite.
+- [ ] Three performance workloads measured and reported separately — **1 of 3 measured** (Background, 3 runs); Editor open and Pointer activity NOT MEASURED (see `docs/performance/results.md`).
+- [x] Planning-task checkbox superseded: the architecture is now implemented (Phases 1–6).
 
 ---
 

@@ -2,8 +2,7 @@
 //!
 //! The library is never persisted: it is enumerated from Start Menu shortcuts,
 //! registry Uninstall keys and `tasklist`. This is a pure Rust module (no UI
-//! dependency) so the command worker can call it directly. The legacy egui
-//! `editor::rail` keeps its own copy until Phase 6 removes that frontend.
+//! dependency) so the command worker can call it directly for `/api/apps`.
 
 use std::collections::HashMap;
 

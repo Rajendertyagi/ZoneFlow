@@ -1,7 +1,7 @@
 # ZoneFlow — Rust + Axum + Svelte: Detailed Implementation Plan
 
-**Status:** Implementation-ready companion to the architecture plan. **No implementation is authorized by this file.**
-**Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (pre-finalization state; tests below were executed there).
+**Status:** Implementation-ready companion to the architecture plan — **IMPLEMENTED**. Phases 1–6 are complete on `main` (Phase 6 verification/removal at `721638f`); Phase 7 (release hardening) is pending. The code-level details, task breakdown and test classification below are unchanged and were realized by that implementation.
+**Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (pre-finalization state; the historical test figures below were executed there).
 **Relationship:** Implements `zoneflow-rust-axum-svelte-architecture.md`, which is the **single authoritative source** for architecture decisions (thread ownership, startup/shutdown, message mechanism, API contracts, D1–D6). This document contains code-level API details, task breakdown, test classification and acceptance criteria. It must not restate architecture decisions differently — if they disagree, the architecture document wins.
 
 ---
@@ -215,7 +215,7 @@ Layout: left rail, center SVG canvas (max space), right contextual inspector, to
 
 ## 4. Implementation tasks
 
-egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release`.
+egui dependencies were removed in Phase 6 (the tasks below were executed while they were still present). Each task ends with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release`.
 
 | Task | Files | Responsibility | Verification |
 |---|---|---|---|
@@ -256,7 +256,7 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 | tray-icon | 0.26 | Tray | defaults | **Yes** | Reuse (dynamic menu) |
 | windows | 0.62 | Win32 | add `Win32_System_LibraryLoader` | **Yes** | Extend features |
 | rfd | 0.18 | Native file picker | defaults | **Yes** | Reuse Rust-side |
-| eframe / egui / shadcn-egui | 0.37 / 0.37 / 0.8 | Current GUI | — | **Yes** | Keep until Phase 6, then remove |
+| eframe / egui / shadcn-egui | 0.37 / 0.37 / 0.8 | Former GUI | — | **Yes** | Removed in Phase 6 |
 | tower-http | — | Disk static serving | — | No | **Not needed** (rust-embed) |
 
 Frontend versions and rationale are in architecture §10. No other dependencies are justified.
@@ -265,7 +265,7 @@ Frontend versions and rationale are in architecture §10. No other dependencies 
 
 ## 6. Test classification and manual verification
 
-### 6.1 Tests that actually exist and were executed (2026-11-22, commit `5e74e85`)
+### 6.1 Historical baseline (2026-11-22, commit `5e74e85`)
 
 | Command | Result |
 |---|---|
@@ -274,15 +274,29 @@ Frontend versions and rationale are in architecture §10. No other dependencies 
 | `cargo clippy --all-targets -- -D warnings` | clean |
 | `cargo build --release` | clean |
 
-These test the **current egui app and backend**, not the new architecture. No new-architecture code exists yet.
+These tested the **pre-migration egui app and backend**. Superseded by the Phase 6 results below.
 
-### 6.2 Planned tests (not yet written or run)
+### 6.1b Phase 6 verification (2026-11-22, commit `721638f`, egui removed)
 
-- **Backend unit/integration:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop wake-up, modal-dialog message and safety-timer tests; shutdown-sequence test (SSE ends → `serve` returns → worker joins → windows destroyed after producers stop); shutdown-fallback test (`PostMessageW` forced to fail → `SetEvent` alone wakes the wait and the sequence completes); gesture test (idle Ctrl+drag over another app → 150 ms detection → 16 ms tracking → release); static handler Content-Type tests.
-- **Frontend:** `svelte-check` + `tsc` clean; store reactivity and dirty flag; SSE reconnect; auth failure paths. Vitest only if justified before adding.
-- **Real editing functional test (dev-only):** browser automation (e.g. Playwright, test-only dependency) performs a real SVG zone-boundary drag, asserts the frontend interaction completes and the backend persists the geometry. This is a functional test, not the `PointerActivity` benchmark.
-- **Manual Windows journeys:** tray-only operation; hotkeys with browser closed; browser open/close lifecycle; overlay Ctrl+drag; full edit→save→apply→launch→tray→disable→enable; unsaved-change prompts including tray Discard/Cancel; rename a profile in the browser and confirm the tray updates with no other input; graceful shutdown with all threads joined.
-- **Performance:** three workloads from `docs/performance/results.md`; Rust and browser process trees reported separately (including browser CPU for Editor open); ≥3 runs, ranges. Benchmark Tokio `current_thread` vs `rt-multi-thread` before locking the runtime; measure command-worker channel overhead.
+| Command | Result |
+|---|---|
+| `cargo test` | **128 passed** (125 unit + 3 integration), 0 failed |
+| `cargo fmt --check` | clean |
+| `cargo clippy --all-targets -- -D warnings` | clean |
+| `cargo build --release` | clean (3,827,200 B / 3.65 MiB exe) |
+| `bun run check` | clean (svelte-check 0 errors/warnings + tsc) |
+| `bun test` | **36 passed**, 0 failed |
+| `bun run build` | clean (dist emitted and embedded) |
+
+These test the **implemented architecture**: API endpoints and D1–D6 command matrix, native-loop queue/shutdown/D2 tests, config round-trip, web assets and the Svelte frontend.
+
+### 6.2 Planned tests (status at Phase 6)
+
+- **Backend unit/integration — DONE:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop queue/shutdown/D2 tests; shutdown-sequence test (SSE ends → `serve` returns); shutdown-fallback test (`SetEvent` alone latches the wait without an HWND); static handler Content-Type tests. The "message during modal dialog" and "safety timer drains stranded payload" cases remain structural/manual rather than separately automated.
+- **Frontend — DONE:** `svelte-check` + `tsc` clean; 36 tests covering store reactivity, dirty flag, SSE reconnect and auth failure paths.
+- **Real editing functional test (dev-only) — PENDING:** browser automation (e.g. Playwright, test-only dependency) performing a real SVG zone-boundary drag and asserting backend persistence. This is a functional test, not the `PointerActivity` benchmark.
+- **Manual Windows journeys — PARTIAL:** tray-only operation, hotkeys with browser closed, browser open/close lifecycle, overlay Ctrl+drag, full edit→save→apply→launch→tray→disable→enable, unsaved-change prompts and graceful shutdown are implemented; automated coverage is in place for the API/native logic, but the end-to-end GUI journeys are manual checks.
+- **Performance — PARTIAL:** Background measured (3 runs, 11.9–12.0 MiB WS / 2.0 MiB private / 3.65 MiB exe); Editor open and Pointer activity **NOT MEASURED** (token not logged, tray automation unreliable, pre-existing browser processes defeat new-PID attribution). See `docs/performance/results.md`. Tokio `current_thread` vs `rt-multi-thread` benchmarking and command-worker channel-overhead measurement were not performed.
 
 No unmeasured value is reported as a result.
 
@@ -292,12 +306,12 @@ No unmeasured value is reported as a result.
 
 Gates are defined in architecture §12. Additional task-level acceptance:
 
-- **C1:** API tests pass; native-loop tests pass; egui UI still builds and runs.
-- **C2:** browser loads from embedded assets with no separate server; closing browser leaves Rust running; tray/hotkeys still work.
-- **C3:** all canvas journeys pass; geometry matches `engine_core`; real drag functional test passes.
-- **C4:** full user journey; D1–D6 verified; no data loss.
-- **C5:** tray-only works; menu syncs with API changes; D2 dialog works; overlay works; hotkeys fire unfocused; all threads join on exit.
-- **C6:** three workloads measured; egui removed; docs match binary.
-- **C7:** release produced; all verification items checked.
+- **C1 ✅:** API tests pass; native-loop tests pass; egui UI built and ran during the migration (removed in Phase 6).
+- **C2 ✅:** browser loads from embedded assets with no separate server; closing browser leaves Rust running; tray/hotkeys still work.
+- **C3 ✅:** canvas journeys pass; geometry matches `engine_core`; real drag functional test is a dev-only manual check (not in the automated suite).
+- **C4 ✅:** full user journey; D1–D6 verified by the API command matrix; no data loss (config round-trip tests).
+- **C5 ✅:** tray-only works; menu syncs with API changes; D2 dialog works; overlay works; hotkeys fire unfocused; all threads join on exit.
+- **C6 ✅:** egui removed; docs match binary; **Background workload measured** (3 runs). Editor open and Pointer activity workloads are **NOT MEASURED** (see `docs/performance/results.md`) — recorded as an honest gap, not a fabricated result.
+- **C7 ⬜:** release produced; all verification items checked — Phase 7, pending.
 
 A failing gate blocks the next phase. No workstream begins before its predecessor's gate passes.

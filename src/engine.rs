@@ -11,9 +11,7 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, KEYEVENTF_UNICODE};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, SetWindowPos,
@@ -22,16 +20,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 // Pure geometry lives in `engine_core`. Re-exporting keeps the exact `engine::*`
-// API that `editor.rs` and `overlay.rs` already call.
+// API that the API layer and native loop call.
 use crate::engine_core::{
     border_offsets, compensate_rect, duplicate_app_assignments, keys_to_events, launch_target,
     text_to_events, KeyEvent,
 };
-pub use crate::engine_core::{compute_zones, zone_at, zone_by_id, zone_pixels, Rect};
+pub use crate::engine_core::{compute_zones, zone_by_id, Rect};
 
 /// Default number of times a window position is applied to work around DWM's
 /// async snap. `move_window` keeps this default so its public signature stays
-/// unchanged for `editor.rs`; callers that have a config can use
+/// unchanged for compatibility; callers that have a config can use
 /// [`move_window_with_retries`] with `settings.dwm_snap_retries` instead.
 const DWM_SNAP_RETRIES: u32 = 2;
 
@@ -121,7 +119,7 @@ pub fn move_window(hwnd: HWND, zone: Rect) {
 /// Move `hwnd` into `zone`, applying the position `retries` times to work
 /// around DWM's asynchronous snap. Pass `settings.dwm_snap_retries` here when a
 /// config is available; [`move_window`] is the fixed-default wrapper kept for
-/// `editor.rs` compatibility.
+/// API compatibility.
 ///
 /// # Safety contract
 /// `hwnd` must be a valid window handle for the duration of the call. The
@@ -688,31 +686,6 @@ pub fn cycle_zone_axis(cfg: &AppConfig, dx: i32, dy: i32) {
                 move_window_with_retries(h, rect, cfg.settings.dwm_snap_retries);
             }
         }
-    }
-}
-
-#[allow(dead_code)] // consumed by the retained egui editor until Phase 6
-pub fn drag_keys_held() -> bool {
-    // SAFETY: `GetAsyncKeyState` takes a virtual-key code by value and returns an
-    // `i16`; it reads no caller memory and has no preconditions beyond a valid VK
-    // constant (0x11 = Ctrl, 0x01 = left mouse button).
-    unsafe {
-        let ctrl = (GetAsyncKeyState(0x11) as u16 & 0x8000) != 0;
-        let lbtn = (GetAsyncKeyState(0x01) as u16 & 0x8000) != 0;
-        ctrl && lbtn
-    }
-}
-
-#[allow(dead_code)] // consumed by the retained egui editor until Phase 6
-pub fn cursor_pos() -> (i32, i32) {
-    // SAFETY: `p` is a local, aligned `POINT` whose address is valid for the
-    // duration of `GetCursorPos`; the API writes only to it and no pointer escapes.
-    unsafe {
-        let mut p = POINT::default();
-        if let Err(e) = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut p) {
-            tracing::warn!(error = %e, "GetCursorPos failed; using default cursor position");
-        }
-        (p.x, p.y)
     }
 }
 

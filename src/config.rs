@@ -11,7 +11,7 @@ fn zero() -> u32 {
     0
 }
 
-/* ---- Defaults for the domain tunables moved out of editor code (§2.2) ---- */
+/* ---- Defaults for the domain tunables (§2.2) ---- */
 
 fn default_resolutions() -> Vec<ResolutionPreset> {
     vec![
@@ -131,7 +131,7 @@ impl Default for Zone {
     }
 }
 impl Zone {
-    #[allow(dead_code)] // used by tests and the retained egui editor
+    #[allow(dead_code)] // used by unit tests
     pub fn new(id: i32, label: &str, exe: &str, x: f32, y: f32, w: f32, h: f32) -> Self {
         Self {
             id,
@@ -158,8 +158,8 @@ pub struct Profile {
 
 /* ============================ Resolution presets ============================ */
 
-/// A user-editable resolution preset for the editor's resolution selector
-/// (§2d item 11). Previously a hardcoded tuple table in `editor/state.rs`.
+/// A user-editable resolution preset for the UI's resolution selector
+/// (§2d item 11).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolutionPreset {
     /// Label shown in the resolution selector.
@@ -174,7 +174,7 @@ pub struct ResolutionPreset {
 
 /// Every tunable from the plan (§2.2). All values are defaults stored in config,
 /// never literals in code. Kept in a separate struct so the top-level fields that
-/// engine.rs/editor.rs already use (gap, close_action, auto_start) stay compatible.
+/// the engine and API already use (gap, close_action, auto_start) stay compatible.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -196,7 +196,7 @@ pub struct Settings {
     /// apps; enable it here (or in the Settings view) for normal use.
     #[serde(default)]
     pub auto_launch_on_startup: bool,
-    /// Resolution presets shown in the editor's resolution selector (§2d item 11).
+    /// Resolution presets shown in the UI's resolution selector (§2d item 11).
     #[serde(default = "default_resolutions")]
     pub resolutions: Vec<ResolutionPreset>,
     /// Maximum number of installed apps shown in the library / picker.
@@ -245,10 +245,10 @@ impl Default for Settings {
     }
 }
 
-/* ---- Settings snapshot for free functions without an Editor ---------- */
+/* ---- Settings snapshot for free functions without a UI instance ------ */
 
-/// Snapshot of the settings for editor-free helpers (resolution selector and
-/// app enumeration). Wrapped in an RwLock so it can be refreshed on load/save;
+/// Snapshot of the settings for free helpers (app enumeration). Wrapped in an
+/// RwLock so it can be refreshed on load/save;
 /// the outer OnceLock only guards one-time allocation of the lock itself.
 static LOADED_SETTINGS: OnceLock<RwLock<Settings>> = OnceLock::new();
 
@@ -271,17 +271,6 @@ pub fn loaded_settings() -> Settings {
         .read()
         .map(|g| g.clone())
         .unwrap_or_else(|_| Settings::default())
-}
-
-/// Resolution presets used by `editor::state::ResKey` (owned clone).
-/// Clones only the presets, not the entire `Settings`, since this is called
-/// every render frame for the resolution selector labels/dimensions.
-#[allow(dead_code)] // consumed by the retained egui editor until Phase 6
-pub fn resolutions() -> Vec<ResolutionPreset> {
-    settings_cell()
-        .read()
-        .map(|g| g.resolutions.clone())
-        .unwrap_or_else(|_| default_resolutions())
 }
 
 /* ============================ AppConfig ============================ */
@@ -377,8 +366,8 @@ fn migrate(mut cfg: AppConfig) -> AppConfig {
 
 pub fn load_config() -> AppConfig {
     let cfg = load_config_inner();
-    // Publish the loaded settings for editor-free helpers (resolution selector,
-    // app enumeration) that have no `Editor` instance to read from.
+    // Publish the loaded settings for free helpers (app enumeration) that have
+    // no UI instance to read from.
     refresh_loaded_settings(&cfg.settings);
     cfg
 }
@@ -424,7 +413,7 @@ fn write_config_to(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
 pub fn save_config(cfg: &AppConfig) -> std::io::Result<()> {
     let path = config_path();
     write_config_to(&path, cfg)?;
-    // Keep the editor-free snapshot in sync with what was just saved (bug B7).
+    // Keep the settings snapshot in sync with what was just saved (bug B7).
     refresh_loaded_settings(&cfg.settings);
     Ok(())
 }

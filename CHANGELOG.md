@@ -6,10 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Stack decision
+### Implementation — headless Rust + Axum + Svelte (Phases 1–6, 2026-11-22)
+
+The architecture first recorded as a decision in `docs/plans/zoneflow-rust-axum-svelte-architecture.md` is now the shipped implementation. Phases 1–6 are complete; Phase 7 (release hardening) is pending.
+
+- **Added** a headless Rust background process: Axum 0.8.9 HTTP API on `127.0.0.1:0`, Tokio `current_thread` runtime, SSE events, per-launch 256-bit session token with `HttpOnly; SameSite=Strict` cookie, Host validation and hardening headers. Three long-lived threads: main/native (tray, hotkeys, message loop, layered overlay), command worker (authoritative state, history, engine calls) and Tokio (HTTP + embedded assets).
+- **Added** a Svelte 5 SPA (Vite 8, Tailwind 4, shadcn-svelte, Bits UI, Paneforge, Lucide icons) with an SVG zone canvas, left rail, contextual inspector, wizard/picker/confirmation dialogs, Hotkeys and Settings views. Built to `frontend/dist/` at build time and embedded with `rust-embed`; no separate server and no Node/Bun at runtime.
+- **Added** a native message loop with a hidden message-only window, payload queue, 100 ms safety timer, manual-reset shutdown event, ordered shutdown sequence, dynamic tray menu with applied/selected markers, D2 native confirmation dialog, and a native layered drag overlay with `GetAsyncKeyState` gesture detection (150 ms idle → 16 ms active).
+- **Added** full API coverage of the frozen D1–D6 product decisions (dirty-state guards, real launch execution, distinct load/select/apply, disable/enable, preview) with 125 inline unit tests plus 3 config round-trip integration tests; 36 frontend tests.
+- **Removed** the egui/eframe/shadcn-egui UI and overlay: `eframe`, `egui`, `shadcn-egui` dependencies, the `src/editor/` module tree and `src/overlay.rs`. `rfd` is retained for the Rust-side `/api/apps/browse` picker. The always-on process now measures **~2 MiB private / ~12 MiB working set** (was ~59–62 MiB private / ~109–112 MiB WS) and the executable is **3.65 MiB** (was 14.21 MiB). See `docs/performance/results.md`.
+- **Changed** the on-disk config contract: unchanged — `ScreenLayout.json` remains schema v1 and the round-trip tests confirm no data loss.
+
+### Stack decision (historical)
 
 - Rebuilt the app as **pure Rust with eframe/egui 0.37 + the glow renderer**. No HTML, CSS, JavaScript, webview, Tauri, or GPUI in the shipped application. The `design-*.html` files in `docs/design/` remain design references only. glow was chosen over wgpu for memory (~49 MB vs ~323 MB private RAM).
-- **Superseded (2026-11-21):** the approved next direction is a headless Rust + Axum background process with an on-demand Svelte editor served from embedded assets. This is a documentation/architecture decision only — no source or dependency changes have been made. See `docs/plans/zoneflow-rust-axum-svelte-architecture.md`.
+- **Superseded (2026-11-21, implemented 2026-11-22):** the headless Rust + Axum background process with an on-demand Svelte editor described in `docs/plans/zoneflow-rust-axum-svelte-architecture.md` replaced the egui UI in Phases 1–6. The egui figures above are historical; see the implementation entry and `docs/performance/results.md` for current values.
+
+> **Note:** the `Added` / `Changed` / `Removed` / `Standardization` sections below are the historical record of the **superseded egui build**. Figures in them (e.g. "~10 MB exe", "30 passing tests", `src/editor/`, `shadcn-egui`) describe that build at the time and are not the current state.
 
 ### Added
 

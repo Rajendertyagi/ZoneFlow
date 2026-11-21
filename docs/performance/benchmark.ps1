@@ -4,8 +4,8 @@
 #   powershell -ExecutionPolicy Bypass -File docs\performance\benchmark.ps1 -Mode Background -Exe <path>
 #
 # Modes:
-#   Background      - Rust backend only, browser closed. Runnable now with the
-#                     headless spike exe. This is the always-on workload.
+#   Background      - Rust backend only, browser closed. Run with the final
+#                     release exe. This is the always-on workload.
 #   EditorOpen      - Rust backend + browser with the editor loaded. Requires
 #                     -Url (the tokenised editor URL) and a running frontend.
 #   PointerActivity - EditorOpen plus 20s of synthetic cursor movement. This is
