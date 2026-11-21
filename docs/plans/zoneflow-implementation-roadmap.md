@@ -1,6 +1,6 @@
 # ZoneFlow Studio — Implementation Roadmap
 
-**Status:** Planning document. No implementation changes are authorized by this file.
+**Status:** Historical workstream plan. **Superseded for architecture and migration sequencing on 2026-11-21** by `zoneflow-rust-axum-svelte-architecture.md`, which defines the new phases and checkpoints. The WS-A backend-correctness work described below was completed and committed (`3f5a578`, `9346ba1`, `1976f67`); the WS-B/WS-C GUI workstreams are not the active direction. Product decisions D1–D6 and the feature-preservation requirements remain in force. No implementation is authorized by this file.
 **Date:** 2026-11-21
 **Basis:** Four independent audits + product/GUI/feature-preservation plans in this directory.
 

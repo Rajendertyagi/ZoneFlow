@@ -2,6 +2,8 @@
 
 A lightweight Windows window-tiling and automation studio — a pure-Rust replacement for the original AutoHotkey script. It ships as a **single ~10 MB `.exe`** with no runtime to install: the UI is built with **eframe/egui 0.37 + the glow renderer**, so no HTML, CSS, JavaScript, or webview is bundled or shipped. The design references live in [`docs/design/`](docs/design/) (`design-mockup.html`, `design-v2.html`, `design-v3.html`); they are never loaded by the app.
 
+> **Architecture direction (2026-11-21):** the shipped app described above is the current, working egui build. The approved next direction is a **headless Rust + Axum background process with an on-demand Svelte editor** served from embedded assets — see [`docs/plans/zoneflow-rust-axum-svelte-architecture.md`](docs/plans/zoneflow-rust-axum-svelte-architecture.md). No source or dependency changes have been made for it yet; egui remains the shipped UI until the migration is implemented. Measured figures in this README (~10 MB, ~49 MB private RAM, 30 tests) are stale — see [`docs/performance/results.md`](docs/performance/results.md) for current measurements (14.21 MiB exe, ~59–62 MiB private, 43 tests).
+
 Your original AHK files are untouched at `E:\Apps\Hotkeys\ScreenLayout.ahk` (and `E:\Apps\Hotkeys\ScreenLayoutGUI\`). Stop the AHK script before running ZoneFlow — it grabs the same global hotkeys. Hotkey registration fails gracefully (and logs a warning) if a binding is already taken.
 
 ## Features

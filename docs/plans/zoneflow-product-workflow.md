@@ -1,6 +1,6 @@
 # ZoneFlow Studio — Product Workflow
 
-**Status:** Planning document. No implementation changes are authorized by this file.
+**Status:** Authoritative for product behavior. Decisions D1–D6 are frozen and remain fully in force under the new `zoneflow-rust-axum-svelte-architecture.md` direction; the new API contracts encode them. No implementation is authorized by this file.
 **Date:** 2026-11-21
 **Basis:** Four independent source audits + official product research (FancyZones, DisplayFusion, MaxTo, Windows Snap).
 

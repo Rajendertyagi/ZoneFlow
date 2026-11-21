@@ -1,6 +1,6 @@
 # ZoneFlow Studio — GUI Architecture
 
-**Status:** Planning document. No implementation changes are authorized by this file.
+**Status:** Historical egui GUI design. **Superseded for the web UI on 2026-11-21** by `zoneflow-rust-axum-svelte-architecture.md` (Svelte 5 + SVG canvas). Retained because its product-level layout principles — canvas-primary, contextual inspector, four independent state dimensions (Saved/Applied/Enabled/Selected), responsive breakpoints, no forced three-column — remain valid and are carried into the new plan. Its egui-specific API guidance (Panels, shadcn-egui, `show_collapsible`) is historical. No implementation is authorized by this file.
 **Date:** 2026-11-21
 **Basis:** GUI architecture audit of all 13 `src/editor/*.rs` files + egui 0.37 / shadcn-egui 0.8 source verification.
 

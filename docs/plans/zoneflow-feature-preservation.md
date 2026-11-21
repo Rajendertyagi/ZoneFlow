@@ -1,6 +1,6 @@
 # ZoneFlow Studio — Feature Preservation Matrix
 
-**Status:** Planning document. No implementation changes are authorized by this file.
+**Status:** Authoritative for feature requirements. This matrix is stack-independent and remains in force under the new `zoneflow-rust-axum-svelte-architecture.md` direction. Bug IDs B1/B2/B3/B7/B11 were fixed and committed; B4/B6/B10/B12 remain tracked in the roadmap. No implementation is authorized by this file.
 **Date:** 2026-11-21
 **Basis:** Direct source verification of all 20 `src/**/*.rs` files, `Cargo.toml`, docs, and the original `E:\Apps\Hotkeys\ScreenLayout.ahk` (416 lines). Line numbers are from the files as read.
 

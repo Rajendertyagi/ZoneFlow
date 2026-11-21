@@ -1,6 +1,6 @@
 # ZoneFlow — Slint GUI Migration: Research & Implementation Plan
 
-**Status:** Research and planning document. **No implementation is authorized by this file.** No application source, dependency, or GUI code was changed in producing it.
+**Status:** Historical / reference research. **Retired as the active implementation direction on 2026-11-21.** The authoritative plan is `zoneflow-rust-axum-svelte-architecture.md`. This document is retained because its Slint feasibility findings, renderer/licensing analysis and benchmark methodology remain useful reference material. No implementation is authorized by this file.
 **Date:** 2026-11-21
 **Branch:** Based on actual latest `main` = `1976f67`. The task cited `9346ba1`; that is one commit behind (the audit-follow-up commit). No source differences relevant to this research exist between them.
 **Basis:** Direct inspection of all `src/**/*.rs`, `Cargo.toml`, the five approved planning docs, the original `ScreenLayout.ahk`, official Slint documentation (slint.rs / docs.slint.dev / github.com/slint-ui/slint), and fresh performance measurements on this machine.

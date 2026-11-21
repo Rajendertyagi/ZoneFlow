@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Stack decision
 
 - Rebuilt the app as **pure Rust with eframe/egui 0.37 + the glow renderer**. No HTML, CSS, JavaScript, webview, Tauri, or GPUI in the shipped application. The `design-*.html` files in `docs/design/` remain design references only. glow was chosen over wgpu for memory (~49 MB vs ~323 MB private RAM).
+- **Superseded (2026-11-21):** the approved next direction is a headless Rust + Axum background process with an on-demand Svelte editor served from embedded assets. This is a documentation/architecture decision only — no source or dependency changes have been made. See `docs/plans/zoneflow-rust-axum-svelte-architecture.md`.
 
 ### Added
 
