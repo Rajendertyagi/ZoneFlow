@@ -358,7 +358,9 @@ pub fn keys_to_events(keys: &str) -> Vec<KeyEvent> {
                 .chars()
                 .nth(1)
                 .and_then(|c| {
-                    if c.is_ascii() {
+                    // Only letters/digits are valid generic chord keys. Punctuation
+                    // would map to an unrelated VK (e.g. '!' -> VK_PRIOR).
+                    if c.is_ascii_alphanumeric() {
                         Some(c.to_ascii_uppercase() as u16)
                     } else {
                         None
@@ -380,9 +382,13 @@ pub fn launch_target(zone: &Zone) -> &str {
     }
 }
 
-/// Return groups of zone ids in `profile` that share the same app identity
-/// (case-insensitive exe name, or normalized full path when present).
-/// Used to warn about ambiguous duplicate assignments; changes no runtime behavior.
+/// Return groups of zone ids in `profile` that share the same app identity.
+///
+/// Keyed by case-insensitive exe name — the window matcher's primary identity
+/// (`target_exe` in `engine.rs`). Using the full path when present would miss
+/// mixed assignments where one zone stores a path and another stores only the
+/// exe name for the same app. Used to warn about ambiguous duplicate
+/// assignments; changes no runtime behavior.
 pub fn duplicate_app_assignments(profile: &Profile) -> Vec<(String, Vec<i32>)> {
     use std::collections::BTreeMap;
     let mut groups: BTreeMap<String, Vec<i32>> = BTreeMap::new();
@@ -390,12 +396,10 @@ pub fn duplicate_app_assignments(profile: &Profile) -> Vec<(String, Vec<i32>)> {
         if z.exe.trim().is_empty() {
             continue;
         }
-        let key = if z.path.trim().is_empty() {
-            z.exe.trim().to_lowercase()
-        } else {
-            z.path.trim().replace('/', "\\").to_lowercase()
-        };
-        groups.entry(key).or_default().push(z.id);
+        groups
+            .entry(z.exe.trim().to_lowercase())
+            .or_default()
+            .push(z.id);
     }
     groups
         .into_iter()
@@ -731,6 +735,19 @@ mod tests {
     }
 
     #[test]
+    fn keys_to_events_rejects_punctuation_chords() {
+        // Doc says generic ^X is a letter/digit; punctuation must not become a
+        // bogus VK ('!' = 0x21 is VK_PRIOR, '-' = 0x2D is VK_INSERT).
+        assert!(keys_to_events("^!").is_empty());
+        assert!(keys_to_events("^-").is_empty());
+        // Digits remain valid.
+        assert_eq!(
+            keys_to_events("^1"),
+            vec![KeyEvent::Chord(0x11, b'1' as u16)]
+        );
+    }
+
+    #[test]
     fn launch_target_prefers_full_path_then_falls_back_to_exe() {
         let mut z = Zone::new(1, "", "app.exe", 0.0, 0.0, 50.0, 100.0);
         assert_eq!(launch_target(&z), "app.exe");
@@ -768,5 +785,23 @@ mod tests {
             ],
         };
         assert!(duplicate_app_assignments(&profile).is_empty());
+    }
+
+    #[test]
+    fn duplicate_app_assignments_detects_mixed_path_and_exe_zones() {
+        // One zone stores a full path, the other only the exe name: both refer
+        // to the same app and must be grouped (the old path-keyed helper missed this).
+        let mut with_path = Zone::new(1, "", "chrome.exe", 0.0, 0.0, 50.0, 100.0);
+        with_path.path = r"C:\Program Files\Google\Chrome\chrome.exe".into();
+        let exe_only = Zone::new(2, "", "chrome.exe", 50.0, 0.0, 50.0, 100.0);
+        let profile = Profile {
+            name: "test".into(),
+            hotkey: String::new(),
+            zones: vec![with_path, exe_only],
+        };
+        let dups = duplicate_app_assignments(&profile);
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].0, "chrome.exe");
+        assert_eq!(dups[0].1, vec![1, 2]);
     }
 }

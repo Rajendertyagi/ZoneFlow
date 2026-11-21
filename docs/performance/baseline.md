@@ -29,7 +29,7 @@ Three consecutive runs were taken; the median/range is reported.
 | Metric | Run 1 | Run 2 | Run 3 | Reported |
 |---|---|---|---|---|
 | Release exe size | — | — | — | **14,857,216 bytes (14.17 MiB)** |
-| Cold startup → window visible | 241.7 ms | 191.6 ms | 249.3 ms | **~190–250 ms** |
+| Cold startup → window visible | ~240 ms | ~190 ms | ~250 ms | **~190–250 ms** |
 | Idle working set | 119.9 MiB | 119.8 MiB | 119.5 MiB | **~120 MiB** |
 | Idle private bytes | 61.4 MiB | 61.2 MiB | 61.0 MiB | **~61 MiB** |
 | Idle CPU | 0.21% | 0.16% | 0.05% | **< 0.3%** |
@@ -41,7 +41,7 @@ Binary SHA-256: `ECD51861B54FE3F0CEE8A0D53BBFA42BCC2D72E9E7C2B7B20549E3971A0A743
 
 ## Notes on trustworthiness
 
-- **Startup and RAM are stable and trustworthy** (tight ranges across 3 runs).
+- **Startup and RAM are stable and trustworthy** (tight ranges across 3 runs). Startup values are rounded to ~10 ms: the script polls window visibility every 50 ms, so detection granularity is ±50 ms and the raw stopwatch tenths overstate precision. The reported ~190–250 ms range is the meaningful figure.
 - **Idle CPU is consistently near zero** (< 0.3%) — expected for an event-driven egui app.
 - **Active CPU is noisy** (9.9%–46.8%). The synthetic random-cursor method drives egui repaint work that depends heavily on where the cursor lands (hover targets, canvas vs chrome) and on OS scheduling. Treat this as an upper-bound indicator of interactive load, **not** a precise or repeatable figure. A deterministic workload would be needed for a stable active-CPU number; that is out of scope for this baseline.
 - Earlier planning-doc claims of "~10 MB exe" and "~49 MB private RAM" are **not** what this build measures: actual is ~14.17 MiB and ~61 MiB private / ~120 MiB working set. (Docs sync is WS-D scope; recorded here as a finding.)

@@ -273,8 +273,13 @@ pub fn loaded_settings() -> Settings {
 }
 
 /// Resolution presets used by `editor::state::ResKey` (owned clone).
+/// Clones only the presets, not the entire `Settings`, since this is called
+/// every render frame for the resolution selector labels/dimensions.
 pub fn resolutions() -> Vec<ResolutionPreset> {
-    loaded_settings().resolutions
+    settings_cell()
+        .read()
+        .map(|g| g.resolutions.clone())
+        .unwrap_or_else(|_| default_resolutions())
 }
 
 /* ============================ AppConfig ============================ */
