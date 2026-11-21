@@ -382,29 +382,50 @@ pub fn launch_target(zone: &Zone) -> &str {
     }
 }
 
-/// Return groups of zone ids in `profile` that share the same app identity.
+/// Return groups of zone ids in `profile` with ambiguous duplicate assignments.
 ///
-/// Keyed by case-insensitive exe name — the window matcher's primary identity
-/// (`target_exe` in `engine.rs`). Using the full path when present would miss
-/// mixed assignments where one zone stores a path and another stores only the
-/// exe name for the same app. Used to warn about ambiguous duplicate
-/// assignments; changes no runtime behavior.
+/// Zones are first grouped by case-insensitive exe name (the window matcher's
+/// primary identity). Within an exe group, two zones with distinct non-empty
+/// full paths are *not* duplicates — exact path matching resolves them to
+/// different windows. A group is ambiguous only when at least one zone has no
+/// path (it can fall back to the first exe-name match and collide with any
+/// other zone in the group) or when multiple zones share the same path.
+///
+/// Used to warn about ambiguous assignments; changes no runtime behavior.
 pub fn duplicate_app_assignments(profile: &Profile) -> Vec<(String, Vec<i32>)> {
-    use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, Vec<i32>> = BTreeMap::new();
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut by_exe: BTreeMap<String, Vec<&Zone>> = BTreeMap::new();
     for z in &profile.zones {
         if z.exe.trim().is_empty() {
             continue;
         }
-        groups
+        by_exe
             .entry(z.exe.trim().to_lowercase())
             .or_default()
-            .push(z.id);
+            .push(z);
     }
-    groups
-        .into_iter()
-        .filter(|(_, ids)| ids.len() > 1)
-        .collect()
+    let mut out = Vec::new();
+    for (exe, zones) in by_exe {
+        if zones.len() < 2 {
+            continue;
+        }
+        let mut paths = BTreeSet::new();
+        let mut has_exe_only = false;
+        for z in &zones {
+            if z.path.trim().is_empty() {
+                has_exe_only = true;
+            } else {
+                paths.insert(z.path.trim().replace('/', "\\").to_lowercase());
+            }
+        }
+        // Distinct full paths with no exe-only zone resolve to different
+        // windows — not a duplicate. Otherwise the whole exe group is ambiguous.
+        if !has_exe_only && paths.len() > 1 {
+            continue;
+        }
+        out.push((exe, zones.iter().map(|z| z.id).collect()));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -802,6 +823,40 @@ mod tests {
         let dups = duplicate_app_assignments(&profile);
         assert_eq!(dups.len(), 1);
         assert_eq!(dups[0].0, "chrome.exe");
+        assert_eq!(dups[0].1, vec![1, 2]);
+    }
+
+    #[test]
+    fn duplicate_app_assignments_ignores_distinct_installations() {
+        // Two genuinely different installations sharing an exe name resolve to
+        // different windows via exact path matching — no warning should fire.
+        let mut a = Zone::new(1, "", "chrome.exe", 0.0, 0.0, 50.0, 100.0);
+        a.path = r"C:\Program Files\Google\Chrome\chrome.exe".into();
+        let mut b = Zone::new(2, "", "chrome.exe", 50.0, 0.0, 50.0, 100.0);
+        b.path = r"D:\Portable\Chrome\chrome.exe".into();
+        let profile = Profile {
+            name: "test".into(),
+            hotkey: String::new(),
+            zones: vec![a, b],
+        };
+        assert!(duplicate_app_assignments(&profile).is_empty());
+    }
+
+    #[test]
+    fn duplicate_app_assignments_groups_identical_paths() {
+        // Same path expressed with different case and separators is still a
+        // duplicate (both zones resolve to the same window).
+        let mut a = Zone::new(1, "", "chrome.exe", 0.0, 0.0, 50.0, 100.0);
+        a.path = r"C:\Chrome\chrome.exe".into();
+        let mut b = Zone::new(2, "", "chrome.exe", 50.0, 0.0, 50.0, 100.0);
+        b.path = "c:/chrome/chrome.exe".into();
+        let profile = Profile {
+            name: "test".into(),
+            hotkey: String::new(),
+            zones: vec![a, b],
+        };
+        let dups = duplicate_app_assignments(&profile);
+        assert_eq!(dups.len(), 1);
         assert_eq!(dups[0].1, vec![1, 2]);
     }
 }

@@ -9,7 +9,7 @@ keeps the decisions and the deliberately-deferred items visible.
 
 | Item | Finding | Resolution |
 |---|---|---|
-| B | Duplicate detection missed mixed assignments (one zone with a full path, another with only the exe name for the same app). | `duplicate_app_assignments` now keys by case-insensitive exe name — the window matcher's primary identity. Regression test added. |
+| B | Duplicate detection missed mixed assignments (one zone with a full path, another with only the exe name for the same app). | `duplicate_app_assignments` groups by exe name but excludes distinct non-empty full paths (different installations resolve to different windows). Regression tests added for the mixed case, distinct installations, and identical paths. |
 | C | Generic `^X` parser accepted punctuation despite its doc saying letter/digit; `^!` mapped to VK 0x21 (VK_PRIOR). | Changed `is_ascii()` to `is_ascii_alphanumeric()`; regression test added. |
 | D (clone) | `resolutions()` cloned the entire `Settings` each render frame. | Now clones only the `resolutions` vec. |
 | D (precision) | Baseline reported startup to tenths of a millisecond despite 50 ms polling. | Per-run values rounded to ~10 ms; note added that detection granularity is ±50 ms. |
