@@ -1,3 +1,8 @@
+// The egui editor is retained until Phase 6 but is no longer instantiated by
+// `main` (the headless backend owns the process). Keep it compiling without
+// drowning the new code in dead-code warnings.
+#![allow(dead_code)]
+
 use crate::config::{self, AppConfig, CloseAction, Zone};
 use crate::engine;
 use crate::overlay::{self, SharedOverlay};
@@ -394,6 +399,9 @@ impl Editor {
                 self.exiting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
+            // New headless-architecture actions are handled by the command
+            // worker; the legacy egui editor ignores them (Phase 6 removes it).
+            _ => {}
         }
     }
 

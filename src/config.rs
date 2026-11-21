@@ -131,6 +131,7 @@ impl Default for Zone {
     }
 }
 impl Zone {
+    #[allow(dead_code)] // used by tests and the retained egui editor
     pub fn new(id: i32, label: &str, exe: &str, x: f32, y: f32, w: f32, h: f32) -> Self {
         Self {
             id,
@@ -275,6 +276,7 @@ pub fn loaded_settings() -> Settings {
 /// Resolution presets used by `editor::state::ResKey` (owned clone).
 /// Clones only the presets, not the entire `Settings`, since this is called
 /// every render frame for the resolution selector labels/dimensions.
+#[allow(dead_code)] // consumed by the retained egui editor until Phase 6
 pub fn resolutions() -> Vec<ResolutionPreset> {
     settings_cell()
         .read()

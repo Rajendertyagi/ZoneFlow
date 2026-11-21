@@ -20,6 +20,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 global-hotkey = "0.10"
 tray-icon = "0.26"
 
+# Phase 1 — headless Axum backend (architecture §10 / implementation plan §5).
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "net", "sync", "time"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+futures-util = "0.3.34"
+getrandom = "0.3.4"
+rust-embed = "8.14.0"
+open = "5.4.5"
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }
+http-body-util = "0.1.5"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -27,9 +40,12 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_System_Threading",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_System_SystemInformation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Registry",
+    "Win32_System_LibraryLoader",
+    "Win32_Security",
 ] }
 
 [profile.release]

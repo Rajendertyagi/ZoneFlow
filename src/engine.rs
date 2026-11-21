@@ -691,6 +691,7 @@ pub fn cycle_zone_axis(cfg: &AppConfig, dx: i32, dy: i32) {
     }
 }
 
+#[allow(dead_code)] // consumed by the retained egui editor until Phase 6
 pub fn drag_keys_held() -> bool {
     // SAFETY: `GetAsyncKeyState` takes a virtual-key code by value and returns an
     // `i16`; it reads no caller memory and has no preconditions beyond a valid VK
@@ -702,6 +703,7 @@ pub fn drag_keys_held() -> bool {
     }
 }
 
+#[allow(dead_code)] // consumed by the retained egui editor until Phase 6
 pub fn cursor_pos() -> (i32, i32) {
     // SAFETY: `p` is a local, aligned `POINT` whose address is valid for the
     // duration of `GetCursorPos`; the API writes only to it and no pointer escapes.

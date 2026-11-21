@@ -1,8 +1,10 @@
 use crate::config::AppConfig;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
-use std::collections::HashMap;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use std::collections::{BTreeMap, HashMap};
+use tray_icon::menu::{
+    CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 #[derive(Clone, Debug)]
@@ -23,6 +25,12 @@ pub enum Action {
     Reload,
     ShowSettings,
     Exit,
+    /// Tray "Open editor…" — launch the browser on the editor URL.
+    OpenEditor,
+    /// Tray "Disable layout" / "Enable layout" (D4 runtime toggle).
+    ToggleEnabled,
+    /// Tray profile click (D6): apply when enabled, select-only when disabled.
+    ProfileApply(String),
 }
 
 pub struct System {
@@ -35,6 +43,11 @@ pub struct System {
     registered: Vec<HotKey>,
     /// Bindings that could not be parsed or registered (shown in the UI log).
     pub failures: Vec<String>,
+    /// Dynamic profile submenu and its check items (rebuilt on NativeUpdate).
+    profiles_submenu: Option<Submenu>,
+    profile_items: Vec<CheckMenuItem>,
+    /// Disable/Enable toggle item whose label flips with runtime state (D4).
+    toggle_item: Option<MenuItem>,
 }
 
 impl System {
@@ -43,6 +56,7 @@ impl System {
     /// Kept with the original zero-argument signature for call-site compatibility
     /// (`editor.rs::with_system`). Use [`System::with_config`] when a config is
     /// already in memory.
+    #[allow(dead_code)] // compatibility constructor for the retained egui editor
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let cfg = crate::config::load_config();
         Self::with_config(&cfg)
@@ -54,10 +68,34 @@ impl System {
     pub fn with_config(cfg: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
         // Tray icon first — always available even if hotkeys fail.
         let menu = Menu::new();
+
+        // Dynamic profile submenu. Stable IDs (`profile:<name>`) are matched by
+        // prefix in `poll()` — never by display label (architecture §4).
+        let profiles_submenu = Submenu::new("Profiles", true);
+        let mut profile_items = Vec::new();
+        for name in cfg.profiles.keys() {
+            let item = CheckMenuItem::with_id(
+                MenuId::new(format!("profile:{name}")),
+                name,
+                true,
+                name == &cfg.active_profile,
+                None,
+            );
+            profiles_submenu.append(&item)?;
+            profile_items.push(item);
+        }
+        menu.append(&profiles_submenu)?;
+        menu.append(&PredefinedMenuItem::separator())?;
+
+        let i_toggle =
+            MenuItem::with_id(MenuId::new("toggle_enabled"), "Disable layout", true, None);
+        let i_open = MenuItem::with_id(MenuId::new("open_editor"), "Open editor…", true, None);
         let i_settings = MenuItem::new("Settings", true, None);
         let i_retile = MenuItem::new("Re-tile now", true, None);
         let i_reload = MenuItem::new("Reload config", true, None);
         let i_exit = MenuItem::new("Exit", true, None);
+        menu.append(&i_toggle)?;
+        menu.append(&i_open)?;
         menu.append(&i_settings)?;
         menu.append(&i_retile)?;
         menu.append(&i_reload)?;
@@ -83,6 +121,9 @@ impl System {
             hotkey_map: HashMap::new(),
             registered: Vec::new(),
             failures: Vec::new(),
+            profiles_submenu: Some(profiles_submenu),
+            profile_items,
+            toggle_item: Some(i_toggle),
         };
         system.register_from_config(cfg)?;
         Ok(system)
@@ -97,6 +138,19 @@ impl System {
     /// with `tracing::warn!` and recorded in [`System::failures`]; processing
     /// continues so one bad binding never prevents the others from registering.
     pub fn register_from_config(&mut self, cfg: &AppConfig) -> Result<(), String> {
+        self.register_bindings(&cfg.hotkeys)
+    }
+
+    /// Re-register global hotkeys from a binding map supplied by the worker
+    /// (NativeUpdate path). Uses the same per-item, fail-soft loop as config
+    /// load — `register_all` is fail-fast and must not be used here.
+    pub fn reregister_hotkeys(&mut self, hotkeys: &BTreeMap<String, String>) {
+        if let Err(e) = self.register_bindings(hotkeys) {
+            tracing::warn!(error = %e, "hotkey re-registration failed");
+        }
+    }
+
+    fn register_bindings(&mut self, bindings: &BTreeMap<String, String>) -> Result<(), String> {
         // Drop any previous registrations first so this can be called again
         // after a config reload without leaving stale hotkeys behind.
         for hk in self.registered.drain(..) {
@@ -107,7 +161,7 @@ impl System {
         self.hotkey_map.clear();
         self.failures.clear();
 
-        for (name, binding) in &cfg.hotkeys {
+        for (name, binding) in bindings {
             let Some(action) = action_for_name(name) else {
                 tracing::warn!("Unknown hotkey action '{}' in config; skipping", name);
                 continue;
@@ -159,7 +213,14 @@ impl System {
         }
 
         while let Ok(ev) = MenuEvent::receiver().try_recv() {
-            match ev.id.0.as_str() {
+            let id = ev.id.0.as_str();
+            if let Some(name) = id.strip_prefix("profile:") {
+                actions.push(Action::ProfileApply(name.to_string()));
+                continue;
+            }
+            match id {
+                "toggle_enabled" => actions.push(Action::ToggleEnabled),
+                "open_editor" => actions.push(Action::OpenEditor),
                 "Settings" => actions.push(Action::ShowSettings),
                 "Re-tile now" => actions.push(Action::Retile),
                 "Reload config" => actions.push(Action::Reload),
@@ -169,6 +230,51 @@ impl System {
         }
 
         actions
+    }
+
+    /// Rebuild the profile submenu from a full-state notification. Uses stable
+    /// IDs and shows the applied checkmark; the selected bullet is represented
+    /// by a distinct check item state so the two dimensions stay independent.
+    pub fn rebuild_profiles(
+        &mut self,
+        applied: &str,
+        _selected: &str,
+        profiles: &[String],
+        _enabled: bool,
+    ) {
+        let Some(submenu) = self.profiles_submenu.as_ref() else {
+            return;
+        };
+        for item in self.profile_items.drain(..) {
+            if let Err(e) = submenu.remove(&item) {
+                tracing::debug!(error = %e, "failed to remove old profile menu item");
+            }
+        }
+        for name in profiles {
+            let item = CheckMenuItem::with_id(
+                MenuId::new(format!("profile:{name}")),
+                name,
+                true,
+                name == applied,
+                None,
+            );
+            if let Err(e) = submenu.append(&item) {
+                tracing::warn!(error = %e, "failed to append profile menu item");
+                continue;
+            }
+            self.profile_items.push(item);
+        }
+    }
+
+    /// Flip the Disable/Enable tray label (D4 runtime-only state).
+    pub fn set_toggle_label(&mut self, enabled: bool) {
+        if let Some(item) = self.toggle_item.as_ref() {
+            item.set_text(if enabled {
+                "Disable layout"
+            } else {
+                "Enable layout"
+            });
+        }
     }
 }
 
