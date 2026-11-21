@@ -104,6 +104,16 @@ export function noteEvent(): void {
   store.connection = 'connected';
 }
 
+/**
+ * Called when the SSE stream (re)opens. Reset the consecutive-failure count so
+ * "connection lost" reflects repeated failures, not a lifetime total; a single
+ * later blip must not immediately re-trigger the banner after a healthy reopen.
+ */
+export function noteSseOpen(): void {
+  store.sseFailures = 0;
+  store.connection = 'connected';
+}
+
 /** Called on SSE error/close. Returns the new consecutive-failure count. */
 export function noteSseFailure(): number {
   store.sseFailures += 1;

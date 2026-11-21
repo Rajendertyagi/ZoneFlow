@@ -10,6 +10,7 @@
 import {
   noteEvent,
   noteSseFailure,
+  noteSseOpen,
   setConnection,
   setSnapshot,
 } from '$lib/state/app.svelte';
@@ -61,7 +62,12 @@ function onMessage(ev: MessageEvent<string>): void {
 
 function onOpen(): void {
   reconnectDelayMs = 1000;
-  setConnection('connected');
+  noteSseOpen();
+  // The backend only broadcasts on mutation and sends no replay on (re)connect,
+  // so any change that happened while the stream was down would otherwise be
+  // missed. Re-fetch the authoritative snapshot on every open/reconnect; this
+  // also surfaces a session-expired 401 via the client's fetch hook.
+  void refreshState();
 }
 
 function onError(): void {
