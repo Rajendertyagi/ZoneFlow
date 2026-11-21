@@ -224,7 +224,7 @@ The canvas stays primary; assignment is a deliberate gesture, not a permanent pa
 
 ### 4.5 System Tray — complete design
 ```
-ZoneFlow Studio — Active: Website
+ZoneFlow Studio — Applied: Website · Selected: Website
 ─────────────────────────────
 Profiles              ▸  Website ✓
                          Coding
@@ -235,7 +235,7 @@ Open editor…
 Settings…
 Exit
 ```
-- Header shows active profile; checkmark marks the applied profile. The submenu is **dynamic** — rebuilt after profile create/rename/delete/select so it is never stale.
+- Header shows **both** Applied and Selected profiles. Checkmark marks the applied profile; a distinct bullet marks the selected profile when it differs. The submenu is **dynamic** — rebuilt after profile create/rename/delete/select so it is never stale. When layout is disabled, selecting a profile changes Selected only; the tray shows the two values separately so the user can see that nothing was applied.
 - **(D6)** Profile submenu **applies immediately on click** when layout is enabled (no main window needed). When disabled, selecting a profile changes the selection only — nothing is applied or launched; status shows "Disabled". Tray switching, Home selection and editor-rail loading remain three separate actions with their own contracts.
 - **(D2 — tray switching with a dirty draft):** if the draft has unsaved changes, a tray profile click must never silently discard or switch. Show a simple native Windows confirmation: "Unsaved changes in <profile>. Discard them and switch?" → **Discard** proceeds; **Cancel** leaves everything unchanged. No custom dialog system is required. The same rule applies to Home and rail switching through their own flows.
 - **(D4)** Disable/Enable toggle suspends all layout automation without deleting anything; tray, profile selection, editor and settings stay available.

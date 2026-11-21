@@ -74,9 +74,6 @@ try {
     $proc = Start-Process -FilePath $exeFull -PassThru
     Start-Sleep -Seconds 5
 
-    $rustStart = Sample $proc
-    $browserStart = SampleBrowser $BrowserProcessName $preExistingBrowserPids
-
     if ($Mode -ne "Background") {
         Start-Process $Url
         Start-Sleep -Seconds 5
@@ -85,6 +82,12 @@ try {
             Write-Warning "No new $BrowserProcessName processes detected - the browser may have reused an existing instance. Close all browser windows and re-run for clean attribution."
         }
     }
+
+    # Baselines are taken AFTER the browser has loaded and settled, immediately
+    # before the idle window. CPU deltas are divided only by $IdleSeconds, so
+    # sampling earlier would include launch/settle CPU in the reported rate.
+    $rustStart = Sample $proc
+    $browserStart = SampleBrowser $BrowserProcessName $preExistingBrowserPids
 
     # ---- Idle / editor-open window ----
     Start-Sleep -Seconds $IdleSeconds

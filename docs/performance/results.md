@@ -79,9 +79,12 @@ private with highly variable CPU. Startup and RAM were stable; active CPU was no
 
 ## Measurement notes
 
-- Idle/active RAM: `WorkingSet64` and `PrivateMemorySize64` sampled at the end of
-  a 30 s window after a 5 s settle.
-- CPU: `TotalProcessorTime` delta / wall time × 100 over the same window.
+- Idle/pointer RAM: `WorkingSet64` and `PrivateMemorySize64` sampled at the end of
+  a 30 s window. Baselines are taken immediately before that window — after the
+  browser has launched and settled for Editor open / Pointer activity — so CPU
+  deltas cover only the measurement window.
+- CPU: `TotalProcessorTime` delta / wall time × 100 over the same window. Browser
+  CPU is reported for Editor open as well as Pointer activity.
 - Startup: 50 ms window-visibility polling gives ±50 ms granularity; report as a
   range, never to tenths of a millisecond.
 - Run ≥3 consecutive measurements and report the range, not a single value.

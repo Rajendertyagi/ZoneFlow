@@ -113,10 +113,10 @@ This design uses only `mpsc`/`oneshot` channels and clear ownership — no elabo
 The tray is the primary daily interface and must work with no browser open. `src/system.rs` currently builds a fixed menu; the new design builds it dynamically on the native thread from a `NativeUpdate` (§3.2):
 
 ```
-ZoneFlow Studio — Active: <applied profile>
+ZoneFlow Studio — Applied: <applied> · Selected: <selected>
 ─────────────────────────────
-Profiles              ▸  Website ✓   (checkmark = applied profile)
-                          Coding
+Profiles              ▸  Website ✓  (checkmark = applied)
+                          Coding •   (bullet = selected, when different)
                           Trading
 ─────────────────────────────
 Disable layout           (toggles to Enable layout)
@@ -125,7 +125,7 @@ Settings…
 Exit
 ```
 
-- Rebuild the profile submenu after every profile create/rename/delete/select; update the checkmark from the **applied** dimension, never the draft.
+- Rebuild the profile submenu after every profile create/rename/delete/select. Show **both** dimensions: a checkmark on the **applied** profile and a distinct marker (bullet) on the **selected** profile when they differ. The header names both. This matters when layout is disabled: selecting a profile changes Selected but not Applied, and the tray must show that without opening the editor.
 - **D6:** tray profile click applies immediately when enabled; when disabled it selects only. Home selection and editor-rail loading use their own API operations (`select` / `load`) and remain separate.
 - **D2:** a tray switch with a dirty draft shows a native Windows confirmation ("Unsaved changes in <profile>. Discard them and switch?") with Discard/Cancel. Never silently discard. The API returns 409 on dirty; the dialog is the user-facing resolution before retrying with an explicit discard flag.
 - **D4:** Disable/Enable suspends all automation; runtime-only; label toggles.
@@ -216,11 +216,20 @@ All responses are JSON. All requests require the per-launch token (§8). Command
 | PUT | `/api/profiles/{name}` | `{new_name}` | renamed |
 | DELETE | `/api/profiles/{name}` | — | deleted; applied dimension cleared if it was applied |
 | POST | `/api/profiles/{name}/duplicate` | `{new_name}` | copy |
-| POST | `/api/profiles/{name}/load` | — | **D6 editor rail:** load profile into the draft for editing; **409 if dirty** (D2 Discard/Cancel required). Does not apply. |
-| POST | `/api/profiles/{name}/select` | — | **D6 Home:** select only — update the Selected dimension, no draft change, no apply, no launch. |
-| POST | `/api/profiles/{name}/apply` | — | **D6 tray:** apply immediately when layout is enabled; when disabled, behave as select-only. **409 if dirty** (D2). |
+| POST | `/api/profiles/{name}/load?discard_dirty=false` | — | **D6 editor rail:** load profile into the draft for editing; does not apply. Dirty-guarded (D2). |
+| POST | `/api/profiles/{name}/select?discard_dirty=false` | — | **D6 Home:** select only — update the Selected dimension, no draft change, no apply, no launch. Dirty-guarded (D2). |
+| POST | `/api/profiles/{name}/apply?discard_dirty=false` | — | **D6 tray:** apply immediately when layout is enabled; when disabled, behave as select-only. Dirty-guarded (D2). |
 
-These are three distinct operations, not one. Tests must verify each path independently: rail load changes the draft and is dirty-guarded; Home select changes only selection; tray apply changes the Applied dimension when enabled and only selection when disabled.
+All three accept an optional `discard_dirty: bool` (default `false`). **D2 dirty-draft contract (unified for tray, Home and rail):**
+
+1. The caller sends the switch command with `discard_dirty=false`. The command worker owns the dirty state and checks it.
+2. **Clean draft** → worker executes the switch immediately and returns success.
+3. **Dirty draft + `discard_dirty=false`** → worker makes **no state change** and returns `409` with `{ error: { code: "dirty_state", message: "..." } }`. The native thread never reads dirty state directly — it learns it from this reply.
+4. **Dirty draft + `discard_dirty=true`** → worker discards the draft (reverts to the saved profile), then executes the switch.
+
+**Confirmation resolution:** the web SPA shows a shadcn Dialog on 409 and retries with `discard_dirty=true` on Discard; Cancel leaves everything unchanged. The tray (no browser) receives the 409 in the native thread, shows a native `MessageBoxW` ("Unsaved changes in <profile>. Discard them and switch?"), and on Discard resends the same command with `discard_dirty=true`; Cancel aborts. This is one flow — worker detects dirty, caller confirms, worker executes or aborts — with no new infrastructure.
+
+These are three distinct operations, not one. Tests must verify each path independently, including the dirty/clean × discard/cancel matrix for all three.
 
 ### 5.3 Zones
 

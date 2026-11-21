@@ -338,8 +338,8 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 - Define `AppState { inner: Arc<RwLock<Inner>>, tx: broadcast::Sender<String>, cmd_tx: mpsc::Sender<Command>, expected_token: String, allowed_host: String }`.
 - `Inner` holds the authoritative draft `AppConfig`, `last_saved_json`, `applied_profile`, `layout_enabled`, `selected_zone`, history, logs.
 - Implement command functions that delegate to unchanged backend modules **on the worker thread**: `save`, `apply`, `launch_arrange`, `preview`, `revert`, `disable`, `enable`, profile CRUD, zone mutations, undo/redo. Encode D1–D6: 409 on dirty for apply/launch/load; disabled-mode guards; D3 assignment replacement rules.
-- **D6 profile actions are three distinct commands**, not one: `load` (editor rail → draft, dirty-guarded), `select` (Home → selection only), `apply` (tray → apply when enabled, select-only when disabled). See architecture plan §5.2. Each gets its own handler and test.
-- **Test:** unit tests for each command's state transition, including D1–D6 error cases; a test that a slow command does not block an unrelated API request; separate tests for `load` / `select` / `apply`.
+- **D6 profile actions are three distinct commands**, not one: `load` (editor rail → draft), `select` (Home → selection only), `apply` (tray → apply when enabled, select-only when disabled). All three take `discard_dirty: bool` (default false) and are dirty-guarded per D2 — including `select`. See architecture plan §5.2. Each gets its own handler and test.
+- **Test:** unit tests for each command's state transition, including D1–D6 error cases; a test that a slow command does not block an unrelated API request; the dirty/clean × discard/cancel matrix for `load` / `select` / `apply`.
 
 ### Task B2 — HTTP API scaffold
 **Files:** new `src/api/mod.rs`, `src/api/routes.rs`.
@@ -393,15 +393,15 @@ egui dependencies stay until Phase 6. Each task ends with `cargo fmt --check`, `
 
 The existing `src/system.rs` builds a **fixed** menu (Settings / Re-tile / Reload / Exit). It must become dynamic while staying on the native thread:
 
-- **Header:** "ZoneFlow Studio — Active: <applied profile>".
-- **Profiles submenu:** one item per saved profile, with a checkmark on the **applied** profile (not the draft). Rebuild from the current profile list on every `NativeUpdate` (create/rename/delete/select) — never keep a stale menu.
+- **Header:** "ZoneFlow Studio — Applied: <applied> · Selected: <selected>" — show both dimensions separately.
+- **Profiles submenu:** one item per saved profile, with a checkmark on the **applied** profile and a distinct bullet on the **selected** profile when they differ. Rebuild from the current profile list on every `NativeUpdate` (create/rename/delete/select) — never keep a stale menu. When disabled, selection changes Selected only; the tray must show that Applied did not change.
 - **Profile click (D6):** when enabled → apply immediately (the `apply` command); when disabled → select-only. Tray, Home and editor-rail actions stay separate and use their own API operations (`apply` / `select` / `load`).
 - **Disable/Enable layout (D4):** toggle label and state; suspends all automation; runtime-only.
 - **Open editor…** → browser session (Task B6); **Settings…** → open the editor on the Settings view; **Exit** → shutdown (Task B8).
 
-**D2 — tray switching with a dirty draft:** never silently discard or switch. When a tray profile click arrives and the draft is dirty, the native thread shows a **simple native Windows confirmation dialog** (`MessageBoxW` with Yes/No/Cancel semantics): "Unsaved changes in <profile>. Discard them and switch?" → **Discard** proceeds with the switch; **Cancel** aborts and leaves everything unchanged. No custom dialog system. The same rule applies to Home and rail switching through their own flows. The API `apply`/`load` endpoints already return 409 on dirty; the native dialog is the user-facing resolution before retrying with an explicit discard flag.
+**D2 — dirty-draft confirmation (unified flow, see architecture §5.2):** the native thread cannot read dirty state (the command worker owns it). On a tray profile click it sends the switch command with `discard_dirty=false`. The worker checks dirty state: clean → execute; dirty → return `409 dirty_state` with no state change. On 409 the native thread shows a native `MessageBoxW` ("Unsaved changes in <profile>. Discard them and switch?"): **Discard** resends the same command with `discard_dirty=true` (worker reverts the draft then switches); **Cancel** aborts. The web SPA uses the same contract with a shadcn Dialog on 409. No new infrastructure — just the existing command channel plus the `discard_dirty` flag.
 
-**Test:** menu rebuild after profile create/rename/delete/select; checkmark tracks the applied profile; tray click applies when enabled and selects only when disabled; dirty-draft dialog Discard/Cancel paths; Disable/Enable label and behavior; Open editor/Settings/Exit.
+**Test:** menu rebuild after profile create/rename/delete/select; checkmark tracks the applied profile; tray click applies when enabled and selects only when disabled; dirty/clean × discard/cancel matrix for `load`/`select`/`apply`; Disable/Enable label and behavior; Open editor/Settings/Exit.
 
 ---
 
