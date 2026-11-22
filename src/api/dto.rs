@@ -138,6 +138,7 @@ impl ProfileSummary {
 /// A discovered application (runtime enumeration, never persisted).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppEntryDto {
+    pub id: String,
     pub label: String,
     pub exe: String,
     pub path: String,

@@ -10,26 +10,32 @@
 //! installed shortcuts via `IShellLinkW::GetPath`; registry entries only when
 //! `DisplayIcon` / `InstallLocation` point at an existing `.exe`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-/// A discovered application: display label, verified exe name and full path
-/// when known. `path` is empty only when the OS refused to disclose the image
-/// path (running processes) — never because we guessed from the label.
+/// A discovered application: stable identity, display label, verified exe name
+/// and full path when known. `path` is empty only when the OS refused to
+/// disclose the image path (running processes) — never because we guessed from
+/// the label. `id` is the canonical dedup identity (see `identity_key`) and is
+/// what both frontend lists key on, so it must be unique within a list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppEntry {
+    pub id: String,
     pub label: String,
     pub exe: String,
     pub path: String,
 }
 
-/// Dedup identity: `(normalized label key, normalized full path)`.
-///
-/// Path-bearing entries are keyed by BOTH label and path, so two verified
-/// installations with the same label and exe name but different full paths are
-/// preserved (Finding 2). Pathless entries use an empty path, so they still
-/// dedup among themselves by label only.
-type DedupKey = (String, String);
-type SeenMap = HashMap<DedupKey, (usize, u8)>;
+/// A raw discovery result before dedup. `priority` is the quality of the
+/// *label source*: registry `DisplayName` = 3, Start Menu `.lnk` target-exe
+/// label = 2, running process image name = 1. Higher wins when several
+/// candidates collapse onto the same identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AppCandidate {
+    label: String,
+    exe: String,
+    path: String,
+    priority: u8,
+}
 
 const JUNK_PHRASES: &[&str] = &[
     "uninstall",
@@ -105,19 +111,23 @@ fn is_junk(label: &str) -> bool {
     JUNK_WORDS.iter().any(|w| tokens.contains(w))
 }
 
-fn dedup_key(clean: &str) -> String {
-    clean
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Normalize a full path for dedup identity: trim, `/` → `\`, lowercase.
 /// Mirrors `engine::normalize_path` so the same installation is recognized
 /// regardless of separator case or style.
 fn dedup_path_key(path: &str) -> String {
     path.trim().replace('/', "\\").to_lowercase()
+}
+
+/// Canonical, stable identity for an app. Verified paths use a `path:` prefix
+/// built from the normalized full path; pathless entries use an `exe:` prefix
+/// built from the trimmed, lowercased exe name. The distinct prefixes guarantee
+/// a pathless entry can never collide with a path-bearing one.
+fn identity_key(exe: &str, path: &str) -> String {
+    if path.trim().is_empty() {
+        format!("exe:{}", exe.trim().to_lowercase())
+    } else {
+        format!("path:{}", dedup_path_key(path))
+    }
 }
 
 /// Parse one line of `tasklist /FO CSV /NH` into unquoted fields.
@@ -227,82 +237,119 @@ fn verified_exe<F: Fn(&str) -> bool>(candidate: &str, exists: F) -> Option<(Stri
     Some((exe, path))
 }
 
-/// Insert or replace an entry. A verified full path always beats an entry
-/// without one, regardless of label length or source priority (Decision 2).
-/// Entries with DIFFERENT verified full paths are kept as separate entries even
-/// when their label and exe name are identical (Finding 2).
-fn push_app(
-    label: String,
-    exe: String,
-    path: String,
-    priority: u8,
-    apps: &mut Vec<AppEntry>,
-    seen: &mut SeenMap,
+/// Returns true when `a` is a strictly better representative of an identity
+/// than `b`. Label quality is ordered by: higher source priority, then shorter
+/// cleaned label, then lexicographically smaller cleaned label. The final two
+/// tiebreakers (raw exe, raw path) make the choice fully order-independent even
+/// when two candidates are indistinguishable by label quality.
+fn candidate_is_better(a: &AppCandidate, b: &AppCandidate) -> bool {
+    if a.priority != b.priority {
+        return a.priority > b.priority;
+    }
+    let a_clean = clean_label(&a.label);
+    let b_clean = clean_label(&b.label);
+    if a_clean.len() != b_clean.len() {
+        return a_clean.len() < b_clean.len();
+    }
+    if a_clean != b_clean {
+        return a_clean < b_clean;
+    }
+    if a.exe != b.exe {
+        return a.exe < b.exe;
+    }
+    a.path < b.path
+}
+
+/// Keep the best candidate for `id` in `by_identity`, replacing the incumbent
+/// only when the newcomer is strictly better (see `candidate_is_better`).
+fn insert_best(
+    by_identity: &mut HashMap<String, AppCandidate>,
+    id: String,
+    candidate: AppCandidate,
 ) {
-    let clean = clean_label(&label);
-    // Never fabricate an exe from a label: an entry without an exe is useless
-    // for resolution and must be dropped rather than guessed.
-    if clean.is_empty() || is_junk(&clean) || exe.is_empty() {
-        return;
-    }
-    let label_key = dedup_key(&clean);
-    if label_key.is_empty() {
-        return;
-    }
-    let path_key = dedup_path_key(&path);
-    let key = (label_key.clone(), path_key.clone());
-
-    // Same identity (same label + same normalized path): keep the better entry.
-    if let Some(&(idx, old_prio)) = seen.get(&key) {
-        let old_has_path = !apps[idx].path.is_empty();
-        let new_has_path = !path.is_empty();
-        let better = if new_has_path != old_has_path {
-            new_has_path
-        } else {
-            clean.len() < apps[idx].label.len()
-                || (clean.len() == apps[idx].label.len() && priority > old_prio)
-        };
-        if better {
-            apps[idx] = AppEntry {
-                label: clean,
-                exe,
-                path,
-            };
-            seen.insert(key, (idx, priority));
+    match by_identity.get_mut(&id) {
+        Some(existing) => {
+            if candidate_is_better(&candidate, existing) {
+                *existing = candidate;
+            }
         }
-        return;
-    }
-
-    if !path_key.is_empty() {
-        // A verified path always supersedes a pathless entry with the same
-        // label (Decision 2). Replace it in place rather than adding a second,
-        // strictly-worse entry.
-        let pathless_key = (label_key.clone(), String::new());
-        if let Some(&(idx, _)) = seen.get(&pathless_key) {
-            apps[idx] = AppEntry {
-                label: clean,
-                exe,
-                path,
-            };
-            seen.remove(&pathless_key);
-            seen.insert(key, (idx, priority));
-            return;
-        }
-    } else {
-        // A pathless entry never displaces a verified path-bearing entry with
-        // the same label — that would reintroduce a strictly-worse duplicate.
-        let has_path_bearing = seen.keys().any(|(k, p)| k == &label_key && !p.is_empty());
-        if has_path_bearing {
-            return;
+        None => {
+            by_identity.insert(id, candidate);
         }
     }
+}
 
-    seen.insert(key, (apps.len(), priority));
-    apps.push(AppEntry {
-        label: clean,
-        exe,
-        path,
-    });
+/// Pure, order-independent dedup of raw discovery candidates.
+///
+/// Two passes keep path-bearing and pathless identities disjoint:
+///   1. Path-bearing candidates are grouped ONLY by `path:` identity, so two
+///      distinct verified paths with the same exe name stay separate. Their
+///      lowercased exe names are recorded as "verified".
+///   2. Pathless candidates are kept ONLY when their exe name has no verified
+///      path, then grouped by `exe:` identity.
+///
+/// Within an identity the best label wins by `candidate_is_better`. Empty/junk
+/// labels and empty exes are dropped. No Windows or registry access here.
+fn dedup_apps(candidates: Vec<AppCandidate>) -> Vec<AppEntry> {
+    let (with_path, without_path): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|c| !c.path.trim().is_empty());
+
+    let mut by_identity: HashMap<String, AppCandidate> = HashMap::new();
+    let mut verified_exes: HashSet<String> = HashSet::new();
+
+    // Pass 1 — path-bearing candidates, grouped by path identity only.
+    for c in with_path {
+        let clean = clean_label(&c.label);
+        // Never fabricate an exe from a label: an entry without an exe is
+        // useless for resolution and must be dropped rather than guessed.
+        if clean.is_empty() || is_junk(&clean) || c.exe.trim().is_empty() {
+            continue;
+        }
+        // Record the exe only for candidates that survive filtering, so a
+        // dropped (e.g. junk-labelled) path cannot suppress a valid pathless
+        // entry for the same exe.
+        verified_exes.insert(c.exe.trim().to_lowercase());
+        let id = identity_key(&c.exe, &c.path);
+        insert_best(&mut by_identity, id, c);
+    }
+
+    // Pass 2 — pathless candidates, kept only when the exe has no verified path.
+    for c in without_path {
+        let clean = clean_label(&c.label);
+        if clean.is_empty() || is_junk(&clean) || c.exe.trim().is_empty() {
+            continue;
+        }
+        if verified_exes.contains(&c.exe.trim().to_lowercase()) {
+            continue;
+        }
+        let id = identity_key(&c.exe, &c.path);
+        insert_best(&mut by_identity, id, c);
+    }
+
+    let mut apps: Vec<AppEntry> = by_identity
+        .into_iter()
+        .map(|(id, c)| AppEntry {
+            id,
+            label: clean_label(&c.label),
+            exe: c.exe,
+            path: c.path,
+        })
+        .collect();
+    // HashMap iteration order is arbitrary; sort so this pure function returns
+    // a deterministic result regardless of candidate insertion order.
+    apps.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
+    apps
+}
+
+/// Finalize the installed-app list: dedup, sort by `(label, id)`, then apply
+/// the cap. The cap is applied AFTER dedup so a burst of duplicate candidates
+/// cannot crowd out distinct applications.
+fn finalize_installed_apps(candidates: Vec<AppCandidate>, cap: usize) -> Vec<AppEntry> {
+    let mut apps = dedup_apps(candidates);
+    apps.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
+    apps.truncate(cap);
+    apps
 }
 
 #[cfg(windows)]
@@ -366,7 +413,7 @@ fn resolve_lnk_target(lnk: &std::path::Path) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn scan_lnk_dir(dir: &std::path::Path, depth: u32, apps: &mut Vec<AppEntry>, seen: &mut SeenMap) {
+fn scan_lnk_dir(dir: &std::path::Path, depth: u32, out: &mut Vec<AppCandidate>) {
     if depth > 2 {
         return;
     }
@@ -377,7 +424,7 @@ fn scan_lnk_dir(dir: &std::path::Path, depth: u32, apps: &mut Vec<AppEntry>, see
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            scan_lnk_dir(&path, depth + 1, apps, seen);
+            scan_lnk_dir(&path, depth + 1, out);
         } else if path
             .extension()
             .and_then(|e| e.to_str())
@@ -391,11 +438,19 @@ fn scan_lnk_dir(dir: &std::path::Path, depth: u32, apps: &mut Vec<AppEntry>, see
             else {
                 continue;
             };
+            // The label is derived from the target executable's file name via
+            // clean_label(&exe), NOT from the shortcut's file name. Priority 2:
+            // Start Menu .lnk target-exe label.
             let label = clean_label(&exe);
             if label.is_empty() {
                 continue;
             }
-            push_app(label, exe, full, 2, apps, seen);
+            out.push(AppCandidate {
+                label,
+                exe,
+                path: full,
+                priority: 2,
+            });
         }
     }
 }
@@ -441,7 +496,7 @@ fn reg_values(key: &str, value_name: &str) -> HashMap<String, String> {
 }
 
 #[cfg(windows)]
-fn scan_uninstall_key(key: &str, apps: &mut Vec<AppEntry>, seen: &mut SeenMap) {
+fn scan_uninstall_key(key: &str, out: &mut Vec<AppCandidate>) {
     let names = reg_values(key, "DisplayName");
     let icons = reg_values(key, "DisplayIcon");
     let locations = reg_values(key, "InstallLocation");
@@ -463,7 +518,13 @@ fn scan_uninstall_key(key: &str, apps: &mut Vec<AppEntry>, seen: &mut SeenMap) {
         let Some((exe, path)) = verified else {
             continue;
         };
-        push_app(label, exe, path, 1, apps, seen);
+        // Priority 3: registry DisplayName is the highest-quality label source.
+        out.push(AppCandidate {
+            label,
+            exe,
+            path,
+            priority: 3,
+        });
     }
 }
 
@@ -472,8 +533,7 @@ fn scan_uninstall_key(key: &str, apps: &mut Vec<AppEntry>, seen: &mut SeenMap) {
 pub fn enumerate_installed_apps() -> Vec<AppEntry> {
     #[cfg(windows)]
     {
-        let mut apps: Vec<AppEntry> = Vec::new();
-        let mut seen: SeenMap = SeenMap::new();
+        let mut candidates: Vec<AppCandidate> = Vec::new();
         let mut roots: Vec<std::path::PathBuf> = Vec::new();
         if let Ok(appdata) = std::env::var("APPDATA") {
             roots.push(
@@ -487,19 +547,17 @@ pub fn enumerate_installed_apps() -> Vec<AppEntry> {
             );
         }
         for root in &roots {
-            scan_lnk_dir(root, 0, &mut apps, &mut seen);
+            scan_lnk_dir(root, 0, &mut candidates);
         }
         for key in [
             r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
             r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
             r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         ] {
-            scan_uninstall_key(key, &mut apps, &mut seen);
+            scan_uninstall_key(key, &mut candidates);
         }
-        apps.sort_by(|a, b| a.label.cmp(&b.label));
         let cap = crate::config::loaded_settings().app_list_cap;
-        apps.truncate(cap);
-        apps
+        finalize_installed_apps(candidates, cap)
     }
     #[cfg(not(windows))]
     {
@@ -553,8 +611,7 @@ fn enumerate_running_processes() -> Vec<RunningProcess> {
 pub fn enumerate_running_apps() -> Vec<AppEntry> {
     #[cfg(windows)]
     {
-        let mut apps: Vec<AppEntry> = Vec::new();
-        let mut seen: SeenMap = SeenMap::new();
+        let mut candidates: Vec<AppCandidate> = Vec::new();
         for p in enumerate_running_processes() {
             let (exe, path) = if p.path.is_empty() {
                 // Lookup failed: keep it selectable with the process name as
@@ -567,9 +624,16 @@ pub fn enumerate_running_apps() -> Vec<AppEntry> {
             if clean.is_empty() {
                 continue;
             }
-            push_app(clean, exe, path, 0, &mut apps, &mut seen);
+            // Priority 1: running process image name (lowest-quality label).
+            candidates.push(AppCandidate {
+                label: clean,
+                exe,
+                path,
+                priority: 1,
+            });
         }
-        apps.sort_by(|a, b| a.label.cmp(&b.label));
+        let mut apps = dedup_apps(candidates);
+        apps.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
         apps
     }
     #[cfg(not(windows))]
@@ -613,10 +677,12 @@ pub fn browse() -> Vec<AppEntry> {
         .and_then(|s| s.to_str())
         .unwrap_or("app.exe")
         .to_string();
+    let path = path.to_string_lossy().into_owned();
     vec![AppEntry {
+        id: identity_key(&exe, &path),
         label: clean_label(&label),
         exe,
-        path: path.to_string_lossy().into_owned(),
+        path,
     }]
 }
 
@@ -625,6 +691,16 @@ pub fn browse() -> Vec<AppEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a synthetic discovery candidate without touching the registry.
+    fn candidate(label: &str, exe: &str, path: &str, priority: u8) -> AppCandidate {
+        AppCandidate {
+            label: label.into(),
+            exe: exe.into(),
+            path: path.into(),
+            priority,
+        }
+    }
 
     #[test]
     fn clean_label_strips_exe_parentheticals_and_versions() {
@@ -637,31 +713,6 @@ mod tests {
         assert!(is_junk("App Uninstaller"));
         assert!(is_junk("Help"));
         assert!(!is_junk("Visual Studio Code"));
-    }
-
-    #[test]
-    fn push_app_deduplicates_and_prefers_shorter_label() {
-        let mut apps = Vec::new();
-        let mut seen = SeenMap::new();
-        push_app(
-            "Chrome".into(),
-            "chrome.exe".into(),
-            String::new(),
-            1,
-            &mut apps,
-            &mut seen,
-        );
-        push_app(
-            "CHROME".into(),
-            "chrome2.exe".into(),
-            String::new(),
-            2,
-            &mut apps,
-            &mut seen,
-        );
-        assert_eq!(apps.len(), 1);
-        // Equal-length labels: the higher-priority source wins.
-        assert_eq!(apps[0].exe, "chrome2.exe");
     }
 
     #[test]
@@ -747,53 +798,62 @@ mod tests {
     }
 
     #[test]
-    fn dedup_prefers_path_bearing_entry_regardless_of_label_or_priority() {
-        let mut apps = Vec::new();
-        let mut seen = SeenMap::new();
-        // Same dedup key, high priority, but no verified path.
-        push_app(
-            "App".into(),
-            "app.exe".into(),
-            String::new(),
-            9,
-            &mut apps,
-            &mut seen,
+    fn dedup_path_key_ignores_separator_and_case() {
+        assert_eq!(
+            dedup_path_key(r"C:/Program Files/Vendor/App.EXE"),
+            dedup_path_key(r"c:\program files\vendor\app.exe")
         );
-        // Same key, lower priority, but a real path — must win.
-        push_app(
-            "APP".into(),
-            "real.exe".into(),
-            r"C:\Program Files\Vendor\real.exe".into(),
-            1,
-            &mut apps,
-            &mut seen,
+    }
+
+    // ---- Regression tests for the duplicate-key crash (synthetic fixtures) ----
+
+    #[test]
+    fn dedup_same_path_different_labels_registry_wins() {
+        // Same verified path, two labels from different sources. The registry
+        // DisplayName (priority 3) must beat the .lnk label (priority 2).
+        let apps = dedup_apps(vec![
+            candidate("AgnesCode", "AgnesCode.exe", r"C:\Apps\AgnesCode.exe", 2),
+            candidate("Agnes Code", "AgnesCode.exe", r"C:\Apps\AgnesCode.exe", 3),
+        ]);
+        assert_eq!(apps.len(), 1, "same path must collapse to one entry");
+        assert_eq!(apps[0].label, "Agnes Code");
+        assert_eq!(
+            apps[0].id,
+            identity_key("AgnesCode.exe", r"C:\Apps\AgnesCode.exe")
         );
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].exe, "real.exe");
-        assert_eq!(apps[0].path, r"C:\Program Files\Vendor\real.exe");
+    }
+
+    #[test]
+    fn dedup_same_exe_different_paths_stays_separate() {
+        // Two verified installations of the same exe name must remain distinct.
+        let apps = dedup_apps(vec![
+            candidate(
+                "msedge",
+                "msedge.exe",
+                r"C:\Program Files\Edge\msedge.exe",
+                2,
+            ),
+            candidate("msedge", "msedge.exe", r"D:\Portable\msedge.exe", 2),
+        ]);
+        assert_eq!(apps.len(), 2, "distinct verified paths must survive dedup");
+        let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        assert!(ids.contains(&r"path:c:\program files\edge\msedge.exe"));
+        assert!(ids.contains(&r"path:d:\portable\msedge.exe"));
+        assert_ne!(apps[0].id, apps[1].id, "path identities must be distinct");
     }
 
     #[test]
     fn dedup_preserves_distinct_paths_with_identical_label_and_exe() {
-        let mut apps = Vec::new();
-        let mut seen = SeenMap::new();
-        // Two verified installations: same label, same exe name, different paths.
-        push_app(
-            "Chrome".into(),
-            "chrome.exe".into(),
-            r"C:\Program Files\Google\Chrome\chrome.exe".into(),
-            2,
-            &mut apps,
-            &mut seen,
-        );
-        push_app(
-            "Chrome".into(),
-            "chrome.exe".into(),
-            r"D:\Portable\chrome.exe".into(),
-            2,
-            &mut apps,
-            &mut seen,
-        );
+        // Even identical labels + exe names must not collapse distinct paths.
+        let apps = dedup_apps(vec![
+            candidate(
+                "Chrome",
+                "chrome.exe",
+                r"C:\Program Files\Google\Chrome\chrome.exe",
+                2,
+            ),
+            candidate("Chrome", "chrome.exe", r"D:\Portable\chrome.exe", 2),
+        ]);
         assert_eq!(
             apps.len(),
             2,
@@ -808,28 +868,151 @@ mod tests {
     }
 
     #[test]
-    fn dedup_path_key_ignores_separator_and_case() {
-        assert_eq!(
-            dedup_path_key(r"C:/Program Files/Vendor/App.EXE"),
-            dedup_path_key(r"c:\program files\vendor\app.exe")
+    fn dedup_path_case_and_separator_variants_collapse() {
+        // Casing and slash style differences must map to one path identity.
+        let apps = dedup_apps(vec![
+            candidate("a", "a.exe", r"C:\App\a.exe", 2),
+            candidate("A", "A.EXE", r"c:/app/A.EXE", 2),
+        ]);
+        assert_eq!(apps.len(), 1, "path variants must collapse to one entry");
+        assert_eq!(apps[0].id, r"path:c:\app\a.exe");
+    }
+
+    #[test]
+    fn dedup_pathless_uses_exe_identity_and_never_collides_with_paths() {
+        // Pathless entries get exe: ids; distinct exe names stay distinct; a
+        // pathless entry whose exe has a verified path is dropped.
+        let apps = dedup_apps(vec![
+            candidate("Foo", "foo.exe", "", 1),
+            candidate("Bar", "bar.exe", "", 1),
+            candidate("Baz", "baz.exe", "", 1),
+            candidate("Foo Installed", "foo.exe", r"C:\Apps\foo.exe", 3),
+        ]);
+        assert_eq!(apps.len(), 3);
+        let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        assert!(ids.contains(&"exe:bar.exe"), "pathless bar.exe survives");
+        assert!(ids.contains(&"exe:baz.exe"), "pathless baz.exe survives");
+        assert!(
+            ids.contains(&r"path:c:\apps\foo.exe"),
+            "path-bearing foo.exe survives"
+        );
+        assert!(
+            !ids.contains(&"exe:foo.exe"),
+            "pathless foo.exe must be dropped: foo.exe has a verified path"
         );
     }
 
     #[test]
-    fn push_app_never_guesses_exe_from_label() {
-        let mut apps = Vec::new();
-        let mut seen = SeenMap::new();
-        push_app(
-            "Mystery App".into(),
-            String::new(),
-            String::new(),
-            1,
-            &mut apps,
-            &mut seen,
+    fn dedup_is_order_independent_for_pathless_and_distinct_paths() {
+        // Both insertion orders must yield the same result: both verified paths
+        // kept, the pathless entry with the same exe name dropped.
+        let pathless = candidate("msedge", "msedge.exe", "", 1);
+        let path_a = candidate("Edge", "msedge.exe", r"C:\Program Files\Edge\msedge.exe", 2);
+        let path_b = candidate("Edge Portable", "msedge.exe", r"D:\Portable\msedge.exe", 2);
+
+        let forward = dedup_apps(vec![pathless.clone(), path_a.clone(), path_b.clone()]);
+        let reverse = dedup_apps(vec![path_b, path_a, pathless]);
+
+        assert_eq!(
+            forward.len(),
+            2,
+            "both verified paths kept, pathless dropped"
         );
+        assert_eq!(
+            forward, reverse,
+            "result must not depend on insertion order"
+        );
+        let ids: Vec<&str> = forward.iter().map(|a| a.id.as_str()).collect();
+        assert!(ids.contains(&r"path:c:\program files\edge\msedge.exe"));
+        assert!(ids.contains(&r"path:d:\portable\msedge.exe"));
+        assert!(!ids.contains(&"exe:msedge.exe"));
+    }
+
+    #[test]
+    fn dedup_prefers_registry_label_over_lnk_for_same_path() {
+        // Duplicates from different sources for the same path collapse to one
+        // entry carrying the better (registry) label.
+        let apps = dedup_apps(vec![
+            candidate("chrome", "chrome.exe", r"C:\Chrome\chrome.exe", 2), // .lnk
+            candidate("Google Chrome", "chrome.exe", r"C:\Chrome\chrome.exe", 3), // registry
+        ]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].label, "Google Chrome");
+    }
+
+    #[test]
+    fn dedup_prefers_higher_priority_for_same_identity() {
+        // Equal-length cleaned labels: the higher-priority source wins.
+        let apps = dedup_apps(vec![
+            candidate("Chrome", "chrome.exe", "", 1),
+            candidate("CHROME", "chrome.exe", "", 2),
+        ]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].label, "CHROME");
+        assert_eq!(apps[0].id, "exe:chrome.exe");
+    }
+
+    #[test]
+    fn dedup_prefers_path_bearing_entry_over_pathless_same_exe() {
+        // A verified path beats a pathless entry with the same exe regardless
+        // of the pathless entry's label priority.
+        let apps = dedup_apps(vec![
+            candidate("App", "app.exe", "", 9),
+            candidate("APP", "app.exe", r"C:\Program Files\Vendor\app.exe", 1),
+        ]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].exe, "app.exe");
+        assert_eq!(apps[0].path, r"C:\Program Files\Vendor\app.exe");
+        assert_eq!(apps[0].id, r"path:c:\program files\vendor\app.exe");
+    }
+
+    #[test]
+    fn dedup_never_guesses_exe_from_label() {
+        let apps = dedup_apps(vec![candidate("Mystery App", "", "", 1)]);
         assert!(
             apps.is_empty(),
             "an entry without a verified exe must be skipped"
+        );
+    }
+
+    #[test]
+    fn finalize_applies_cap_after_dedup() {
+        // 10 raw candidates collapse to 3 identities. The first three raw
+        // candidates all belong to one identity, so a cap applied BEFORE dedup
+        // would yield only one entry — this test would catch that regression.
+        let mut candidates = Vec::new();
+        for i in 0..3 {
+            candidates.push(candidate(
+                &format!("Alpha {i}"),
+                "a.exe",
+                r"C:\Apps\a.exe",
+                2,
+            ));
+        }
+        for i in 0..4 {
+            candidates.push(candidate(
+                &format!("Beta {i}"),
+                "b.exe",
+                r"C:\Apps\b.exe",
+                2,
+            ));
+        }
+        for i in 0..3 {
+            candidates.push(candidate(
+                &format!("Gamma {i}"),
+                "c.exe",
+                r"C:\Apps\c.exe",
+                2,
+            ));
+        }
+        assert_eq!(candidates.len(), 10);
+        let apps = finalize_installed_apps(candidates, 3);
+        assert_eq!(apps.len(), 3, "cap must be applied after dedup, not before");
+        let ids: HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(
+            ids.len(),
+            3,
+            "the three entries must be distinct identities"
         );
     }
 

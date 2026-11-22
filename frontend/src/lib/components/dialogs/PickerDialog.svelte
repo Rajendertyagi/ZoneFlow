@@ -145,7 +145,7 @@
                 {:else if filtered.length === 0}
                   <p class="p-4 text-sm text-zf-faint">No applications found.</p>
                 {:else}
-                  {#each filtered as app (app.exe + app.path)}
+                  {#each filtered as app (app.id)}
                     <button
                       type="button"
                       onclick={() => (selected = app)}

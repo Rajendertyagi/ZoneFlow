@@ -286,6 +286,7 @@ impl Inner {
     pub fn app_dtos(apps: &[crate::apps::AppEntry]) -> Vec<AppEntryDto> {
         apps.iter()
             .map(|a| AppEntryDto {
+                id: a.id.clone(),
                 label: a.label.clone(),
                 exe: a.exe.clone(),
                 path: a.path.clone(),

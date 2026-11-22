@@ -107,6 +107,7 @@ export interface ProfileSummary {
 }
 
 export interface AppEntryDto {
+  id: string;
   label: string;
   exe: string;
   path: string;
