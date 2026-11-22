@@ -10,6 +10,8 @@
     type SseEvent,
   } from '$lib/api/events';
   import { isDirty, store } from '$lib/state/app.svelte';
+  import { getCanvasCommands } from '$lib/state/canvas-commands';
+  import { resolveUndoShortcut } from '$lib/state/undo-shortcut';
   import {
     dismissToast,
     navigate,
@@ -64,12 +66,48 @@
     }
   }
 
+  /**
+   * Global undo/redo shortcuts. The pure helper gates on view, dialogs, typing
+   * target and can_undo/can_redo; the canvas registry supplies the real logic.
+   */
+  function onGlobalKeydown(event: KeyboardEvent): void {
+    const action = resolveUndoShortcut(
+      {
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        target: event.target,
+      },
+      {
+        view: ui.view,
+        canUndo: store.snapshot?.can_undo ?? false,
+        canRedo: store.snapshot?.can_redo ?? false,
+        dialogOpen:
+          wizardOpen ||
+          pickerOpen ||
+          closeOpen ||
+          ui.confirmRequest !== null ||
+          ui.promptRequest !== null,
+      },
+    );
+    if (action === null) return;
+    const commands = getCanvasCommands();
+    if (!commands) return;
+    event.preventDefault();
+    if (action === 'undo') commands.undo();
+    else commands.redo();
+  }
+
   onMount(() => {
     setSseEventHandler(onSseEvent);
     window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('keydown', onGlobalKeydown);
     initialize();
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('keydown', onGlobalKeydown);
       setSseEventHandler(null);
       stopEvents();
     };

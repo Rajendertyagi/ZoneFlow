@@ -6,7 +6,13 @@
    * All pointer gestures are resolved locally into `$state` previews and only
    * committed through the typed client on `pointerup` — never per pointermove.
    */
+  import { onMount } from 'svelte';
   import ContextMenu from '$lib/components/ui/context-menu.svelte';
+  import {
+    registerCanvasCommands,
+    unregisterCanvasCommands,
+    type CanvasCommands,
+  } from '$lib/state/canvas-commands';
   import {
     api,
     type AssignDto,
@@ -486,6 +492,15 @@
   }
 
   export { addZone, undo, redo };
+
+  // Make undo/redo reachable by the global keyboard handler in App.svelte.
+  // The identity-checked unregister keeps a stale teardown from clearing a
+  // newer registration if the editor canvas is ever remounted.
+  const commands: CanvasCommands = { undo, redo };
+  onMount(() => {
+    registerCanvasCommands(commands);
+    return () => unregisterCanvasCommands(commands);
+  });
 
   export function getSelectedId(): number | null {
     return selectedId;
