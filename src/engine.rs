@@ -35,7 +35,7 @@ const DWM_SNAP_RETRIES: u32 = 2;
 
 /// Default minimum window size (px) used when no config is available. Callers
 /// that have a config pass `settings.min_window_px` to
-/// [`find_window_by_path_min`] / [`execute_zone_with_config`] instead.
+/// [`find_window_by_paths_min`] / [`execute_zone_with_config`] instead.
 const DEFAULT_MIN_WINDOW_PX: i32 = 150;
 
 /// Work area of the primary monitor (excludes taskbar). Nothing hardcoded.
@@ -162,7 +162,10 @@ pub fn move_window_with_retries(hwnd: HWND, zone: Rect, retries: u32) {
     }
 }
 
-fn process_path(pid: u32) -> Option<String> {
+/// Full image path of a process, via `OpenProcess` +
+/// `QueryFullProcessImageNameW`. `pub(crate)` so app enumeration can reuse the
+/// single Win32 implementation instead of duplicating it (Decision 1).
+pub(crate) fn process_path(pid: u32) -> Option<String> {
     // SAFETY: `OpenProcess` is checked with `.ok()?`, so `h` is a valid handle that
     // we close exactly once. `buf` is a 1024-element `u16` array; its pointer and
     // the capacity in `len` are passed to `QueryFullProcessImageNameW`, which on
@@ -249,23 +252,20 @@ fn normalize_path(path: &str) -> String {
     path.trim().replace('/', "\\").to_lowercase()
 }
 
+/// Context for `EnumWindows`: strict full-path candidates only. There is no
+/// exe-name or title comparison here — window identity is established solely
+/// by the owning process's full image path (Decision 4).
 struct FindCtx {
-    /// True when the caller supplied a non-empty full path to match.
-    path_requested: bool,
-    /// Lowercased exe name to match (always used as the fallback).
-    target_exe: String,
-    /// Normalized full path to prefer when `path_requested` is true.
-    target_path: String,
+    /// Normalized candidate full paths (case/separator normalized once).
+    candidates: Vec<String>,
     /// Minimum real-window size in pixels (from `settings.min_window_px`).
     min_px: i32,
-    /// Exact path match (or, in exe-only mode, the first exe-name match).
+    /// First matching window handle.
     found: Option<HWND>,
-    /// First exe-name match seen while searching for a better path match.
-    exe_match: Option<HWND>,
 }
 
 // SAFETY: this callback is only ever handed to `EnumWindows` by
-// `find_window_by_path_min`, which invokes it on the calling thread with a valid
+// `find_window_by_paths_min`, which invokes it on the calling thread with a valid
 // `HWND` and with `lparam` set to the address of a live `FindCtx`. We dereference
 // that pointer only while the callback runs, before the caller returns and drops
 // the context. Returning `BOOL(1)` continues enumeration; `BOOL(0)` stops it.
@@ -280,50 +280,32 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     let Some(path) = process_path(pid) else {
         return BOOL(1);
     };
-    let exe = path.rsplit('\\').next().unwrap_or("").to_lowercase();
-    if exe == ctx.target_exe {
-        if !ctx.path_requested {
-            // Legacy exe-only behaviour: first match wins, stop enumerating.
-            ctx.found = Some(hwnd);
-            return BOOL(0);
-        }
-        // Path mode: remember the first exe-name match as a fallback but keep
-        // looking for an exact full-path match.
-        if ctx.exe_match.is_none() {
-            ctx.exe_match = Some(hwnd);
-        }
-    }
-    if ctx.path_requested && normalize_path(&path) == ctx.target_path {
+    if path_matches(&path, &ctx.candidates) {
         ctx.found = Some(hwnd);
         return BOOL(0);
     }
     BOOL(1)
 }
 
-/// Find a window by exe name, optionally preferring an exact full-path match.
-///
-/// When `path` is non-empty the enumeration continues past exe-name matches so
-/// a window whose full process path matches (case-insensitive, `/` and `\`
-/// normalized) wins; the first exe-name match is kept as a fallback. When `path`
-/// is empty this is identical to [`find_window`]: the first exe-name match wins.
-///
-/// Public compatibility wrapper; config-aware callers use
-/// [`find_window_by_path_min`] so `settings.min_window_px` is honoured.
-#[allow(dead_code)]
-pub fn find_window_by_path(exe: &str, path: &str) -> Option<HWND> {
-    find_window_by_path_min(exe, path, DEFAULT_MIN_WINDOW_PX)
+/// Pure strict-path predicate: does `process_path` equal any normalized
+/// candidate? No exe-name or title fallback exists by design (Decision 4).
+fn path_matches(process_path: &str, normalized_candidates: &[String]) -> bool {
+    let normalized = normalize_path(process_path);
+    normalized_candidates.iter().any(|c| c == &normalized)
 }
 
-/// Config-driven variant of [`find_window_by_path`] using `min_px` as the
-/// minimum real-window size (from `settings.min_window_px`).
-pub fn find_window_by_path_min(exe: &str, path: &str, min_px: i32) -> Option<HWND> {
+/// Find a window whose owning process image path exactly matches one of
+/// `candidates` (case-insensitive, `/` and `\` normalized). `min_px` is the
+/// minimum real-window size from `settings.min_window_px`.
+pub fn find_window_by_paths_min(candidates: &[String], min_px: i32) -> Option<HWND> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let normalized: Vec<String> = candidates.iter().map(|c| normalize_path(c)).collect();
     let mut ctx = FindCtx {
-        path_requested: !path.is_empty(),
-        target_exe: exe.to_lowercase(),
-        target_path: normalize_path(path),
+        candidates: normalized,
         min_px,
         found: None,
-        exe_match: None,
     };
     // SAFETY: `ctx` is a live stack local for the whole call. Its address is
     // passed as `LPARAM` to `EnumWindows`, whose callback casts it back to
@@ -334,14 +316,142 @@ pub fn find_window_by_path_min(exe: &str, path: &str, min_px: i32) -> Option<HWN
             tracing::warn!(error = %e, "EnumWindows failed during window lookup");
         }
     }
-    ctx.found.or(ctx.exe_match)
+    ctx.found
 }
 
-/// Public compatibility wrapper (exe-only lookup). Kept unchanged per the
-/// engine API contract; config-aware callers use [`find_window_by_path_min`].
-#[allow(dead_code)]
-pub fn find_window(exe: &str) -> Option<HWND> {
-    find_window_by_path(exe, "")
+/// Where a resolved candidate path came from. Recorded for diagnostics and
+/// tests; it never affects window matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolutionSource {
+    ExactConfig,
+    RunningProcess,
+    LaunchedProcess,
+}
+
+/// Resolution of a zone's assignment to candidate full paths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneResolution {
+    /// Both `exe` and `path` are empty — nothing assigned.
+    Unassigned,
+    /// `exe` is set but no full path could be obtained in attach mode.
+    Unresolved,
+    /// One or more candidate full paths, with the source they came from.
+    Resolved {
+        candidates: Vec<String>,
+        source: ResolutionSource,
+    },
+}
+
+/// Why a zone could not be arranged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneFailure {
+    Unassigned,
+    Unresolved,
+    NotRunning,
+    NoEligibleWindow,
+    LaunchFailed,
+}
+
+/// Outcome of executing one zone. `launched` is true only when this call
+/// actually spawned a process — never a statement of intent. It is carried on
+/// **both** variants so a launch that produced no eligible window is still
+/// recorded as having launched (Decision 6/7: accurate per-zone outcomes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneExecution {
+    Snapped {
+        message: String,
+        launched: bool,
+    },
+    Failed {
+        failure: ZoneFailure,
+        message: String,
+        launched: bool,
+    },
+}
+
+impl ZoneExecution {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Snapped { message, .. } | Self::Failed { message, .. } => message,
+        }
+    }
+
+    pub fn is_success(&self) -> bool {
+        matches!(self, Self::Snapped { .. })
+    }
+
+    /// Whether this zone's execution actually spawned a process, regardless of
+    /// whether it ended in success or failure.
+    pub fn launched(&self) -> bool {
+        match self {
+            Self::Snapped { launched, .. } | Self::Failed { launched, .. } => *launched,
+        }
+    }
+}
+
+/// Build the failure outcome for "no eligible window found". Pure so the
+/// `launched` flag can be pinned down by a test without spawning a real process.
+fn no_window_execution(failure: ZoneFailure, message: String, launched: bool) -> ZoneExecution {
+    ZoneExecution::Failed {
+        failure,
+        message,
+        launched,
+    }
+}
+
+/// Resolve a zone's assignment to candidate full paths from config and the
+/// supplied running-process paths. **This is resolution, not window matching:**
+/// the exe basename is compared only to obtain candidate full paths from
+/// process identity. Window identity is always established by strict full-path
+/// comparison in [`find_window_by_paths_min`]. No `SearchPathW` is used — its
+/// registry-dependent search order can disagree with `CreateProcess`.
+pub fn resolve_zone_paths(zone: &Zone, running_paths: &[String]) -> ZoneResolution {
+    if !zone.path.trim().is_empty() {
+        return ZoneResolution::Resolved {
+            candidates: vec![zone.path.trim().to_string()],
+            source: ResolutionSource::ExactConfig,
+        };
+    }
+    if zone.exe.trim().is_empty() {
+        return ZoneResolution::Unassigned;
+    }
+    let target = zone.exe.trim();
+    let candidates: Vec<String> = running_paths
+        .iter()
+        .filter(|p| {
+            p.rsplit(['\\', '/'])
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case(target))
+        })
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        ZoneResolution::Unresolved
+    } else {
+        ZoneResolution::Resolved {
+            candidates,
+            source: ResolutionSource::RunningProcess,
+        }
+    }
+}
+
+/// Build a `LaunchedProcess` resolution from a spawned child's PID. The path
+/// returned by `QueryFullProcessImageNameW` is the exact image `CreateProcess`
+/// launched, by construction (Decision 3).
+pub fn resolution_from_pid(pid: u32) -> Option<ZoneResolution> {
+    process_path(pid).map(|path| ZoneResolution::Resolved {
+        candidates: vec![path],
+        source: ResolutionSource::LaunchedProcess,
+    })
+}
+
+/// Decide the failure when no eligible window was found for resolved paths.
+fn no_window_failure(process_still_running: bool) -> ZoneFailure {
+    if process_still_running {
+        ZoneFailure::NoEligibleWindow
+    } else {
+        ZoneFailure::NotRunning
+    }
 }
 
 pub fn focus_window(hwnd: HWND) {
@@ -363,22 +473,47 @@ pub fn focus_window(hwnd: HWND) {
 ///
 /// Public compatibility wrapper; UI callers use [`execute_zone_with_config`].
 #[allow(dead_code)]
-pub fn execute_zone(zone: &Zone, rect: Rect) -> Result<String, String> {
-    execute_zone_inner(zone, rect, DWM_SNAP_RETRIES, DEFAULT_MIN_WINDOW_PX)
+pub fn execute_zone(zone: &Zone, rect: Rect) -> ZoneExecution {
+    let running = crate::apps::running_process_image_paths();
+    execute_zone_inner(
+        zone,
+        rect,
+        DWM_SNAP_RETRIES,
+        DEFAULT_MIN_WINDOW_PX,
+        true,
+        &running,
+    )
 }
 
 /// Execute one zone using the caller's config for DWM snap retries and the
-/// minimum window size. Window lookup honours `zone.path` (AHK `matchType: path`).
+/// minimum window size. `launch=true` is Launch & Arrange (may spawn when no
+/// running candidate exists); `launch=false` is Apply (never spawns).
 pub fn execute_zone_with_config(
     zone: &Zone,
     rect: Rect,
     cfg: &AppConfig,
-) -> Result<String, String> {
+    launch: bool,
+) -> ZoneExecution {
+    let running = crate::apps::running_process_image_paths();
+    execute_zone_with_context(zone, rect, cfg, launch, &running)
+}
+
+/// Variant that accepts a pre-enumerated running-process path snapshot. The
+/// API layer enumerates once per profile and reuses it for every zone.
+pub fn execute_zone_with_context(
+    zone: &Zone,
+    rect: Rect,
+    cfg: &AppConfig,
+    launch: bool,
+    running_paths: &[String],
+) -> ZoneExecution {
     execute_zone_inner(
         zone,
         rect,
         cfg.settings.dwm_snap_retries,
         cfg.settings.min_window_px,
+        launch,
+        running_paths,
     )
 }
 
@@ -387,24 +522,109 @@ fn execute_zone_inner(
     rect: Rect,
     retries: u32,
     min_px: i32,
-) -> Result<String, String> {
-    let mut hwnd = find_window_by_path_min(&zone.exe, &zone.path, min_px);
-    if hwnd.is_none() {
-        if matches!(zone.launch_mode, crate::config::LaunchMode::Attach) {
-            return Err(format!("{} not running (attach mode)", zone.exe));
-        }
-        // Launch the exact stored path when present (AHK parity), falling back
-        // to the exe name resolved via PATH. CREATE_NO_WINDOW avoids a console
-        // flash for console-subsystem executables.
+    launch: bool,
+    running_paths: &[String],
+) -> ZoneExecution {
+    let mut resolution = resolve_zone_paths(zone, running_paths);
+    let mut launched = false;
+
+    // Decision 5 step 4: launch mode spawns only when there is no running
+    // candidate. A zone explicitly configured as Attach never launches (the
+    // UI promises exactly this), even during Launch & Arrange. `CreateProcess`
+    // resolves the target (path or exe name); the spawned PID's image path is
+    // the exact image it launched, by construction.
+    let needs_launch = launch
+        && !matches!(zone.launch_mode, crate::config::LaunchMode::Attach)
+        && match &resolution {
+            ZoneResolution::Unassigned => false,
+            ZoneResolution::Unresolved => true,
+            ZoneResolution::Resolved { candidates, .. } => {
+                let normalized: Vec<String> =
+                    candidates.iter().map(|c| normalize_path(c)).collect();
+                !running_paths
+                    .iter()
+                    .any(|p| normalized.contains(&normalize_path(p)))
+            }
+        };
+
+    if needs_launch {
         let target = launch_target(zone);
         let mut cmd = std::process::Command::new(target);
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        if cmd.spawn().is_err() {
-            return Err(format!("failed to launch {}", target));
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                return ZoneExecution::Failed {
+                    failure: ZoneFailure::LaunchFailed,
+                    message: format!("failed to launch {}", target),
+                    launched: false, // spawn failed — nothing was launched
+                };
+            }
+        };
+        // A process was spawned successfully. Record that immediately so every
+        // later outcome (even a failed image-path lookup) reports it truthfully.
+        launched = true;
+        let pid = child.id();
+        let Some(ZoneResolution::Resolved {
+            candidates: launched_candidates,
+            ..
+        }) = resolution_from_pid(pid)
+        else {
+            return ZoneExecution::Failed {
+                failure: ZoneFailure::LaunchFailed,
+                message: format!("failed to resolve launched {}", target),
+                launched,
+            };
+        };
+        let path = launched_candidates
+            .into_iter()
+            .next()
+            .expect("resolution_from_pid always yields exactly one candidate");
+        match &mut resolution {
+            ZoneResolution::Resolved { candidates, source } => {
+                if !candidates
+                    .iter()
+                    .any(|c| normalize_path(c) == normalize_path(&path))
+                {
+                    candidates.push(path);
+                }
+                *source = ResolutionSource::LaunchedProcess;
+            }
+            ZoneResolution::Unresolved => {
+                resolution = ZoneResolution::Resolved {
+                    candidates: vec![path],
+                    source: ResolutionSource::LaunchedProcess,
+                };
+            }
+            ZoneResolution::Unassigned => unreachable!("unassigned zones never launch"),
         }
+    }
+
+    let candidates = match resolution {
+        ZoneResolution::Unassigned => {
+            return ZoneExecution::Failed {
+                failure: ZoneFailure::Unassigned,
+                message: format!("zone {} has no application assigned", zone.id),
+                launched,
+            };
+        }
+        ZoneResolution::Unresolved => {
+            return ZoneExecution::Failed {
+                failure: ZoneFailure::Unresolved,
+                message: format!("could not resolve {} to a full path", zone.exe),
+                launched,
+            };
+        }
+        ZoneResolution::Resolved { candidates, .. } => candidates,
+    };
+
+    let normalized: Vec<String> = candidates.iter().map(|c| normalize_path(c)).collect();
+    let mut hwnd = find_window_by_paths_min(&normalized, min_px);
+    if hwnd.is_none() && launched {
+        // Preserve the 8-second post-launch poll, now by resolved path only.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         while std::time::Instant::now() < deadline {
-            if let Some(h) = find_window_by_path_min(&zone.exe, &zone.path, min_px) {
+            if let Some(h) = find_window_by_paths_min(&normalized, min_px) {
                 hwnd = Some(h);
                 break;
             }
@@ -412,14 +632,33 @@ fn execute_zone_inner(
         }
     }
     let Some(h) = hwnd else {
-        return Err(format!("{} window not found", zone.exe));
+        // Distinguish "process not running" from "running but no arrangeable
+        // window" with a fresh enumeration (the earlier snapshot may be stale
+        // after a launch).
+        let fresh = crate::apps::running_process_image_paths();
+        let still_running = fresh
+            .iter()
+            .any(|p| normalized.contains(&normalize_path(p)));
+        let failure = no_window_failure(still_running);
+        let message = match failure {
+            ZoneFailure::NotRunning if launch => {
+                format!("{} is not running after launch", zone.exe)
+            }
+            ZoneFailure::NotRunning => format!("{} is not running (attach mode)", zone.exe),
+            _ => format!(
+                "{} has no arrangeable window (minimized/hidden/0x0)",
+                zone.exe
+            ),
+        };
+        return no_window_execution(failure, message, launched);
     };
+
     std::thread::sleep(std::time::Duration::from_millis(200));
     move_window_with_retries(h, rect, retries);
     focus_window(h);
 
     let title = window_title(h);
-    // URL / tab rule
+    // URL / tab rule (unchanged — `title_match` is never used for identity)
     if !zone.url.is_empty() && !matches!(zone.tab_behavior, TabBehavior::Ignore) {
         let need_tab = !zone.title_match.is_empty() && !title.contains(&zone.title_match);
         if need_tab || zone.title_match.is_empty() {
@@ -433,7 +672,7 @@ fn execute_zone_inner(
             send_keys("{ENTER}");
         }
     }
-    // Macro
+    // Macro (unchanged)
     if zone.macro_enabled && !zone.macro_text.is_empty() {
         let ok = zone.trigger_title.is_empty() || title.contains(&zone.trigger_title);
         if ok {
@@ -441,10 +680,13 @@ fn execute_zone_inner(
             send_keys(&zone.macro_text);
         }
     }
-    Ok(format!(
-        "snapped {} to {},{} {}x{}",
-        zone.exe, rect.x, rect.y, rect.w, rect.h
-    ))
+    ZoneExecution::Snapped {
+        message: format!(
+            "snapped {} to {},{} {}x{}",
+            zone.exe, rect.x, rect.y, rect.w, rect.h
+        ),
+        launched,
+    }
 }
 
 fn send_keys(keys: &str) {
@@ -564,10 +806,13 @@ pub fn retile(cfg: &AppConfig) {
             "app assigned to multiple zones in one profile; only one window can be placed, last zone wins"
         );
     }
+    let running = crate::apps::running_process_image_paths();
     for z in cfg.active().zones.iter() {
         if let Some(r) = zone_by_id(&zones, z.id) {
-            if let Some(h) = find_window_by_path_min(&z.exe, &z.path, min_px) {
-                move_window_with_retries(h, r, retries);
+            if let ZoneResolution::Resolved { candidates, .. } = resolve_zone_paths(z, &running) {
+                if let Some(h) = find_window_by_paths_min(&candidates, min_px) {
+                    move_window_with_retries(h, r, retries);
+                }
             }
         }
     }
@@ -595,11 +840,14 @@ pub fn restore_active(cfg: &AppConfig) {
         }
         let area = work_area();
         let zones = compute_zones(cfg.active(), area, cfg.gap);
+        let running = crate::apps::running_process_image_paths();
         for z in cfg.active().zones.iter() {
-            if find_window_by_path_min(&z.exe, &z.path, cfg.settings.min_window_px) == Some(h) {
-                if let Some(r) = zone_by_id(&zones, z.id) {
-                    move_window_with_retries(h, r, cfg.settings.dwm_snap_retries);
-                    return;
+            if let ZoneResolution::Resolved { candidates, .. } = resolve_zone_paths(z, &running) {
+                if find_window_by_paths_min(&candidates, cfg.settings.min_window_px) == Some(h) {
+                    if let Some(r) = zone_by_id(&zones, z.id) {
+                        move_window_with_retries(h, r, cfg.settings.dwm_snap_retries);
+                        return;
+                    }
                 }
             }
         }
@@ -707,7 +955,7 @@ pub fn window_at(x: i32, y: i32) -> Option<HWND> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_path;
+    use super::*;
 
     #[test]
     fn normalize_path_is_case_insensitive_and_slash_agnostic() {
@@ -718,5 +966,181 @@ mod tests {
             normalize_path(r"c:\program files\app\app.exe")
         );
         assert_eq!(normalize_path("  C:\\App\\A.exe  "), "c:\\app\\a.exe");
+    }
+
+    #[test]
+    fn strict_matching_accepts_full_path_only() {
+        let candidates = vec![normalize_path(r"C:\Program Files\Vendor\app.exe")];
+        assert!(path_matches(
+            r"C:/Program Files/Vendor/APP.EXE",
+            &candidates
+        ));
+        assert!(path_matches(
+            r"  c:\program files\vendor\app.exe  ",
+            &candidates
+        ));
+    }
+
+    #[test]
+    fn strict_matching_rejects_exe_name_only_and_title_only() {
+        let candidates = vec![normalize_path(r"C:\Program Files\Vendor\app.exe")];
+        // An exe basename is not a full path — no fallback (Decision 4).
+        assert!(!path_matches("app.exe", &candidates));
+        assert!(!path_matches(r"C:\Other\app.exe", &candidates));
+        // A window title is never an identity signal.
+        assert!(!path_matches("MarketHubTS - Helium", &candidates));
+        assert!(!path_matches("", &candidates));
+    }
+
+    #[test]
+    fn find_window_by_paths_min_short_circuits_on_empty_candidates() {
+        assert!(find_window_by_paths_min(&[], DEFAULT_MIN_WINDOW_PX).is_none());
+    }
+
+    #[test]
+    fn resolution_prefers_exact_config_path() {
+        let mut zone = Zone::new(1, "App", "app.exe", 0.0, 0.0, 50.0, 100.0);
+        zone.path = r"C:\Program Files\Vendor\app.exe".into();
+        let running = vec![r"D:\Elsewhere\app.exe".to_string()];
+        assert_eq!(
+            resolve_zone_paths(&zone, &running),
+            ZoneResolution::Resolved {
+                candidates: vec![r"C:\Program Files\Vendor\app.exe".to_string()],
+                source: ResolutionSource::ExactConfig,
+            }
+        );
+    }
+
+    #[test]
+    fn resolution_is_unassigned_when_exe_and_path_are_empty() {
+        let zone = Zone::new(1, "", "", 0.0, 0.0, 50.0, 100.0);
+        assert_eq!(
+            resolve_zone_paths(&zone, &[r"C:\App\app.exe".to_string()]),
+            ZoneResolution::Unassigned
+        );
+    }
+
+    #[test]
+    fn resolution_collects_running_process_paths_by_exe_basename() {
+        let zone = Zone::new(1, "Chrome", "CHROME.EXE", 0.0, 0.0, 50.0, 100.0);
+        let running = vec![
+            r"C:\Program Files\Google\Chrome\chrome.exe".to_string(),
+            r"D:\Portable\chrome.exe".to_string(),
+            r"C:\Windows\System32\notepad.exe".to_string(),
+        ];
+        assert_eq!(
+            resolve_zone_paths(&zone, &running),
+            ZoneResolution::Resolved {
+                candidates: vec![
+                    r"C:\Program Files\Google\Chrome\chrome.exe".to_string(),
+                    r"D:\Portable\chrome.exe".to_string(),
+                ],
+                source: ResolutionSource::RunningProcess,
+            }
+        );
+    }
+
+    #[test]
+    fn resolution_is_unresolved_without_a_running_process() {
+        let zone = Zone::new(1, "Helium", "Helium.exe", 0.0, 0.0, 50.0, 100.0);
+        let running = vec![r"C:\Program Files\Google\Chrome\chrome.exe".to_string()];
+        assert_eq!(
+            resolve_zone_paths(&zone, &running),
+            ZoneResolution::Unresolved
+        );
+    }
+
+    #[test]
+    fn resolution_from_pid_uses_launched_process_source() {
+        let pid = std::process::id();
+        let resolution = resolution_from_pid(pid).expect("own process path must resolve");
+        match resolution {
+            ZoneResolution::Resolved { candidates, source } => {
+                assert_eq!(source, ResolutionSource::LaunchedProcess);
+                assert_eq!(candidates.len(), 1);
+                assert!(candidates[0].to_ascii_lowercase().contains("screenlayout"));
+            }
+            other => panic!("unexpected resolution: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_window_failure_distinguishes_running_from_not_running() {
+        assert_eq!(no_window_failure(true), ZoneFailure::NoEligibleWindow);
+        assert_eq!(no_window_failure(false), ZoneFailure::NotRunning);
+    }
+
+    #[test]
+    fn attach_zone_never_spawns_even_during_launch_arrange() {
+        let mut zone = Zone::new(
+            1,
+            "Missing",
+            "zoneflow-no-such-app-xyz.exe",
+            0.0,
+            0.0,
+            50.0,
+            100.0,
+        );
+        zone.launch_mode = crate::config::LaunchMode::Attach;
+        let cfg = crate::config::AppConfig::default();
+        let execution = execute_zone_with_context(
+            &zone,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            &cfg,
+            true, // Launch & Arrange verb
+            &[],  // no running processes
+        );
+        assert_eq!(
+            execution,
+            ZoneExecution::Failed {
+                failure: ZoneFailure::Unresolved,
+                message: "could not resolve zoneflow-no-such-app-xyz.exe to a full path".into(),
+                launched: false,
+            }
+        );
+    }
+
+    #[test]
+    fn zone_execution_exposes_message_success_and_launched() {
+        let snapped = ZoneExecution::Snapped {
+            message: "snapped app.exe to 0,0 100x100".into(),
+            launched: true,
+        };
+        assert!(snapped.is_success());
+        assert!(snapped.launched());
+        assert_eq!(snapped.message(), "snapped app.exe to 0,0 100x100");
+        let failed = ZoneExecution::Failed {
+            failure: ZoneFailure::Unassigned,
+            message: "zone 1 has no application assigned".into(),
+            launched: false,
+        };
+        assert!(!failed.is_success());
+        assert!(!failed.launched());
+        assert_eq!(failed.message(), "zone 1 has no application assigned");
+    }
+
+    #[test]
+    fn launched_then_no_window_failure_records_launched() {
+        // A real spawn is impractical in a unit test; the pure constructor used
+        // by execute_zone_inner pins the flag on the failure path.
+        let execution = no_window_execution(
+            ZoneFailure::NoEligibleWindow,
+            "app.exe has no arrangeable window (minimized/hidden/0x0)".into(),
+            true,
+        );
+        assert!(!execution.is_success());
+        assert!(
+            execution.launched(),
+            "a spawned process must be recorded even when no window appeared"
+        );
+        assert_eq!(
+            execution.message(),
+            "app.exe has no arrangeable window (minimized/hidden/0x0)"
+        );
     }
 }

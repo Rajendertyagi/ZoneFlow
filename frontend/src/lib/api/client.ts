@@ -179,10 +179,40 @@ export interface PreviewDto {
   executed: boolean;
 }
 
+/** `dto::ApplyIntent` — what was asked for, never what happened. */
+export type ApplyIntent = 'apply' | 'launch_arrange';
+
+/** `dto::ZoneOutcomeStatus` — what actually happened to one zone. */
+export type ZoneOutcomeStatus =
+  | 'snapped'
+  | 'launched_and_snapped'
+  | 'unassigned'
+  | 'unresolved'
+  | 'not_running'
+  | 'no_eligible_window'
+  | 'launch_failed'
+  | 'error';
+
+export interface ZoneOutcomeDto {
+  zone_id: number;
+  label: string;
+  exe: string;
+  status: ZoneOutcomeStatus;
+  message: string;
+  /** This zone actually spawned a process in this call, not the operation intent. */
+  launched: boolean;
+}
+
+/** Mirrors `dto::ApplyResultDto` — intent and outcomes are separate. */
 export interface ApplyResultDto {
   profile: string;
+  intent: ApplyIntent;
+  outcomes: ZoneOutcomeDto[];
+  /** Summary derived from outcomes, not a blanket success claim. */
   message: string;
-  launched: boolean;
+  succeeded: number;
+  failed: number;
+  skipped: number;
 }
 
 /** Returned by `/api/apply` and `/api/launch-arrange` when layout is disabled. */

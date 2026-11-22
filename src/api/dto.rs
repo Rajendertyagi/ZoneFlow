@@ -348,12 +348,123 @@ pub struct PreviewDto {
     pub executed: bool,
 }
 
-/// Result of an apply / launch-arrange operation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// What was asked for. Kept separate from [`ZoneOutcomeDto`] so an operation's
+/// intent is never mistaken for its outcome (Decision 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyIntent {
+    Apply,
+    LaunchArrange,
+}
+
+/// What actually happened to one zone. Every zone in the profile yields
+/// exactly one outcome — no silent success (Decision 7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneOutcomeStatus {
+    Snapped,
+    LaunchedAndSnapped,
+    Unassigned,
+    Unresolved,
+    NotRunning,
+    NoEligibleWindow,
+    LaunchFailed,
+    Error,
+}
+
+impl ZoneOutcomeStatus {
+    pub fn is_success(self) -> bool {
+        matches!(self, Self::Snapped | Self::LaunchedAndSnapped)
+    }
+
+    pub fn is_skipped(self) -> bool {
+        matches!(self, Self::Unassigned)
+    }
+
+    pub fn is_failure(self) -> bool {
+        !self.is_success() && !self.is_skipped()
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Snapped => "snapped",
+            Self::LaunchedAndSnapped => "launched & snapped",
+            Self::Unassigned => "unassigned",
+            Self::Unresolved => "unresolved",
+            Self::NotRunning => "not running",
+            Self::NoEligibleWindow => "no eligible window",
+            Self::LaunchFailed => "launch failed",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One zone's outcome. `message` is the human-readable reason for the status.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZoneOutcomeDto {
+    pub zone_id: i32,
+    pub label: String,
+    pub exe: String,
+    pub status: ZoneOutcomeStatus,
+    pub message: String,
+    /// This zone actually spawned a process in this call — not the operation
+    /// intent. True even when the launch produced no eligible window.
+    pub launched: bool,
+}
+
+/// Result of an apply / launch-arrange operation. `intent` records the verb;
+/// `outcomes` record what happened; `message` is a summary derived from the
+/// outcomes, never a blanket success claim (Decision 6).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApplyResultDto {
     pub profile: String,
+    pub intent: ApplyIntent,
+    pub outcomes: Vec<ZoneOutcomeDto>,
     pub message: String,
-    pub launched: bool,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub skipped: usize,
+}
+
+impl ApplyResultDto {
+    /// Build a result and derive the counts and summary message from outcomes.
+    pub fn new(profile: String, intent: ApplyIntent, outcomes: Vec<ZoneOutcomeDto>) -> Self {
+        let succeeded = outcomes.iter().filter(|o| o.status.is_success()).count();
+        let skipped = outcomes.iter().filter(|o| o.status.is_skipped()).count();
+        let failed = outcomes.iter().filter(|o| o.status.is_failure()).count();
+        let message = Self::summarize(&outcomes);
+        Self {
+            profile,
+            intent,
+            outcomes,
+            message,
+            succeeded,
+            failed,
+            skipped,
+        }
+    }
+
+    /// e.g. "2 snapped, 1 no eligible window". Empty profiles say so plainly.
+    fn summarize(outcomes: &[ZoneOutcomeDto]) -> String {
+        if outcomes.is_empty() {
+            return "no zones in profile".to_string();
+        }
+        let mut counts: Vec<(ZoneOutcomeStatus, usize)> = Vec::new();
+        for outcome in outcomes {
+            match counts
+                .iter_mut()
+                .find(|(status, _)| *status == outcome.status)
+            {
+                Some((_, n)) => *n += 1,
+                None => counts.push((outcome.status, 1)),
+            }
+        }
+        counts
+            .iter()
+            .map(|(status, n)| format!("{n} {}", status.label()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /* --------------------------------- errors -------------------------------- */
@@ -493,5 +604,101 @@ mod tests {
         // CloseAction is a serde enum; confirm the DTO layer can carry it.
         let json = serde_json::to_string(&CloseAction::Minimize).unwrap();
         assert_eq!(json, "\"minimize\"");
+    }
+
+    fn outcome(id: i32, status: ZoneOutcomeStatus) -> ZoneOutcomeDto {
+        ZoneOutcomeDto {
+            zone_id: id,
+            label: format!("Zone {id}"),
+            exe: "app.exe".into(),
+            status,
+            message: format!("detail for zone {id}"),
+            launched: status == ZoneOutcomeStatus::LaunchedAndSnapped,
+        }
+    }
+
+    #[test]
+    fn apply_result_derives_counts_and_summary_from_outcomes() {
+        let result = ApplyResultDto::new(
+            "Coding".into(),
+            ApplyIntent::LaunchArrange,
+            vec![
+                outcome(1, ZoneOutcomeStatus::Snapped),
+                outcome(2, ZoneOutcomeStatus::LaunchedAndSnapped),
+                outcome(3, ZoneOutcomeStatus::NoEligibleWindow),
+                outcome(4, ZoneOutcomeStatus::Unassigned),
+            ],
+        );
+        assert_eq!(result.succeeded, 2);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(
+            result.message,
+            "1 snapped, 1 launched & snapped, 1 no eligible window, 1 unassigned"
+        );
+        assert_eq!(result.outcomes.len(), 4);
+    }
+
+    #[test]
+    fn apply_result_serializes_intent_and_status_without_top_level_launched() {
+        let result = ApplyResultDto::new(
+            "Coding".into(),
+            ApplyIntent::Apply,
+            vec![outcome(1, ZoneOutcomeStatus::Unassigned)],
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["intent"], "apply");
+        assert_eq!(json["outcomes"][0]["status"], "unassigned");
+        assert_eq!(json["outcomes"][0]["zone_id"], 1);
+        assert_eq!(json["outcomes"][0]["launched"], false);
+        assert_eq!(json["succeeded"], 0);
+        assert_eq!(json["failed"], 0);
+        assert_eq!(json["skipped"], 1);
+        assert!(
+            json.get("launched").is_none(),
+            "the old top-level intent field must stay removed"
+        );
+        let back: ApplyResultDto = serde_json::from_value(json).unwrap();
+        assert_eq!(back, result);
+    }
+
+    #[test]
+    fn failed_outcome_can_record_that_a_launch_happened() {
+        let mut failed = outcome(2, ZoneOutcomeStatus::NoEligibleWindow);
+        failed.launched = true;
+        let result = ApplyResultDto::new(
+            "Coding".into(),
+            ApplyIntent::LaunchArrange,
+            vec![failed.clone()],
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["outcomes"][0]["status"], "no_eligible_window");
+        assert_eq!(json["outcomes"][0]["launched"], true);
+        let back: ApplyResultDto = serde_json::from_value(json).unwrap();
+        assert_eq!(back.outcomes[0], failed);
+        assert_eq!((back.succeeded, back.failed, back.skipped), (0, 1, 0));
+    }
+
+    #[test]
+    fn intent_and_status_wire_values_are_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ApplyIntent::LaunchArrange).unwrap(),
+            "\"launch_arrange\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ZoneOutcomeStatus::NoEligibleWindow).unwrap(),
+            "\"no_eligible_window\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ZoneOutcomeStatus::LaunchedAndSnapped).unwrap(),
+            "\"launched_and_snapped\""
+        );
+    }
+
+    #[test]
+    fn empty_profile_summary_is_explicit() {
+        let result = ApplyResultDto::new("Empty".into(), ApplyIntent::Apply, vec![]);
+        assert_eq!(result.message, "no zones in profile");
+        assert_eq!((result.succeeded, result.failed, result.skipped), (0, 0, 0));
     }
 }

@@ -7,13 +7,13 @@
 import {
   api,
   ApiError,
-  type ApplyResultDto,
   type AssignDto,
   type InactiveResult,
   type ZoneDto,
 } from './api/client';
 import { refreshState } from './api/events';
 import { getSelected, isDirty } from './state/app.svelte';
+import { summarizeApplyResult } from './state/apply-result';
 import { confirm, toast } from './state/ui.svelte';
 import {
   errorMessage,
@@ -159,16 +159,11 @@ export async function doApply(launch: boolean): Promise<void> {
   try {
     const result = launch ? await api.launchArrange() : await api.apply();
     await refreshState();
-    if (isInactiveResult(result)) {
-      toast('info', 'Layout is disabled — nothing was applied or launched.');
-      return;
-    }
-    const applied = result as ApplyResultDto;
-    // Show the backend's own per-zone message verbatim — no simulated success.
-    toast(
-      'success',
-      `${launch ? 'Launch & Arrange' : 'Apply'} · ${applied.profile}: ${applied.message}`,
-    );
+    // The backend reports intent and per-zone outcomes separately; the helper
+    // derives an honest toast tone from those outcomes (never unconditional
+    // success). Inactive results are handled there too (D4).
+    const summary = summarizeApplyResult(result);
+    toast(summary.tone, summary.message);
   } catch (error) {
     if (error instanceof ApiError && error.code === 'dirty_state') {
       toast('error', 'Save or revert your changes before applying.');

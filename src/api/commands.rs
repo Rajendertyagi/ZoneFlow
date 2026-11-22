@@ -5,8 +5,8 @@
 //! `Command` and await a oneshot reply.
 
 use super::dto::{
-    ApplyResultDto, AssignDto, MergeDto, PreviewDto, RectDto, SplitDto, ZoneDto,
-    ZoneGeometryUpdateDto,
+    ApplyIntent, ApplyResultDto, AssignDto, MergeDto, PreviewDto, RectDto, SplitDto, ZoneDto,
+    ZoneGeometryUpdateDto, ZoneOutcomeDto, ZoneOutcomeStatus,
 };
 use super::state::Inner;
 use super::ApiError;
@@ -167,9 +167,23 @@ fn bad_request(msg: impl Into<String>) -> ApiError {
     ApiError::BadRequest(msg.into())
 }
 
+/// Map an engine failure to its wire status. Kept as a pure function so every
+/// edge case in Decision 7 is pinned down by a test.
+fn outcome_status(failure: crate::engine::ZoneFailure) -> ZoneOutcomeStatus {
+    use crate::engine::ZoneFailure;
+    match failure {
+        ZoneFailure::Unassigned => ZoneOutcomeStatus::Unassigned,
+        ZoneFailure::Unresolved => ZoneOutcomeStatus::Unresolved,
+        ZoneFailure::NotRunning => ZoneOutcomeStatus::NotRunning,
+        ZoneFailure::NoEligibleWindow => ZoneOutcomeStatus::NoEligibleWindow,
+        ZoneFailure::LaunchFailed => ZoneOutcomeStatus::LaunchFailed,
+    }
+}
+
 /// Apply a profile's layout without mutating the draft (D1 "Apply does not
 /// change the draft"). `launch=true` is Launch & Arrange; `launch=false` is
-/// Apply (arrange running windows only).
+/// Apply (arrange running windows only, never spawn). Both verbs report the
+/// same per-zone outcome shape (Decision 6).
 fn apply_profile(inner: &mut Inner, name: &str, launch: bool) -> Result<ApplyResultDto, ApiError> {
     if !inner.draft.profiles.contains_key(name) {
         return Err(not_found("profile"));
@@ -177,35 +191,64 @@ fn apply_profile(inner: &mut Inner, name: &str, launch: bool) -> Result<ApplyRes
     let mut cfg = inner.draft.clone();
     cfg.active_profile = name.to_string();
     let area = crate::engine::work_area();
+    let zones = crate::engine_core::compute_zones(cfg.active(), area, cfg.gap);
+    // One process snapshot for the whole profile — resolution is per zone but
+    // enumeration is not (Decision 5).
+    let running_paths = crate::apps::running_process_image_paths();
+    let intent = if launch {
+        ApplyIntent::LaunchArrange
+    } else {
+        ApplyIntent::Apply
+    };
 
-    let mut messages = Vec::new();
-    if launch {
-        // D5: real execution, never simulated success.
-        let zones = crate::engine_core::compute_zones(cfg.active(), area, cfg.gap);
-        for z in &cfg.active().zones {
-            if let Some(rect) = crate::engine_core::zone_by_id(&zones, z.id) {
-                match crate::engine::execute_zone_with_config(z, rect, &cfg) {
-                    Ok(m) => messages.push(m),
-                    Err(e) => {
-                        tracing::warn!(profile = %name, zone = z.id, error = %e, "launch/arrange failed");
-                        messages.push(format!("{}: {}", z.exe, e));
-                    }
+    let mut outcomes = Vec::new();
+    for z in &cfg.active().zones {
+        let Some(rect) = crate::engine_core::zone_by_id(&zones, z.id) else {
+            outcomes.push(ZoneOutcomeDto {
+                zone_id: z.id,
+                label: z.label.clone(),
+                exe: z.exe.clone(),
+                status: ZoneOutcomeStatus::Error,
+                message: "zone has no computed rectangle".to_string(),
+                launched: false, // no execution happened for this zone
+            });
+            continue;
+        };
+        let execution =
+            crate::engine::execute_zone_with_context(z, rect, &cfg, launch, &running_paths);
+        let status = match &execution {
+            crate::engine::ZoneExecution::Snapped { launched, .. } => {
+                if *launched {
+                    ZoneOutcomeStatus::LaunchedAndSnapped
+                } else {
+                    ZoneOutcomeStatus::Snapped
                 }
             }
+            crate::engine::ZoneExecution::Failed { failure, .. } => outcome_status(*failure),
+        };
+        if !status.is_success() {
+            tracing::warn!(
+                profile = %name,
+                zone = z.id,
+                status = ?status,
+                message = execution.message(),
+                "zone did not snap"
+            );
         }
-    } else {
-        crate::engine::retile(&cfg);
-        messages.push(format!("arranged running apps for {name}"));
+        outcomes.push(ZoneOutcomeDto {
+            zone_id: z.id,
+            label: z.label.clone(),
+            exe: z.exe.clone(),
+            status,
+            message: execution.message().to_string(),
+            launched: execution.launched(),
+        });
     }
 
     inner.applied_profile = name.to_string();
     inner.selected_profile = name.to_string();
     inner.log("info", format!("Applied profile {name}"));
-    Ok(ApplyResultDto {
-        profile: name.to_string(),
-        message: messages.join("; "),
-        launched: launch,
-    })
+    Ok(ApplyResultDto::new(name.to_string(), intent, outcomes))
 }
 
 fn inactive_result(inner: &Inner) -> Value {
@@ -923,9 +966,11 @@ fn handle_action(
             if let Some(z) = cfg.active().zones.get(i).cloned() {
                 let area = crate::engine::work_area();
                 let rect = crate::engine_core::zone_pixels(&z, area, cfg.gap);
-                match crate::engine::execute_zone_with_config(&z, rect, &cfg) {
-                    Ok(m) => inner.log("info", m),
-                    Err(e) => tracing::warn!(error = %e, "hotkey launch failed"),
+                let execution = crate::engine::execute_zone_with_config(&z, rect, &cfg, true);
+                if execution.is_success() {
+                    inner.log("info", execution.message().to_string());
+                } else {
+                    tracing::warn!(message = execution.message(), "hotkey launch failed");
                 }
             }
             ok()
@@ -1547,5 +1592,150 @@ mod tests {
         assert!(!inner.draft.auto_start);
         assert_eq!(inner.draft.close_action, crate::config::CloseAction::Exit);
         assert_eq!(inner.draft.gap, 12);
+    }
+
+    /// Seed one zone in the active profile and keep the draft clean so the
+    /// D2 guard lets Apply / LaunchArrange through.
+    fn seed_zone(inner: &mut Inner, exe: &str, path: &str, attach: bool) {
+        let mut zone = Zone::new(1, "Zone 1", exe, 0.0, 0.0, 100.0, 100.0);
+        zone.path = path.to_string();
+        if attach {
+            zone.launch_mode = crate::config::LaunchMode::Attach;
+        }
+        inner.draft.active_mut().zones.push(zone);
+        inner.last_saved_json = serde_json::to_string(&inner.draft).unwrap();
+    }
+
+    fn apply_result(value: Value) -> ApplyResultDto {
+        serde_json::from_value(value).expect("apply result must deserialize")
+    }
+
+    #[test]
+    fn apply_intent_is_separate_from_outcomes() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_zone(&mut inner, "", "", true); // unassigned
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let result = apply_result(handle(CommandPayload::Apply, &mut inner, &mut ctx).unwrap());
+        assert_eq!(result.intent, ApplyIntent::Apply);
+        assert_eq!(result.outcomes.len(), 1);
+        assert_eq!(result.outcomes[0].status, ZoneOutcomeStatus::Unassigned);
+        assert_eq!(result.outcomes[0].zone_id, 1);
+        assert_eq!((result.succeeded, result.failed, result.skipped), (0, 0, 1));
+        assert!(result.message.contains("unassigned"));
+    }
+
+    #[test]
+    fn apply_never_spawns_but_launch_arrange_does() {
+        let missing = "zoneflow-no-such-app-xyz.exe";
+        // Apply: no running candidate in attach mode -> unresolved, no spawn.
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_zone(&mut inner, missing, "", true);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let applied = apply_result(handle(CommandPayload::Apply, &mut inner, &mut ctx).unwrap());
+        assert_eq!(applied.intent, ApplyIntent::Apply);
+        assert_eq!(applied.outcomes[0].status, ZoneOutcomeStatus::Unresolved);
+        assert_eq!(
+            (applied.succeeded, applied.failed, applied.skipped),
+            (0, 1, 0)
+        );
+
+        // Launch & Arrange: same zone, but the verb tries to spawn and fails.
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_zone(&mut inner, missing, "", false);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let launched =
+            apply_result(handle(CommandPayload::LaunchArrange, &mut inner, &mut ctx).unwrap());
+        assert_eq!(launched.intent, ApplyIntent::LaunchArrange);
+        assert_eq!(launched.outcomes[0].status, ZoneOutcomeStatus::LaunchFailed);
+        assert_eq!(
+            (launched.succeeded, launched.failed, launched.skipped),
+            (0, 1, 0)
+        );
+    }
+
+    #[test]
+    fn unassigned_zone_is_skipped_even_in_launch_mode() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_zone(&mut inner, "", "", false);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let result =
+            apply_result(handle(CommandPayload::LaunchArrange, &mut inner, &mut ctx).unwrap());
+        assert_eq!(result.intent, ApplyIntent::LaunchArrange);
+        assert_eq!(result.outcomes[0].status, ZoneOutcomeStatus::Unassigned);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn every_zone_failure_maps_to_a_defined_status() {
+        use crate::engine::ZoneFailure;
+        assert_eq!(
+            outcome_status(ZoneFailure::Unassigned),
+            ZoneOutcomeStatus::Unassigned
+        );
+        assert_eq!(
+            outcome_status(ZoneFailure::Unresolved),
+            ZoneOutcomeStatus::Unresolved
+        );
+        assert_eq!(
+            outcome_status(ZoneFailure::NotRunning),
+            ZoneOutcomeStatus::NotRunning
+        );
+        assert_eq!(
+            outcome_status(ZoneFailure::NoEligibleWindow),
+            ZoneOutcomeStatus::NoEligibleWindow
+        );
+        assert_eq!(
+            outcome_status(ZoneFailure::LaunchFailed),
+            ZoneOutcomeStatus::LaunchFailed
+        );
+    }
+
+    #[test]
+    fn no_window_and_not_running_outcomes_are_counted_as_failed() {
+        let result = ApplyResultDto::new(
+            "Coding".into(),
+            ApplyIntent::Apply,
+            vec![
+                ZoneOutcomeDto {
+                    zone_id: 1,
+                    label: "A".into(),
+                    exe: "a.exe".into(),
+                    status: ZoneOutcomeStatus::NoEligibleWindow,
+                    message: "a.exe has no arrangeable window (minimized/hidden/0x0)".into(),
+                    launched: true, // spawned, but no window appeared
+                },
+                ZoneOutcomeDto {
+                    zone_id: 2,
+                    label: "B".into(),
+                    exe: "b.exe".into(),
+                    status: ZoneOutcomeStatus::NotRunning,
+                    message: "b.exe is not running (attach mode)".into(),
+                    launched: false,
+                },
+            ],
+        );
+        assert_eq!((result.succeeded, result.failed, result.skipped), (0, 2, 0));
+        assert_eq!(result.message, "1 no eligible window, 1 not running");
+        // A failed outcome still records that a process was spawned.
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["outcomes"][0]["launched"], true);
+        assert_eq!(json["outcomes"][1]["launched"], false);
+    }
+
+    #[test]
+    fn apply_result_wire_shape_has_no_launched_field() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        seed_zone(&mut inner, "", "", true);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let value = handle(CommandPayload::Apply, &mut inner, &mut ctx).unwrap();
+        assert_eq!(value["intent"], "apply");
+        assert_eq!(value["outcomes"][0]["status"], "unassigned");
+        assert_eq!(value["outcomes"][0]["launched"], false);
+        assert_eq!(value["skipped"], 1);
+        assert!(
+            value.get("launched").is_none(),
+            "the old top-level intent field must stay removed"
+        );
     }
 }

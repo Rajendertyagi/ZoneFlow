@@ -1,103 +1,194 @@
-# ZoneFlow — Path-based exe resolution & matching (no title matching)
+# ZoneFlow — Path-based exe resolution & matching (corrected plan)
 
-Status: **plan only — not implemented.**
+Status: **approved for implementation.** Supersedes the earlier draft in this file.
+No auth/session/security redesign. No change to fixed port 4000, open API, D1–D6,
+current UI, or the on-disk config schema.
 
-## Context / why
+## Why this exists
 
 Launch & Arrange works mechanically (verified: `explorer.exe` snapped to the
-bottom-right zone at 2220,1162 1627x957), but silently fails for most configured
-apps and then reports success, so it looks like nothing happens.
+bottom-right zone) but silently fails for most configured apps and then reports
+success, so it looks like nothing happens. Root causes, grounded in code:
 
-Live API evidence (app running on `http://127.0.0.1:4000/`):
+1. `src/api/commands.rs:207` sets `launched: launch` — operation intent, not an
+   outcome. Per-zone errors are swallowed into `message` (`commands.rs:189-192`).
+   Frontend `actions.ts:168` shows a success toast for every HTTP 200.
+2. `src/apps.rs:291-298` — `enumerate_running_apps()` keeps only the first CSV
+   column (image name) from `tasklist`, discarding the PID and therefore the
+   full path. `src/apps.rs:181-188` and `:214-221` — installed-app enumeration
+   guesses `exe` from the shortcut stem and stores `path: ""`.
+3. `engine.rs:273-301` matches windows by exe-name with an exe-name fallback;
+   `engine.rs:405-412` waits 8 s. The earlier draft proposed `SearchPathW` for
+   resolution — that is wrong (see Decision 3).
 
-- Active profile `sdfsdfsds` (one zone -> `Antigravity.exe`):
-  `HTTP 200 {"launched":true,"message":"Antigravity.exe: Antigravity.exe window not found"}`
-- Profile `Research & Browser`:
-  `HTTP 200 {"launched":true,"message":"Helium.exe: failed to launch Helium.exe; Obsidian.exe: failed to launch Obsidian.exe; snapped explorer.exe to 2227,1162 1613x950"}`
+## Decisions
 
-### Root causes
+### Decision 1 — Running-process PID/path (fix the discarded PID)
 
-1. **False success.** `src/api/commands.rs:207` sets `launched: launch` (hardcoded
-   `true` for any Launch & Arrange call). Per-zone errors are swallowed into the
-   `message` string (`commands.rs:189-192`). Frontend `actions.ts:168` never reads
-   `launched` and shows `toast('success', ...)` for every HTTP 200. Total failure
-   is indistinguishable from success.
+`tasklist /FO CSV /NH` emits `"Image Name","PID","Session Name","Session#","Mem Usage"`.
+The current code takes only field 0. Correct behavior:
 
-2. **Empty paths in config.** `src/apps.rs:291-298` — `enumerate_running_apps()`
-   stores `path: ""` for every running process. Picker/drag-drop do pass `path`
-   (`PickerDialog.svelte:71`, `AppLibrary.svelte:71`), but the running-app source
-   supplies none, so `zone.path` ends up empty and matching falls back to fragile
-   exe-name comparison. Installed apps (from `.lnk`/registry) do get real paths.
+- Parse field 1 as the PID (use a small quoted-CSV field parser, not a naive
+  `split(',')`, so names containing commas are safe).
+- For each PID, resolve the authoritative full image path with
+  `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` +
+  `QueryFullProcessImageNameW`. Expose the existing private `engine::process_path`
+  as `pub(crate)` and reuse it — do not duplicate the Win32 code.
+- Store that path in `AppEntry.path`; derive `AppEntry.exe` from the path's file
+  name, never from the display label.
+- If path lookup fails, keep the entry with `path: ""` and `exe` = process name
+  so it remains selectable; runtime resolution (Decision 4) will retry.
 
-3. **Strict window matching.** `engine.rs:224-242` requires a visible, non-tool
-   window >150px; `engine.rs:273-301` requires the owning process exe name to
-   match `zone.exe` exactly. Enumeration of all 133 top-level windows (17 visible)
-   showed:
-   - `Antigravity.exe`: 11 processes, **zero top-level windows**; manual launch
-     produced only a 0x0 window even after 16s -> filtered out. No window to snap.
-   - `Helium.exe`: wrong exe name — real process is `chrome.exe` (window titled
-     "MarketHubTS - Helium"). Not on PATH -> "failed to launch".
-   - `Obsidian.exe`: not installed/on PATH -> "failed to launch".
+### Decision 2 — Installed-app path assumption (stop guessing)
 
-4. **8-second timeout** (`engine.rs:405-412`) misses late windows.
-   `CREATE_NO_WINDOW` (`engine.rs:401`) is worth questioning for GUI apps, though
-   a manual launch without it also gave 0x0, so it is not the primary cause.
+`scan_lnk_dir` currently does `format!("{clean}.exe")` from the shortcut stem;
+`scan_uninstall_key` stores an empty exe/path. Both are guesses, not facts.
 
-## User direction
+- Resolve `.lnk` targets properly with `IShellLinkW::GetPath` (COM via
+  `CoInitializeEx` + `CoCreateInstance(CLSID_ShellLink)`). The `windows` crate
+  features `Win32_UI_Shell` and `Win32_System_Ole` are already enabled in
+  `Cargo.toml` — no new dependency.
+- Derive `exe` from the resolved target's file name; store the full path.
+- For registry Uninstall entries, use `DisplayIcon` (strip a trailing `,0`
+  index) and/or `InstallLocation` only when the result is an existing `.exe`.
+- **Never guess an exe from a label.** If no verifiable exe path is obtained,
+  skip the installed entry entirely — a wrong path is worse than no entry.
+  Running and Browse sources still cover those apps.
+- Update `push_app` dedup: an entry with a non-empty path always beats one
+  without, regardless of label length/priority.
 
-- **No title matching.** Match by the actual exe only.
-- **Resolve through PATH or use the exact path** — nothing fuzzy.
+### Decision 3 — SearchPathW search-order issue (do not use it)
 
-## Proposed plan
+`SearchPathW` with `lpPath = NULL` uses a **registry-dependent** search order
+(`HKLM\...\Session Manager\SafeProcessSearchMode`): with the value 1 it searches
+system folders before the current folder; with 0 the reverse. `CreateProcess`
+uses a different order (application directory, current directory, system32,
+Windows directory, PATH, App Paths). Resolving with `SearchPathW` can therefore
+yield a path that disagrees with the image actually launched — then strict path
+matching fails for a reason that looks like a bug.
 
-### 1. Make running-app enumeration carry the real path (`src/apps.rs`)
-- `enumerate_running_apps()` currently emits `path: ""`. Resolve each process's
-  full image path via `QueryFullProcessImageNameW` (logic already in
-  `engine.rs:165`), falling back to `SearchPathW` if that fails.
-- Result: picking a running app stores the actual exe path, so `zone.path` is
-  populated going forward.
+Resolution: **eliminate `SearchPathW` from the design entirely.** Obtain full
+paths from process identity instead:
 
-### 2. Resolve once, match by full path (`src/engine.rs`, `src/engine_core.rs`)
-- Add `resolve_exe_path(exe, path) -> Option<String>`:
-  - `path` non-empty -> use it as the exact path (normalize separators/case).
-  - `path` empty -> `SearchPathW(exe)` (same search order as `CreateProcess`) to
-    get the full path.
-- `find_window_by_path_min` matches windows strictly by
-  `process_path(pid) == resolved path` (normalized). Remove the exe-name-only
-  fallback and all title logic.
-- `execute_zone_inner` resolves once, launches via the resolved full path, and
-  polls for a window on that exact path.
+- Running apps: PID → `QueryFullProcessImageNameW` (Decision 1).
+- Launch: `Command::new(target).spawn()` → `Child::id()` →
+  `QueryFullProcessImageNameW` on that PID. This is the exact image
+  `CreateProcess` launched, by construction.
+- Legacy configs with empty `path` resolve at runtime from running processes
+  (Decision 4). This exe-name lookup is **resolution**, not window matching.
 
-### 3. Honest reporting (`src/api/commands.rs`, `frontend/src/lib/actions.ts`)
-- Count real per-zone successes; `launched` reflects actual outcome, and the UI
-  shows a warning toast when zones fail instead of unconditional success.
+### Decision 4 — Strict full-path matching, no fallbacks
 
-### 4. Existing configs
-- Resolve empty `path` at runtime via `SearchPathW` (no forced migration), so the
-  current config works without manual edits.
+- Replace `find_window_by_path_min(exe, path, min_px)` with
+  `find_window_by_paths_min(candidates: &[String], min_px) -> Option<HWND>`.
+  It compares `normalize_path(process_path(pid))` against each normalized
+  candidate. Remove `FindCtx.target_exe` and `FindCtx.exe_match` entirely.
+- No executable-name comparison and no title comparison at match time, ever.
+  `zone.title_match` stays only for the existing URL/tab/macro logic, never for
+  window identity.
+- `is_real_window_min` (visible, non-tool, > `min_window_px`) is unchanged.
 
-## Open questions for the user
+### Decision 5 — Runtime resolution preserves config compatibility
 
-1. Strict path-only, or keep exe-name as a last-resort fallback when `SearchPathW`
-   cannot resolve? (Strict is cleaner but reports failure for apps whose exe is
-   not on PATH.)
-2. Include #3 honest reporting in this change, or keep this pass scoped to path
-   resolution only?
-3. Backfill empty paths in existing configs on load, or resolve at runtime only?
+No config schema change; `zone.path` stays optional/empty. Resolution for a zone:
+
+1. `path` non-empty → use it as the exact path (source `ExactConfig`).
+2. Else `exe` empty → unassigned (no resolution).
+3. Else collect full paths of running processes whose exe basename equals
+   `zone.exe` (case-insensitive) via Decision 1 (source `RunningProcess`).
+4. Launch mode only: if no *running* candidate yet, spawn the target
+   (CreateProcess resolves it), take `Child::id()` → full path (source
+   `LaunchedProcess`). An exact configured `zone.path` is still a matching
+   candidate even when that process is not currently running — in Launch &
+   Arrange such a zone is spawned using that exact path. Here "no candidate"
+   means no candidate whose process is currently running, not "no path value".
+5. Attach mode with no candidate → unresolved / not running.
+
+Existing configs keep working: `explorer.exe` resolves from its running
+process and snaps; a wrong exe name (`Helium.exe` when the process is
+`chrome.exe`) resolves to nothing and is reported accurately instead of being
+silently faked. The user can re-assign via the picker, which now stores real
+paths.
+
+### Decision 6 — Intent separate from outcomes; accurate results for both verbs
+
+Replace `ApplyResultDto { profile, message, launched }` with:
+
+```rust
+pub enum ApplyIntent { Apply, LaunchArrange }          // "apply" | "launch_arrange"
+pub enum ZoneOutcomeStatus {
+    Snapped, LaunchedAndSnapped, Unassigned, Unresolved,
+    NotRunning, NoEligibleWindow, LaunchFailed, Error,
+}
+pub struct ZoneOutcomeDto { zone_id, label, exe, status, message }
+pub struct ApplyResultDto {
+    profile, intent, outcomes: Vec<ZoneOutcomeDto>, message,
+    succeeded: usize, failed: usize, skipped: usize,
+}
+```
+
+- `intent` records what was asked; `outcomes` record what actually happened.
+  Remove `launched` (no longer a truthful signal). Update the frontend
+  `ApplyResultDto` type and `doApply` accordingly.
+- `message` is a summary derived from outcomes (e.g. "2 snapped, 1 no eligible
+  window"), not a success claim.
+- Apply (`launch=false`) never spawns; Launch & Arrange (`launch=true`) spawns
+  only for zones with no running candidate. Both report the same outcome shape.
+- Keep the D4 inactive result shape unchanged (`inactive: true, applied: false`).
+
+### Decision 7 — Defined behavior for edge cases
+
+| Case | Status | Counted as | Message |
+|---|---|---|---|
+| `exe` and `path` both empty | `unassigned` | skipped | "zone N has no application assigned" |
+| exe non-empty, path empty, no running process, attach mode | `unresolved` | failed | "could not resolve <exe> to a full path" |
+| exe non-empty, launch spawn fails | `launch_failed` | failed | "failed to launch <target>" |
+| resolved path, process not running, attach mode | `not_running` | failed | "<exe> is not running (attach mode)" |
+| resolved path, process running, no visible non-tool window > min_px | `no_eligible_window` | failed | "<exe> has no arrangeable window (minimized/hidden/0x0)" |
+| window found and moved | `snapped` / `launched_and_snapped` | succeeded | existing "snapped ..." text |
+
+No silent success: every zone yields exactly one outcome.
+
+### Decision 8 — Tests
+
+Rust:
+- `apps.rs`: quoted-CSV PID parsing; PID→path resolution; `.lnk` target
+  resolution; dedup prefers path-bearing entries; installed entries without a
+  verified path are skipped.
+- `engine.rs`: strict path matching (matches by full path; rejects exe-name-only
+  and title-only); runtime resolution from running processes and from a
+  launched PID; unassigned/unresolved/no-window outcomes.
+- `api/commands.rs`: `apply_profile` intent vs outcomes; Apply vs LaunchArrange;
+  unassigned/unresolved/no-window statuses; succeeded/failed/skipped counts;
+  DTO serialization.
+
+Frontend (bun test cannot import Svelte rune modules, so put the pure logic in a
+new `src/lib/state/apply-result.ts` and test that):
+- `summarizeApplyResult` maps outcomes to a toast tone + message: all snapped →
+  success; partial → warning; all failed → error; unassigned-only → info;
+  inactive → no success toast.
+- Keep `doApply` using the helper; existing `workflow.test.ts` and
+  `api-client.test.ts` stay green.
+
+## Implementation order
+
+1. `apps.rs` — PID/path + `.lnk` resolution + dedup rule (Decisions 1–2).
+2. `engine.rs` / `engine_core.rs` — strict path matching + runtime resolution
+   (Decisions 3–5).
+3. `api/dto.rs` + `api/commands.rs` — intent/outcomes + edge cases (Decisions 6–7).
+4. `frontend` — types, pure summary helper, `doApply`, tests (Decisions 6, 8).
+5. Rust tests, full CI checks, real Windows testing, independent audit.
 
 ## Honest caveat
 
 This will not make `Antigravity.exe` arrangeable — it has zero top-level windows
-(only a 0x0 one after launch). Correct path resolution will report that
-accurately, but there is no window to snap until Antigravity's UI is actually open.
+(only a 0×0 one after launch). Correct resolution reports `no_eligible_window`
+accurately; there is no window to snap until Antigravity's UI is actually open.
 
 ## Relevant files
 
-- `src/apps.rs` — running/installed app enumeration, `path` population
-- `src/engine.rs` — `process_path`, `find_window_by_path_min`, `execute_zone_inner`
-- `src/engine_core.rs` — `launch_target`, pure helpers
-- `src/api/commands.rs` — `apply_profile`, `launched` field, error aggregation
-- `src/api/dto.rs` — `ApplyResultDto`
-- `frontend/src/lib/actions.ts` — `doApply`, success toast
-- `frontend/src/lib/components/dialogs/PickerDialog.svelte` — assignment path
-- `frontend/src/lib/components/LeftRail/AppLibrary.svelte` — drag-drop path
+- `src/apps.rs`, `src/engine.rs`, `src/engine_core.rs`
+- `src/api/commands.rs`, `src/api/dto.rs`
+- `frontend/src/lib/actions.ts`, `frontend/src/lib/api/client.ts`,
+  `frontend/src/lib/state/apply-result.ts` (new), `frontend/tests/`
+- `Cargo.toml` (features already sufficient — verify, do not add deps)

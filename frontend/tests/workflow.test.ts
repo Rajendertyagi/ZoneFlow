@@ -123,7 +123,17 @@ describe('D4 inactive result', () => {
   });
 
   test('does not misclassify a real apply result', () => {
-    expect(isInactiveResult({ profile: 'Website', message: 'ok', launched: false })).toBe(false);
+    expect(
+      isInactiveResult({
+        profile: 'Website',
+        intent: 'apply',
+        outcomes: [],
+        message: 'no zones in profile',
+        succeeded: 0,
+        failed: 0,
+        skipped: 0,
+      }),
+    ).toBe(false);
     expect(isInactiveResult(undefined)).toBe(false);
   });
 });
