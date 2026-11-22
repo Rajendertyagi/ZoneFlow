@@ -280,6 +280,23 @@ export function readViewFromHash(): string | null {
 export async function bootstrap(): Promise<boolean> {
   const token = readTokenFromHash();
   if (!token) {
+    // No fragment token: this is either a page reload after a successful
+    // bootstrap (fragment was cleared by replaceState) or a bare URL. The
+    // session cookie survives a reload, so check it before declaring failure.
+    // A 200 means the session is still valid — proceed without a token.
+    try {
+      const probe = await fetch('/api/status', {
+        method: 'GET',
+        credentials: 'same-origin',
+      });
+      if (probe.ok) {
+        bootstrapState = 'ready';
+        bootstrapMessage = '';
+        return true;
+      }
+    } catch {
+      // Network error — fall through to the missing-token message below.
+    }
     bootstrapState = 'missing-token';
     bootstrapMessage = 'Open the editor from the ZoneFlow tray menu.';
     return false;
