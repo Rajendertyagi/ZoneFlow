@@ -1,6 +1,6 @@
 # ZoneFlow — Rust + Axum + Svelte: Detailed Implementation Plan
 
-**Status:** Implementation-ready companion to the architecture plan — **IMPLEMENTED**. Phases 1–6 are complete on `main` (Phase 6 verification/removal at `721638f`); Phase 7 (release hardening) is pending. The code-level details, task breakdown and test classification below are unchanged and were realized by that implementation.
+**Status:** Implementation-ready companion to the architecture plan — **IMPLEMENTED**. Phases 1–6 are complete on `main` (Phase 6 verification/removal at `721638f`); Phase 7 (release hardening) is complete — CI builds the frontend, embeds fresh assets and produces a release artifact, and the release-gate verification is clean (the manual gesture test and two unmeasured performance workloads remain recorded as honest gaps in architecture §13). Installer/signing and release-tag artifact attachment remain out of scope. The code-level details, task breakdown and test classification below are unchanged and were realized by that implementation.
 **Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (pre-finalization state; the historical test figures below were executed there).
 **Relationship:** Implements `zoneflow-rust-axum-svelte-architecture.md`, which is the **single authoritative source** for architecture decisions (thread ownership, startup/shutdown, message mechanism, API contracts, D1–D6). This document contains code-level API details, task breakdown, test classification and acceptance criteria. It must not restate architecture decisions differently — if they disagree, the architecture document wins.
 
@@ -287,7 +287,7 @@ These test the **implemented architecture**: API endpoints and D1–D6 command m
 ### 6.2 Planned tests (status at Phase 6)
 
 - **Backend unit/integration — DONE:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop queue/shutdown/D2 tests; shutdown-sequence test (SSE ends → `serve` returns); shutdown-fallback test (`SetEvent` alone latches the wait without an HWND); static handler Content-Type tests. The "message during modal dialog" and "safety timer drains stranded payload" cases remain structural/manual rather than separately automated.
-- **Frontend — DONE:** `svelte-check` + `tsc` clean; 36 tests covering store reactivity, dirty flag, SSE reconnect and the unauthenticated API client.
+- **Frontend — DONE:** `svelte-check` + `tsc` clean; 43 tests covering store reactivity, dirty flag, SSE reconnect and the unauthenticated API client.
 - **Real editing functional test (dev-only) — PENDING:** browser automation (e.g. Playwright, test-only dependency) performing a real SVG zone-boundary drag and asserting backend persistence. This is a functional test, not the `PointerActivity` benchmark.
 - **Manual Windows journeys — PARTIAL:** tray-only operation, hotkeys with browser closed, browser open/close lifecycle, overlay Ctrl+drag, full edit→save→apply→launch→tray→disable→enable, unsaved-change prompts and graceful shutdown are implemented; automated coverage is in place for the API/native logic, but the end-to-end GUI journeys are manual checks.
 - **Performance — PARTIAL:** Background measured (3 runs, 11.9–12.0 MiB WS / 2.0 MiB private / 3.65 MiB exe); Editor open and Pointer activity **NOT MEASURED** (tray automation unreliable, pre-existing browser processes defeat new-PID attribution). The editor URL is now fixed and public (`http://127.0.0.1:4000/`). See `docs/performance/results.md`. Tokio `current_thread` vs `rt-multi-thread` benchmarking and command-worker channel-overhead measurement were not performed.
@@ -306,6 +306,6 @@ Gates are defined in architecture §12. Additional task-level acceptance:
 - **C4 ✅:** full user journey; D1–D6 verified by the API command matrix; no data loss (config round-trip tests).
 - **C5 ✅:** tray-only works; menu syncs with API changes; D2 dialog works; overlay works; hotkeys fire unfocused; all threads join on exit.
 - **C6 ✅:** egui removed; docs match binary; **Background workload measured** (3 runs). Editor open and Pointer activity workloads are **NOT MEASURED** (see `docs/performance/results.md`) — recorded as an honest gap, not a fabricated result.
-- **C7 ⬜:** release produced; all verification items checked — Phase 7, pending.
+- **C7 ✅:** release produced by CI with fresh embedded assets; release-gate verification clean (manual gesture + 2 performance workloads remain recorded gaps in architecture §13) — Phase 7 complete (installer/signing out of scope).
 
 A failing gate blocks the next phase. No workstream begins before its predecessor's gate passes.

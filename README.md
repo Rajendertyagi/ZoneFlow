@@ -27,15 +27,24 @@ Your original AHK files are untouched at `E:\Apps\Hotkeys\ScreenLayout.ahk` (and
 Requires a current **stable** Rust toolchain, pinned by `rust-toolchain.toml` (`channel = "stable"`, with `rustfmt` and `clippy`). The frontend is built with **Bun** (build-time only — no Node/Bun is needed to run the app).
 
 ```powershell
-# Frontend (build-time only) — emits frontend/dist/, embedded by rust-embed
+# Frontend (build-time only) — emits frontend/dist/
 cd frontend
 bun install
 bun run build
 cd ..
 
-# Rust release binary
+# Mirror the fresh frontend build into the ROOT dist/ that rust-embed embeds.
+# Clear it first so stale hashed assets from an older build do not linger.
+Remove-Item -Recurse -Force dist
+New-Item -ItemType Directory -Force -Path dist | Out-Null
+Copy-Item -Recurse -Force frontend/dist/* dist/
+
+# Rust release binary — rust-embed bakes dist/ into the exe at compile time,
+# so this MUST run after the frontend build + copy above.
 cargo build --release
 ```
+
+`rust-embed` reads `dist/` at the repository root (`#[folder = "dist/"]` in `src/web/assets.rs`), not `frontend/dist/`. The copy step is required for both local and CI builds; CI performs the same sequence.
 
 The executable is produced at `target\release\screenlayout.exe` (**3,827,200 bytes / 3.65 MiB** in the measured Phase 6 build). The release profile uses `opt-level = 2`, `lto = true`, and `strip = true`. The crate stays on **edition 2021** deliberately: edition 2024 makes `unsafe_op_in_unsafe_fn` deny-by-default, which breaks the Win32 `extern "system"` callbacks in `engine.rs` and `native_loop.rs`.
 
@@ -45,9 +54,12 @@ For development checks:
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+# frontend (build + copy dist/ before the release build — see above)
+cd frontend; bun run check; bun test; bun run build; cd ..
+Remove-Item -Recurse -Force dist
+New-Item -ItemType Directory -Force -Path dist | Out-Null
+Copy-Item -Recurse -Force frontend/dist/* dist/
 cargo build --release
-# frontend
-cd frontend; bun run check; bun test; bun run build
 ```
 
 ## Run
@@ -114,7 +126,7 @@ All tunables live in the `Settings` struct in `src/config.rs` — never as liter
 
 ## Testing
 
-**120 Rust tests pass** — 117 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale. The **frontend adds 36 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
+**126 Rust tests pass** — 123 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale. The **frontend adds 43 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
 
 ```powershell
 cargo test
@@ -130,4 +142,4 @@ cd frontend; bun test
 - **Same-executable multi-window** limitation remains documented; no multi-window claim.
 - **Display changes** are handled by polling the work area every `display_debounce_ms` (default 200 ms) and re-tiling on change — no Win32 message hook.
 - **Path-based window matching** is supported: when a zone has a `path`, an exact full-path match is preferred with an exe-name fallback (`find_window_by_path_min`).
-- Installer/signing, release-tag artifact attachment, and i18n label centralization are not yet done (Phase 7).
+- Installer/signing, release-tag artifact attachment, and i18n label centralization remain out of scope. They are not part of the completed Phase 7 release-hardening gate, which covers the CI-produced release artifact (fresh embedded assets) and the verification checklist.

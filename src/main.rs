@@ -19,8 +19,12 @@ use native_loop::{
 };
 use std::sync::{mpsc, Arc, OnceLock};
 use tokio::sync::{broadcast, oneshot, watch};
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::CreateEventW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MESSAGEBOX_STYLE,
+};
 
 fn init_logging() {
     // Logging to a file next to the exe; level via RUST_LOG, default "info".
@@ -142,6 +146,27 @@ fn main() {
                 "Port {} is required; refusing to fall back to a random port.",
                 browser::EDITOR_PORT
             );
+            // The GUI subsystem hides the console, so a file-log-only error is
+            // invisible to the user. Surface the fatal bind failure in a modal
+            // dialog. `None` is the owner on purpose: no native window exists
+            // yet at this point (same pattern as the D2 dialog in native_loop).
+            let text = format!(
+                "ZoneFlow could not start.\n\nPort {} is required and there is no random-port fallback. Free that port and try again.\n\nDetails: {message}",
+                browser::EDITOR_PORT
+            );
+            let mut wide: Vec<u16> = text.encode_utf16().collect();
+            wide.push(0);
+            // SAFETY: `wide` is a local, null-terminated UTF-16 buffer that lives
+            // for the whole call; MessageBoxW copies its text. No native window
+            // exists yet, so a NULL owner is used deliberately.
+            unsafe {
+                MessageBoxW(
+                    None,
+                    PCWSTR::from_raw(wide.as_ptr()),
+                    w!("ZoneFlow — startup failed"),
+                    MESSAGEBOX_STYLE(MB_ICONERROR.0 | MB_OK.0 | MB_SETFOREGROUND.0),
+                );
+            }
             let _ = server.join();
             std::process::exit(1);
         }

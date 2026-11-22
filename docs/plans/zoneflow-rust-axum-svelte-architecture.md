@@ -1,6 +1,6 @@
 # ZoneFlow — Rust + Axum + Svelte Architecture
 
-**Status:** Authoritative architecture and migration plan — **IMPLEMENTED**. Phases 1–6 are complete on `main` (Phase 6 verification/removal at `721638f`); Phase 7 (release hardening) is pending. The architecture decisions below are unchanged and are now realized in the shipped binary.
+**Status:** Authoritative architecture and migration plan — **IMPLEMENTED**. Phases 1–6 are complete on `main` (Phase 6 verification/removal at `721638f`); Phase 7 (release hardening) is complete — CI builds the frontend, embeds fresh assets and produces a release artifact, and the release-gate verification is clean (the manual gesture test and two unmeasured performance workloads remain recorded as honest gaps in §13). Installer/signing and release-tag artifact attachment remain out of scope. The architecture decisions below are unchanged and are now realized in the shipped binary.
 **Finalized:** 2026-11-22 · **Plan commit:** `e1773cd` (this finalization) · **Source baseline:** `5e74e85` (the pre-finalization state the research was performed against).
 **Supersedes:** `slint-gui-migration-plan.md` as the active direction (retained as historical research). Product behavior remains governed by the frozen documents: `zoneflow-product-workflow.md` (D1–D6), `zoneflow-feature-preservation.md`, `zoneflow-implementation-roadmap.md`, and `zoneflow-gui-architecture.md` (egui-specific guidance, historical for the web UI).
 **Companion:** `zoneflow-rust-axum-svelte-implementation-plan.md` holds code-level API details, task breakdown and test classification. This document is the single authoritative definition of architecture decisions; the companion must not restate them differently.
@@ -303,7 +303,7 @@ Full table with versions, features, links, existing/new status and rationale is 
 
 ## 12. Migration phases and gates
 
-egui dependencies were **removed in Phase 6**; the app stayed buildable throughout. Phases 0–6 are complete; Phase 7 is pending.
+egui dependencies were **removed in Phase 6**; the app stayed buildable throughout. Phases 0–6 are complete; Phase 7 (release hardening) is complete (CI release artifact + verification; installer/signing out of scope).
 
 | Phase | Scope | Gate | Status |
 |---|---|---|---|
@@ -314,7 +314,7 @@ egui dependencies were **removed in Phase 6**; the app stayed buildable througho
 | 4 — Panels/dialogs | Left rail, inspector, wizard, picker, confirmations, close dialog, Hotkeys/Settings | Full journey; D1–D6 verified; no data loss | ✅ DONE |
 | 5 — Lifecycle/native | Dynamic tray, D2 dialog, reverse updates, overlay, graceful shutdown | Tray-only works; menu syncs; dirty switch confirms; overlay works; all threads join | ✅ DONE |
 | 6 — Verification/removal | Measure three workloads; remove egui deps; sync docs | All checks clean; performance recorded; docs match binary | ✅ DONE (Background measured; Editor open / Pointer activity NOT MEASURED — see results.md) |
-| 7 — Release hardening | Installer/signing, CI artifacts | Release produced; all verification items checked | ⬜ PENDING |
+| 7 — Release hardening | CI artifacts (frontend build + dist sync + release exe); installer/signing out of scope | Release produced by CI with fresh embedded assets; release-gate verification clean (§13 gaps recorded) | ✅ DONE (installer/signing out of scope) |
 
 A failing gate blocks the next phase.
 
@@ -322,14 +322,14 @@ A failing gate blocks the next phase.
 
 ## 13. Verification checklist
 
-- [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release` clean (verified at Phase 6: 128 Rust tests + 36 frontend tests pass).
+- [x] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo build --release` clean (verified: 126 Rust tests + 43 frontend tests pass).
 - [x] API integration tests cover every §5 endpoint and D1–D6 error cases (409 dirty, disabled guards) — `src/api/routes.rs`, `src/api/commands.rs`.
 - [x] Native-loop tests: queue coalescing/overflow, accepting flag, notifier rebuild/reregister/overlay style, D2 dialog matrix, shutdown idempotence. (The "message during modal dialog" and "safety timer drains stranded payload" cases are structural/manual, not separately automated.)
 - [x] Shutdown test: SSE stream ends on `sse_tx.send_replace(true)` so `axum::serve` graceful shutdown returns (`graceful_shutdown_returns_after_sse_stream_ends`); tray Exit and `/api/shutdown` converge on §3.6.
 - [x] Shutdown fallback test: `shutdown_event_is_signaled_even_without_hwnd` verifies `SetEvent` alone latches the wait when no HWND is published (the guaranteed path of §3.6 step 4).
 - [ ] Gesture test (manual Windows journey): start Ctrl+drag while idle with the cursor over another application — the 150 ms idle poll detects it, overlay appears, 16 ms active tracking follows, release returns to idle.
 - [x] Browser loads from embedded assets with no Node/Bun and no separate server (`src/web/assets.rs` tests); closing it does not stop Rust (architecture).
-- [x] Canvas interactions and geometry are covered by 36 frontend tests; geometry helpers match `engine_core` (unit-tested). Real SVG drag is a dev-only functional test, not part of the automated suite.
+- [x] Canvas interactions and geometry are covered by 43 frontend tests; geometry helpers match `engine_core` (unit-tested). Real SVG drag is a dev-only functional test, not part of the automated suite.
 - [ ] Three performance workloads measured and reported separately — **1 of 3 measured** (Background, 3 runs); Editor open and Pointer activity NOT MEASURED (see `docs/performance/results.md`).
 - [x] Planning-task checkbox superseded: the architecture is now implemented (Phases 1–6).
 

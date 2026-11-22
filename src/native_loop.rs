@@ -794,8 +794,12 @@ impl NativeLoop {
                     Action::CopyEditorUrl => {
                         // Win32 clipboard access belongs on the thread that
                         // owns the message loop. The URL is the fixed constant
-                        // used by the "Open editor…" action too.
-                        match crate::clipboard::copy_text(crate::browser::EDITOR_URL) {
+                        // used by the "Open editor…" action too. The overlay is
+                        // a real WS_POPUP owned by this thread and is therefore
+                        // a valid clipboard owner (the HWND_MESSAGE window is
+                        // not — see MSDN on OpenClipboard/EmptyClipboard).
+                        match crate::clipboard::copy_text(self.overlay, crate::browser::EDITOR_URL)
+                        {
                             Ok(()) => tracing::info!("editor URL copied to clipboard"),
                             Err(e) => {
                                 tracing::warn!(error = %e, "failed to copy editor URL to clipboard")

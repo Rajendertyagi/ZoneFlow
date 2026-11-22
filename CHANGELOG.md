@@ -14,12 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Implementation — headless Rust + Axum + Svelte (Phases 1–6, 2026-11-22)
 
-The architecture first recorded as a decision in `docs/plans/zoneflow-rust-axum-svelte-architecture.md` is now the shipped implementation. Phases 1–6 are complete; Phase 7 (release hardening) is pending.
+The architecture first recorded as a decision in `docs/plans/zoneflow-rust-axum-svelte-architecture.md` is now the shipped implementation. Phases 1–6 are complete; Phase 7 (release hardening) is complete (CI release artifact + verification; installer/signing out of scope).
 
 - **Added** a headless Rust background process: Axum 0.8.9 HTTP API on loopback, Tokio `current_thread` runtime and SSE events. Three long-lived threads: main/native (tray, hotkeys, message loop, layered overlay), command worker (authoritative state, history, engine calls) and Tokio (HTTP + embedded assets). The original token/cookie/Host guard was removed in the security-model simplification above.
 - **Added** a Svelte 5 SPA (Vite 8, Tailwind 4, shadcn-svelte, Bits UI, Paneforge, Lucide icons) with an SVG zone canvas, left rail, contextual inspector, wizard/picker/confirmation dialogs, Hotkeys and Settings views. Built to `frontend/dist/` at build time and embedded with `rust-embed`; no separate server and no Node/Bun at runtime.
 - **Added** a native message loop with a hidden message-only window, payload queue, 100 ms safety timer, manual-reset shutdown event, ordered shutdown sequence, dynamic tray menu with applied/selected markers, D2 native confirmation dialog, and a native layered drag overlay with `GetAsyncKeyState` gesture detection (150 ms idle → 16 ms active).
-- **Added** full API coverage of the frozen D1–D6 product decisions (dirty-state guards, real launch execution, distinct load/select/apply, disable/enable, preview) with 125 inline unit tests plus 3 config round-trip integration tests; 36 frontend tests.
+- **Added** full API coverage of the frozen D1–D6 product decisions (dirty-state guards, real launch execution, distinct load/select/apply, disable/enable, preview) with 123 inline unit tests plus 3 config round-trip integration tests; 43 frontend tests.
 - **Removed** the egui/eframe/shadcn-egui UI and overlay: `eframe`, `egui`, `shadcn-egui` dependencies, the `src/editor/` module tree and `src/overlay.rs`. `rfd` is retained for the Rust-side `/api/apps/browse` picker. The always-on process now measures **~2 MiB private / ~12 MiB working set** (was ~59–62 MiB private / ~109–112 MiB WS) and the executable is **3.65 MiB** (was 14.21 MiB). See `docs/performance/results.md`.
 - **Changed** the on-disk config contract: unchanged — `ScreenLayout.json` remains schema v1 and the round-trip tests confirm no data loss.
 

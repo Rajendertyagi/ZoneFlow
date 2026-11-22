@@ -5,7 +5,7 @@
 //! `CF_UNICODETEXT` using `OpenClipboard` / `EmptyClipboard` /
 //! `SetClipboardData`.
 
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -23,14 +23,22 @@ fn utf16_with_nul(text: &str) -> Vec<u16> {
 
 /// Copy `text` to the system clipboard as `CF_UNICODETEXT`.
 ///
+/// `hwnd` must be a real, caller-owned window on the calling thread. Per MSDN,
+/// calling `OpenClipboard` with a NULL owner makes `EmptyClipboard` set the
+/// clipboard owner to NULL, which in turn makes `SetClipboardData` fail. The
+/// overlay window (a `WS_POPUP` owned by the main/native thread) is the valid
+/// owner; the message-only `HWND_MESSAGE` window is not.
+///
 /// Ownership of the global memory block transfers to the system on a
 /// successful `SetClipboardData`; every failure path frees it ourselves. The
 /// clipboard is always closed before returning.
-pub fn copy_text(text: &str) -> Result<(), String> {
+pub fn copy_text(hwnd: HWND, text: &str) -> Result<(), String> {
     // SAFETY: every handle below is created and validated locally. `wide` is a
     // null-terminated UTF-16 buffer that outlives the copy into global memory;
     // the global block is either handed to the system or freed by us, never
-    // both. `OpenClipboard(None)` uses no caller-owned window.
+    // both. `hwnd` is a real window owned by this thread (the overlay), so
+    // `OpenClipboard(Some(hwnd))` gives `EmptyClipboard` a valid owner and
+    // `SetClipboardData` can succeed.
     unsafe {
         let wide = utf16_with_nul(text);
         let byte_len = wide.len() * std::mem::size_of::<u16>();
@@ -48,7 +56,7 @@ pub fn copy_text(text: &str) -> Result<(), String> {
         // unlocked either way and remains valid for SetClipboardData.
         let _ = GlobalUnlock(hglobal);
 
-        if let Err(e) = OpenClipboard(None) {
+        if let Err(e) = OpenClipboard(Some(hwnd)) {
             let _ = GlobalFree(Some(hglobal));
             return Err(format!("OpenClipboard failed: {e}"));
         }

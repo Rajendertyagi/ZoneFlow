@@ -13,7 +13,7 @@ import {
   type ZoneDto,
 } from './api/client';
 import { refreshState } from './api/events';
-import { isDirty } from './state/app.svelte';
+import { getSelected, isDirty } from './state/app.svelte';
 import { confirm, toast } from './state/ui.svelte';
 import {
   errorMessage,
@@ -250,8 +250,10 @@ async function confirmDiscardIfDirty(profile: string, action: string): Promise<b
 
 export async function createProfile(name: string): Promise<boolean> {
   // Creating a profile switches the editor to it, so the same D2 Discard/Cancel
-  // rule as rename/duplicate applies before we replace the current draft.
-  if (!(await confirmDiscardIfDirty(name, `create ${name}`))) return false;
+  // rule as rename/duplicate applies before we replace the current draft. The
+  // warning must name the CURRENTLY selected profile (the one whose unsaved
+  // edits are at risk), not the new profile being created.
+  if (!(await confirmDiscardIfDirty(getSelected(), `create ${name}`))) return false;
   try {
     // The draft is clean here (confirmDiscardIfDirty reverted it), so the
     // backend's own dirty guard passes without a discard flag. The backend
