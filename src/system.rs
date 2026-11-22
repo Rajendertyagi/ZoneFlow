@@ -49,7 +49,8 @@ pub struct System {
     /// Dynamic profile submenu and its check items (rebuilt on NativeUpdate).
     profiles_submenu: Option<Submenu>,
     profile_items: Vec<CheckMenuItem>,
-    /// Disabled header line showing Applied and Selected independently (§4).
+    /// Disabled header line showing the applied profile only (§4). Selected
+    /// state is conveyed by the `•` marker inside the Profiles submenu.
     header_item: Option<MenuItem>,
     /// Disable/Enable toggle item whose label flips with runtime state (D4).
     toggle_item: Option<MenuItem>,
@@ -63,11 +64,12 @@ impl System {
         // Tray icon first — always available even if hotkeys fail.
         let menu = Menu::new();
 
-        // Disabled header line. Applied and Selected are shown separately so
-        // the two dimensions stay distinguishable while layout is disabled (§4).
+        // Disabled header line: brand + applied profile only. Selected state is
+        // shown by the `•` marker inside the Profiles submenu, so the header
+        // stays short (§4).
         let header = MenuItem::with_id(
             MenuId::new("header"),
-            "ZoneFlow Studio — Applied:  · Selected: ",
+            header_text(&cfg.active_profile),
             false,
             None,
         );
@@ -92,8 +94,6 @@ impl System {
         menu.append(&profiles_submenu)?;
         menu.append(&PredefinedMenuItem::separator())?;
 
-        let i_toggle =
-            MenuItem::with_id(MenuId::new("toggle_enabled"), "Disable layout", true, None);
         let i_open = MenuItem::with_id(MenuId::new("open_editor"), "Open editor…", true, None);
         let i_copy = MenuItem::with_id(
             MenuId::new("copy_editor_url"),
@@ -101,17 +101,27 @@ impl System {
             true,
             None,
         );
-        let i_settings = MenuItem::with_id(MenuId::new("settings"), "Settings…", true, None);
-        let i_retile = MenuItem::with_id(MenuId::new("retile"), "Re-tile now", true, None);
-        let i_reload = MenuItem::with_id(MenuId::new("reload"), "Reload config", true, None);
-        let i_exit = MenuItem::with_id(MenuId::new("exit"), "Exit", true, None);
-        menu.append(&i_toggle)?;
         menu.append(&i_open)?;
         menu.append(&i_copy)?;
-        menu.append(&i_settings)?;
-        menu.append(&i_retile)?;
-        menu.append(&i_reload)?;
         menu.append(&PredefinedMenuItem::separator())?;
+
+        let i_toggle =
+            MenuItem::with_id(MenuId::new("toggle_enabled"), "Disable layout", true, None);
+        menu.append(&i_toggle)?;
+        menu.append(&PredefinedMenuItem::separator())?;
+
+        // Tools submenu groups the secondary actions under one top-level entry.
+        // Ids are matched in `poll()` and must stay stable; built from TOOLS_ITEMS
+        // so the structure is asserted by a unit test without native menus.
+        let tools_submenu = Submenu::new("Tools", true);
+        for (id, label) in TOOLS_ITEMS {
+            let item = MenuItem::with_id(MenuId::new(*id), *label, true, None);
+            tools_submenu.append(&item)?;
+        }
+        menu.append(&tools_submenu)?;
+        menu.append(&PredefinedMenuItem::separator())?;
+
+        let i_exit = MenuItem::with_id(MenuId::new("exit"), "Exit", true, None);
         menu.append(&i_exit)?;
 
         let icon = make_icon()?;
@@ -260,9 +270,7 @@ impl System {
         enabled: bool,
     ) {
         if let Some(header) = self.header_item.as_ref() {
-            header.set_text(format!(
-                "ZoneFlow Studio — Applied: {applied} · Selected: {selected}"
-            ));
+            header.set_text(header_text(applied));
         }
         if let Some(submenu) = self.profiles_submenu.as_ref() {
             for item in self.profile_items.drain(..) {
@@ -303,6 +311,23 @@ impl System {
         }
     }
 }
+
+/// Disabled tray header text: brand + the applied profile only. Selected state
+/// is intentionally omitted here; it is conveyed by the `•` marker inside the
+/// Profiles submenu (architecture §4). Kept as a function so a unit test can
+/// assert the exact text without creating a native menu.
+fn header_text(applied: &str) -> String {
+    format!("ZoneFlow — {applied}")
+}
+
+/// Static "Tools" submenu entries as `(MenuId, label)` pairs. The ids are
+/// matched in `poll()` and must stay stable; keeping them as data lets a unit
+/// test assert the submenu contents without creating native menu objects.
+const TOOLS_ITEMS: &[(&str, &str)] = &[
+    ("retile", "Re-tile now"),
+    ("reload", "Reload config"),
+    ("settings", "Settings…"),
+];
 
 /// Label for a profile menu item. The checkmark (set by the caller) marks
 /// Applied; a `•` prefix marks Selected only when it differs from Applied so
@@ -417,5 +442,35 @@ mod tests {
         assert_eq!(profile_label("Website", "Website", "Website"), "Website");
         assert_eq!(profile_label("Coding", "Website", "Coding"), "• Coding");
         assert_eq!(profile_label("Trading", "Website", "Coding"), "Trading");
+    }
+
+    #[test]
+    fn header_text_shows_only_the_applied_profile() {
+        assert_eq!(header_text("Website"), "ZoneFlow — Website");
+        assert_eq!(header_text("Coding"), "ZoneFlow — Coding");
+        // No "Applied:"/"Selected:" labels and no selected value leak into the
+        // short header.
+        let text = header_text("Website");
+        assert!(!text.contains("Selected"));
+        assert!(!text.contains("Applied"));
+    }
+
+    #[test]
+    fn tools_submenu_preserves_all_action_ids_and_labels() {
+        assert_eq!(
+            TOOLS_ITEMS,
+            &[
+                ("retile", "Re-tile now"),
+                ("reload", "Reload config"),
+                ("settings", "Settings…"),
+            ]
+        );
+        // Every Tools id must be one that `poll()` maps to an action.
+        for (id, _) in TOOLS_ITEMS {
+            assert!(
+                matches!(*id, "retile" | "reload" | "settings"),
+                "unexpected Tools menu id: {id}"
+            );
+        }
     }
 }
