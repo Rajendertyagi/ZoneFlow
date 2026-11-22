@@ -1,5 +1,31 @@
 # ZoneFlow — Comprehensive Product Audit & Improvement Roadmap
 
+## FINAL STATUS (2026-11-23) — all work packages complete
+
+Every applicable finding below has been resolved, independently reviewed, and pushed to `origin/main`. Final HEAD: `7861087`. Final checks: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (**238 unit + 3 integration**), `cargo build --release`, `bun run check`, `bun test` (**162**), `bun run build` — all passing.
+
+| Package | Commit(s) | Findings closed |
+|---|---|---|
+| WP1A | `f93e45e` | U-01 (installed-app duplicate-key crash) |
+| WP1B | `87396bb`, `15ff4be` | F2, F1 + two interaction edge cases |
+| WP1 remainder | `ee12d8b` | F1b (undo/redo keyboard shortcuts) |
+| WP2 | `d6ec625`, `dbfda78` | B-1, U-03, R-01, E-03 + race/absent-value follow-up |
+| WP3 | `c577e79` | F4, B-2, F6, D-3, F3, F5 + latent D3 fallback |
+| WP4 | `28db66c` | E-01, E-02, E-04, E-05, E-06, E-07, E-08, B-4, D-1, D-2 + close-action defect |
+| WP5 | `d8299aa` | U-02, U-04, U-05, U-06, U-07, U-08, U-09, B-3/B-6 + EnumWindows fail-open |
+| WP6 | `1a2ea7b` | F8 (library target + full round-trip), R-05 (`.bad` recovery), SSE backoff tests, path-isolated config write |
+| WP7 | `7861087` | BAT/CMD launcher support via Job Objects (reliable attribution, no HWND snapshot heuristic) |
+
+**Intentionally deferred / documented, not defects:**
+- **R-02 (security):** the unauthenticated loopback API CSRF/DNS-rebinding risk remains an accepted trade-off. Per explicit user decision, no Origin/Host/CSRF/CORS/auth mechanism was introduced. Documented as a known limitation.
+- **D-1 display-change re-tiling:** the dead `display_debounce_ms` control was removed; full display-change detection was not implemented (native-loop change beyond settings scope). Documented as a limitation.
+- **B-4 startup auto-launch:** the dead toggle was removed; feature not implemented. Documented as a limitation.
+- **BAT/CMD live Windows verification:** 11 manual acceptance scenarios are documented in `tests/README.md`; no live Windows BAT execution was performed (headless environment). Job Object attribution is implemented and unit-tested at the pure-logic level, but not exercised against a real desktop.
+
+**Original audit baseline below (historical record).**
+
+---
+
 **Baseline:** clean `main` @ `8fbdf5e`, synced with origin. **Method:** five sequential read-only subagents. No code, config, UI, tests or docs were modified during the audit; nothing committed or pushed until this report was saved. **Verification limits:** no tests or builds were run. Findings are static-analysis based except Part 3, which did live visual verification against an already-running backend (screenshots at 1440×900 and ~639px). Where a subagent said "test exists," that means the test was *read*, not executed.
 
 **Baseline gaps:** No `AGENTS.md` and no "project management protocol" document exist in the repo — reported rather than invented. Several docs claim features that have no consumer (`auto_launch_on_startup`, display-change re-tiling), and test counts conflict across README/CHANGELOG/architecture (126+43) vs implementation plan (128+36).
