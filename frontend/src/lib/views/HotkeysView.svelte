@@ -3,7 +3,7 @@
   import { api } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
   import { store } from '$lib/state/app.svelte';
-  import { hotkeyFailureWarning } from '$lib/state/hotkey-failures';
+  import { HOTKEY_SAVE_SUCCESS_TOAST, hotkeyFailureWarning } from '$lib/state/hotkey-failures';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
@@ -50,7 +50,7 @@
     try {
       await api.setHotkeys(bindings);
       await refreshState();
-      toast('success', 'Hotkeys saved and re-registered globally.');
+      toast('success', HOTKEY_SAVE_SUCCESS_TOAST);
     } catch (error) {
       toast('error', `Could not save hotkeys: ${errorMessage(error)}`);
     }

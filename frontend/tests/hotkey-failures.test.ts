@@ -3,7 +3,7 @@
  * `hotkey-failures.ts` has no Svelte runes, so bun can import it directly.
  */
 import { describe, expect, test } from 'bun:test';
-import { hotkeyFailureWarning } from '../src/lib/state/hotkey-failures';
+import { HOTKEY_SAVE_SUCCESS_TOAST, hotkeyFailureWarning } from '../src/lib/state/hotkey-failures';
 
 describe('hotkeyFailureWarning', () => {
   test('no failures (or a missing snapshot field) renders no warning', () => {
@@ -25,5 +25,13 @@ describe('hotkeyFailureWarning', () => {
     ]);
     expect(warning).toContain('clear_layout (Ctr+Shift+0)');
     expect(warning).toContain('move_left (Ctrl+Alt+Left)');
+  });
+});
+
+describe('HOTKEY_SAVE_SUCCESS_TOAST', () => {
+  test('reports the save without claiming global registration (U-03)', () => {
+    expect(HOTKEY_SAVE_SUCCESS_TOAST).toBe('Hotkeys saved.');
+    expect(HOTKEY_SAVE_SUCCESS_TOAST.toLowerCase()).not.toContain('re-registered');
+    expect(HOTKEY_SAVE_SUCCESS_TOAST.toLowerCase()).not.toContain('registered');
   });
 });

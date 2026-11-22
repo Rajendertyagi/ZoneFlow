@@ -892,7 +892,21 @@ impl NativeLoop {
                     .rebuild_profiles(&applied, &selected, &profiles, enabled),
                 NativeMessage::SetToggleLabel { enabled } => self.system.set_toggle_label(enabled),
                 NativeMessage::ReregisterHotkeys { hotkeys } => {
-                    self.system.reregister_hotkeys(&hotkeys)
+                    self.system.reregister_hotkeys(&hotkeys);
+                    // Acknowledge completion so the worker emits a
+                    // post-registration `state-changed` (U-03). Without this the
+                    // UI can refresh before registration finishes and read a
+                    // stale failure list. The reply is intentionally dropped:
+                    // this is a fire-and-forget notification, and the ack
+                    // command mutates no state, so it cannot feed back into
+                    // another native message.
+                    let (reply, _) = oneshot::channel();
+                    if let Err(e) = cmd_tx.send(Command {
+                        payload: CommandPayload::HotkeyRegistrationFinished,
+                        reply,
+                    }) {
+                        tracing::warn!(error = %e, "failed to send hotkey registration ack");
+                    }
                 }
                 NativeMessage::SetZones { zones } => self.set_zones(zones),
                 NativeMessage::SetOverlayStyle {
@@ -905,7 +919,6 @@ impl NativeLoop {
                 NativeMessage::Shutdown => shutdown.trigger(),
             }
         }
-        let _ = cmd_tx; // reserved for future native→worker payloads
     }
 
     fn show_overlay(&self) {

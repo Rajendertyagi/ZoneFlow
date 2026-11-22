@@ -197,6 +197,26 @@ mod tests {
             "Disable must emit exactly one event"
         );
 
+        // The native completion ack (U-03) must emit exactly one state-changed
+        // frame so clients refresh the shared failure slot *after* registration
+        // finishes. A trailing StateGet is the barrier proving the emission has
+        // happened. If the ack were misclassified as read-only, try_recv would
+        // return Empty and this test would fail.
+        send(&tx, CommandPayload::HotkeyRegistrationFinished).unwrap();
+        send(&tx, CommandPayload::StateGet).unwrap();
+        let frame = sse_rx.try_recv().expect(
+            "HotkeyRegistrationFinished must emit one post-registration state-changed event",
+        );
+        let parsed: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(parsed["type"], "state-changed");
+        assert!(
+            matches!(
+                sse_rx.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "HotkeyRegistrationFinished must emit exactly one event"
+        );
+
         drop(tx);
         worker.join().unwrap();
     }

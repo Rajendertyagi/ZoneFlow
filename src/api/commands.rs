@@ -129,6 +129,12 @@ pub enum CommandPayload {
         hwnd: isize,
         zone_id: i32,
     },
+    /// Fire-and-forget acknowledgement sent by the native thread once it has
+    /// finished processing a `ReregisterHotkeys` message (U-03). It carries no
+    /// data and mutates no state; its only purpose is to make the worker emit a
+    /// post-registration `state-changed` so clients refresh the shared failure
+    /// slot after `System::publish_failures()` has run.
+    HotkeyRegistrationFinished,
 }
 
 impl CommandPayload {
@@ -184,7 +190,8 @@ impl CommandPayload {
             | CommandPayload::AppOptionsSet { .. }
             | CommandPayload::HotkeysSet { .. }
             | CommandPayload::Action(_)
-            | CommandPayload::MoveWindow { .. } => true,
+            | CommandPayload::MoveWindow { .. }
+            | CommandPayload::HotkeyRegistrationFinished => true,
         }
     }
 }
@@ -960,6 +967,13 @@ pub fn handle(
 
         // --------------------------- native inputs -------------------------
         CommandPayload::Action(action) => handle_action(action, inner, ctx),
+        // No state mutation: the native thread has already published the
+        // registration result into the shared failure slot. Returning `ok()`
+        // lets the worker's generic post-command logic emit the single
+        // post-registration `state-changed` that refreshes clients (U-03).
+        // This arm must never queue another native message, or the ack would
+        // feed back into itself.
+        CommandPayload::HotkeyRegistrationFinished => ok(),
         CommandPayload::MoveWindow { hwnd, zone_id } => {
             if !inner.layout_enabled {
                 return Ok(inactive_result(inner));
@@ -1266,6 +1280,7 @@ mod tests {
                 hwnd: 1,
                 zone_id: 1,
             },
+            CommandPayload::HotkeyRegistrationFinished,
         ];
 
         for payload in &read_only {
@@ -1280,9 +1295,16 @@ mod tests {
                 "mutation must emit state-changed: {payload:?}"
             );
         }
-        // 10 read-only + 29 mutations = all 39 variants. Guards against a new
+        // 10 read-only + 30 mutations = all 40 variants. Guards against a new
         // variant being added to the match but forgotten in this test.
-        assert_eq!(read_only.len() + mutating.len(), 39);
+        assert_eq!(read_only.len() + mutating.len(), 40);
+    }
+
+    /// The native completion ack must be classified as emitting so the worker
+    /// broadcasts the post-registration `state-changed` (U-03).
+    #[test]
+    fn hotkey_registration_finished_emits_state_change() {
+        assert!(CommandPayload::HotkeyRegistrationFinished.emits_state_change());
     }
 
     #[test]

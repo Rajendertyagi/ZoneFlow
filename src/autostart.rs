@@ -1,4 +1,5 @@
-use windows::core::PCWSTR;
+use windows::core::{HRESULT, PCWSTR};
+use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegOpenKeyW, RegQueryValueW, RegSetValueExW, HKEY,
     HKEY_CURRENT_USER, REG_SZ,
@@ -9,6 +10,15 @@ const APP_NAME: &str = "ZoneFlowStudio";
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Returns `true` when a registry delete failed only because the value was
+/// already absent (`ERROR_FILE_NOT_FOUND`). In that case the desired state —
+/// no auto-start value — is already in place, so the operation is a success
+/// rather than an error (R-01). Kept pure so it can be unit-tested without
+/// touching the real registry.
+fn is_absent_value_error(code: HRESULT) -> bool {
+    code == HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0)
 }
 
 /// Enable or disable launching the app at Windows login by writing/removing the
@@ -64,7 +74,12 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
                 result = Err(format!("failed to set auto-start registry value: {e}"));
             }
         } else if let Err(e) = RegDeleteValueW(hkey, PCWSTR(name.as_ptr())).ok() {
-            result = Err(format!("failed to delete auto-start registry value: {e}"));
+            // Deleting an already-absent value is not a failure: the desired
+            // state (no auto-start entry) is already achieved (R-01). Every
+            // other error still propagates with the original message.
+            if !is_absent_value_error(e.code()) {
+                result = Err(format!("failed to delete auto-start registry value: {e}"));
+            }
         }
         if let Err(e) = RegCloseKey(hkey).ok() {
             if result.is_ok() {
@@ -109,7 +124,9 @@ pub fn is_auto_start() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::set_auto_start;
+    use super::{is_absent_value_error, set_auto_start};
+    use windows::core::HRESULT;
+    use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND};
 
     /// Compile-time proof that registry failures are returned to the caller
     /// instead of being swallowed. The test never invokes the function (which
@@ -117,5 +134,18 @@ mod tests {
     #[test]
     fn set_auto_start_returns_a_descriptive_result() {
         let _signature: fn(bool) -> Result<(), String> = set_auto_start;
+    }
+
+    /// ERROR_FILE_NOT_FOUND means the value is already gone, so disabling is a
+    /// success (R-01). A different HRESULT must still be reported as a genuine
+    /// failure. Pure test — no registry access.
+    #[test]
+    fn absent_value_error_is_recognized_but_other_errors_are_not() {
+        assert!(is_absent_value_error(HRESULT::from_win32(
+            ERROR_FILE_NOT_FOUND.0
+        )));
+        assert!(!is_absent_value_error(HRESULT::from_win32(
+            ERROR_ACCESS_DENIED.0
+        )));
     }
 }
