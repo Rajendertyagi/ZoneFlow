@@ -1862,10 +1862,13 @@ mod tests {
         assert!(!inner.draft.profiles.contains_key("Website"));
         assert_profile_dimensions_coherent(&inner);
 
-        // Undo restores the deleted profile and its exact dimension values.
+        // Undo restores the deleted profile. Applied was cleared by the delete
+        // (stale in the restored draft), so it is repaired from the snapshot.
+        // Selected "Coding" is still a valid profile in the restored draft, so
+        // the operational selection is kept rather than rewound to "Website".
         handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
         assert!(inner.draft.profiles.contains_key("Website"));
-        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.selected_profile, "Coding");
         assert_eq!(inner.applied_profile, "Website");
         assert_eq!(inner.draft.active_profile, "Website");
         assert_profile_dimensions_coherent(&inner);
@@ -1904,10 +1907,12 @@ mod tests {
         assert_eq!(inner.draft.active_profile, "Website");
         assert_profile_dimensions_coherent(&inner);
 
-        // Redo re-creates it coherently.
+        // Redo re-creates it coherently. The current selection "Website" is
+        // still valid in the redone draft, so it is kept (operational state is
+        // never rewound) rather than being forced back to "Gaming".
         handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
         assert!(inner.draft.profiles.contains_key("Gaming"));
-        assert_eq!(inner.selected_profile, "Gaming");
+        assert_eq!(inner.selected_profile, "Website");
         assert_eq!(inner.applied_profile, "Website");
         assert_profile_dimensions_coherent(&inner);
     }
@@ -1932,9 +1937,11 @@ mod tests {
         assert_eq!(inner.draft.active_profile, "Coding");
         assert_profile_dimensions_coherent(&inner);
 
-        // Undo restores the pre-load snapshot; Selected must be coherent again.
+        // Undo restores the pre-load draft. Selected "Coding" is still a valid
+        // profile there, so the operational selection is kept rather than being
+        // rewound to "Website"; both dimensions remain coherent.
         handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
-        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.selected_profile, "Coding");
         assert_eq!(inner.applied_profile, "Website");
         assert_profile_dimensions_coherent(&inner);
 
@@ -1965,7 +1972,78 @@ mod tests {
         assert_eq!(inner.selected_profile, "Website");
         assert_profile_dimensions_coherent(&inner);
         handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
-        assert_eq!(inner.selected_profile, "Fresh");
+        // "Website" is still valid in the redone draft, so the current selection
+        // is kept; the newly re-created "Fresh" profile is not force-selected.
+        assert_eq!(inner.selected_profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+    }
+
+    #[test]
+    fn undo_after_apply_keeps_applied_and_selected_profiles() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+
+        // A history point recorded while Website was applied/selected. Update
+        // the dirty baseline so Apply's D2 guard does not reject the command.
+        inner.draft.gap = 12;
+        inner.push_history();
+        inner.last_saved_json = serde_json::to_string(&inner.draft).unwrap();
+        assert_eq!(inner.applied_profile, "Website");
+        assert_eq!(inner.selected_profile, "Website");
+
+        // Apply a different profile. Apply is operational: it changes Applied
+        // and Selected WITHOUT creating a history point.
+        let applied = handle(
+            CommandPayload::ProfileApply {
+                name: "Coding".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        let result: ApplyResultDto = serde_json::from_value(applied).unwrap();
+        assert_eq!(result.profile, "Coding", "Apply must not return not_found");
+        assert_eq!(inner.applied_profile, "Coding");
+        assert_eq!(inner.selected_profile, "Coding");
+
+        // Undo the earlier edit. The operational Apply must survive it: the old
+        // code rewound Applied to Website while Windows were still arranged per
+        // Coding, so the UI lied about which profile was actually applied.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.draft.gap, 8);
+        assert_eq!(inner.applied_profile, "Coding");
+        assert_eq!(inner.selected_profile, "Coding");
+        assert_profile_dimensions_coherent(&inner);
+    }
+
+    #[test]
+    fn undo_after_profile_select_keeps_valid_selection() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+
+        // A history point recorded while Website was selected.
+        inner.draft.gap = 12;
+        inner.push_history();
+        inner.last_saved_json = serde_json::to_string(&inner.draft).unwrap();
+
+        // ProfileSelect is operational (no history point).
+        handle(
+            CommandPayload::ProfileSelect {
+                name: "Trading".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.selected_profile, "Trading");
+
+        // Undo the edit: Trading is still a valid profile in the restored draft,
+        // so the current selection must survive rather than being rewound.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.draft.gap, 8);
+        assert_eq!(inner.selected_profile, "Trading");
         assert_profile_dimensions_coherent(&inner);
     }
 

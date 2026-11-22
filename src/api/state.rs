@@ -150,20 +150,29 @@ impl Inner {
         self.draft.validate();
         self.selected_zone = snap.selected_zone;
 
-        // Selected: restore when valid, otherwise fall back to the restored
-        // draft's active profile (always present after `validate()`).
-        if self.draft.profiles.contains_key(&snap.selected_profile) {
-            self.selected_profile = snap.selected_profile.clone();
-        } else {
-            self.selected_profile = self.draft.active_profile.clone();
+        // Apply/Select are operational actions that do NOT create a history
+        // point. Undo/redo must not rewind a still-valid current profile name —
+        // doing so would make the UI claim a profile is applied while Windows
+        // are still arranged per the newer one. Precedence for each dimension:
+        //   1. current name, if it exists in the restored draft -> keep it;
+        //   2. else the snapshot's name, if it exists -> restore it (repairs
+        //      rename/delete undo, where the current name went stale);
+        //   3. else Selected falls back to the restored active profile and
+        //      Applied is cleared (the ProfileDelete D-rule).
+        if !self.draft.profiles.contains_key(&self.selected_profile) {
+            if self.draft.profiles.contains_key(&snap.selected_profile) {
+                self.selected_profile = snap.selected_profile.clone();
+            } else {
+                self.selected_profile = self.draft.active_profile.clone();
+            }
         }
 
-        // Applied: restore when valid, otherwise clear it — the same D-rule
-        // `ProfileDelete` uses when the applied profile disappears.
-        if self.draft.profiles.contains_key(&snap.applied_profile) {
-            self.applied_profile = snap.applied_profile.clone();
-        } else {
-            self.applied_profile.clear();
+        if !self.draft.profiles.contains_key(&self.applied_profile) {
+            if self.draft.profiles.contains_key(&snap.applied_profile) {
+                self.applied_profile = snap.applied_profile.clone();
+            } else {
+                self.applied_profile.clear();
+            }
         }
     }
 
@@ -524,10 +533,33 @@ mod tests {
     }
 
     #[test]
+    fn apply_snapshot_keeps_valid_current_names() {
+        let mut s = Inner::new(cfg());
+        // Both current names are valid in the restored draft. Apply/Select are
+        // operational actions, so undo/redo must not rewind them even though the
+        // snapshot records different (also valid) names.
+        s.selected_profile = "Trading".into();
+        s.applied_profile = "Coding".into();
+        let snap = Snapshot {
+            cfg_json: serde_json::to_string(&cfg()).unwrap(),
+            selected_zone: 2,
+            selected_profile: "Website".into(),
+            applied_profile: "Website".into(),
+        };
+        s.apply_snapshot(&snap);
+        assert_eq!(s.selected_zone, 2);
+        assert_eq!(s.selected_profile, "Trading");
+        assert_eq!(s.applied_profile, "Coding");
+    }
+
+    #[test]
     fn apply_snapshot_repairs_stale_profile_names() {
         let mut s = Inner::new(cfg());
-        // Both names are absent from the restored draft: selected falls back to
-        // the draft's active profile, applied is cleared (ProfileDelete D-rule).
+        // Both current AND snapshot names are absent from the restored draft:
+        // selected falls back to the draft's active profile, applied is cleared
+        // (ProfileDelete D-rule).
+        s.selected_profile = "Ghost".into();
+        s.applied_profile = "Phantom".into();
         let snap = Snapshot {
             cfg_json: serde_json::to_string(&cfg()).unwrap(),
             selected_zone: 7,
@@ -544,7 +576,11 @@ mod tests {
     #[test]
     fn apply_snapshot_restores_valid_names_and_repairs_only_stale_ones() {
         let mut s = Inner::new(cfg());
-        // Selected is valid in the restored draft, applied is stale.
+        // Current names are stale (e.g. after undoing a rename/delete). The
+        // snapshot's selected name is valid in the restored draft -> restore it;
+        // its applied name is stale -> clear it (ProfileDelete D-rule).
+        s.selected_profile = "Ghost".into();
+        s.applied_profile = "Phantom".into();
         let snap = Snapshot {
             cfg_json: serde_json::to_string(&cfg()).unwrap(),
             selected_zone: 2,
