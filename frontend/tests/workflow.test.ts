@@ -5,12 +5,14 @@
 import { describe, expect, test } from 'bun:test';
 import {
   actionEligibility,
+  canRemoveZone,
   duplicateAssignments,
   hasNonDefaultRules,
   isDirtyError,
   isInactiveResult,
   needsReplaceConfirmation,
   previewIsSafe,
+  stripAppIdentity,
   switchDecision,
   switchVerb,
 } from '../src/lib/state/workflow';
@@ -99,9 +101,14 @@ describe('D3 replacement rules', () => {
     expect(hasNonDefaultRules(zone({ key_delay: 10 }))).toBe(true);
   });
 
-  test('same app re-assignment does not prompt even with custom rules', () => {
+  test('same-exe re-assignment WITH custom rules prompts (rules are reset)', () => {
     const z = zone({ url: 'https://x' });
-    expect(needsReplaceConfirmation(z, { label: 'Chrome', exe: 'chrome.exe', path: '' })).toBe(false);
+    expect(needsReplaceConfirmation(z, { label: 'Chrome', exe: 'chrome.exe', path: 'C:\\new\\chrome.exe' })).toBe(true);
+  });
+
+  test('same-exe re-assignment with default rules does not prompt', () => {
+    const z = zone();
+    expect(needsReplaceConfirmation(z, { label: 'Chrome', exe: 'chrome.exe', path: 'C:\\new\\chrome.exe' })).toBe(false);
   });
 
   test('different app with custom rules prompts', () => {
@@ -109,9 +116,9 @@ describe('D3 replacement rules', () => {
     expect(needsReplaceConfirmation(z, { label: 'Code', exe: 'Code.exe', path: '' })).toBe(true);
   });
 
-  test('empty zone with custom rules does not prompt (no app identity to replace)', () => {
+  test('empty zone with custom rules still prompts (assignment resets those rules)', () => {
     const z = zone({ exe: '', url: 'https://x' });
-    expect(needsReplaceConfirmation(z, { label: 'Code', exe: 'Code.exe', path: '' })).toBe(false);
+    expect(needsReplaceConfirmation(z, { label: 'Code', exe: 'Code.exe', path: '' })).toBe(true);
   });
 });
 
@@ -176,5 +183,61 @@ describe('§3b duplicate assignment warning', () => {
       zone({ id: 4, exe: 'b.exe' }),
     ];
     expect(duplicateAssignments(zones)).toHaveLength(2);
+  });
+
+  test('distinct full paths for the same exe are NOT duplicates', () => {
+    const zones = [
+      zone({ id: 1, exe: 'chrome.exe', path: 'C:\\Program Files\\Chrome\\chrome.exe' }),
+      zone({ id: 2, exe: 'chrome.exe', path: 'D:\\Portable\\Chrome\\chrome.exe' }),
+    ];
+    expect(duplicateAssignments(zones)).toEqual([]);
+  });
+
+  test('same exe + same path IS a duplicate', () => {
+    const zones = [
+      zone({ id: 1, exe: 'chrome.exe', path: 'C:\\Apps\\chrome.exe' }),
+      zone({ id: 2, exe: 'chrome.exe', path: 'C:\\Apps\\chrome.exe' }),
+    ];
+    expect(duplicateAssignments(zones)).toEqual([{ exe: 'chrome.exe', zoneIds: [1, 2] }]);
+  });
+
+  test('an exe-only zone in the group IS a duplicate (path fallback can collide)', () => {
+    const zones = [
+      zone({ id: 1, exe: 'chrome.exe', path: 'C:\\Apps\\chrome.exe' }),
+      zone({ id: 2, exe: 'chrome.exe', path: '' }),
+    ];
+    expect(duplicateAssignments(zones)).toEqual([{ exe: 'chrome.exe', zoneIds: [1, 2] }]);
+  });
+
+  test('paths are normalized (/ → \\, lowercase) before comparison', () => {
+    const zones = [
+      zone({ id: 1, exe: 'chrome.exe', path: 'C:/Apps/chrome.exe' }),
+      zone({ id: 2, exe: 'chrome.exe', path: 'c:\\apps\\CHROME.EXE' }),
+    ];
+    expect(duplicateAssignments(zones)).toEqual([{ exe: 'chrome.exe', zoneIds: [1, 2] }]);
+  });
+});
+
+describe('F4 inspector identity fields are display-only', () => {
+  test('stripAppIdentity removes exe and path from an inspector patch', () => {
+    expect(stripAppIdentity({ exe: 'evil.exe', path: 'C:\\evil.exe', label: 'Editor', url: 'https://x' })).toEqual({
+      label: 'Editor',
+      url: 'https://x',
+    });
+  });
+
+  test('stripAppIdentity leaves a patch without identity fields unchanged', () => {
+    expect(stripAppIdentity({ launch_mode: 'attach', notes: 'n' })).toEqual({
+      launch_mode: 'attach',
+      notes: 'n',
+    });
+  });
+});
+
+describe('F3 both delete surfaces may empty a profile', () => {
+  test('removal is allowed for 0, 1 and many zones (toolbar + context menu)', () => {
+    expect(canRemoveZone(0)).toBe(true);
+    expect(canRemoveZone(1)).toBe(true);
+    expect(canRemoveZone(5)).toBe(true);
   });
 });

@@ -342,6 +342,34 @@ fn inactive_result(inner: &Inner) -> Value {
     })
 }
 
+/// Shared enable path for the UI Enable command and the tray toggle (D4/F6).
+/// Re-applies the selected profile with normal Apply behavior when the draft is
+/// clean, but never applies a dirty draft (D2). Both surfaces must behave
+/// identically for the same "Enable" verb.
+fn enable_and_reapply(inner: &mut Inner, ctx: &mut CommandContext<'_>) {
+    inner.layout_enabled = true;
+    ctx.notifier.set_toggle_label(true);
+    ctx.notifier.rebuild_menu(inner);
+    inner.log("info", "Layout enabled");
+    // Restore automation: re-apply the selected profile with the normal
+    // Apply behavior, but never apply a dirty draft (D2).
+    if !inner.is_dirty() {
+        let name = inner.selected_profile.clone();
+        if !name.is_empty() {
+            match apply_profile(inner, &name, false) {
+                Ok(_) => {
+                    // Re-apply may change Applied when Selected differed;
+                    // refresh the tray after it, not just before.
+                    ctx.notifier.rebuild_menu(inner);
+                }
+                Err(e) => tracing::warn!(error = ?e, "re-apply on enable failed"),
+            }
+        }
+    } else {
+        tracing::warn!("enable skipped re-apply: draft has unsaved changes");
+    }
+}
+
 /// Execute one command against authoritative state.
 pub fn handle(
     payload: CommandPayload,
@@ -869,27 +897,7 @@ pub fn handle(
             ok()
         }
         CommandPayload::Enable => {
-            inner.layout_enabled = true;
-            ctx.notifier.set_toggle_label(true);
-            ctx.notifier.rebuild_menu(inner);
-            inner.log("info", "Layout enabled");
-            // Restore automation: re-apply the selected profile with the normal
-            // Apply behavior, but never apply a dirty draft (D2).
-            if !inner.is_dirty() {
-                let name = inner.selected_profile.clone();
-                if !name.is_empty() {
-                    match apply_profile(inner, &name, false) {
-                        Ok(_) => {
-                            // Re-apply may change Applied when Selected differed;
-                            // refresh the tray after it, not just before.
-                            ctx.notifier.rebuild_menu(inner);
-                        }
-                        Err(e) => tracing::warn!(error = ?e, "re-apply on enable failed"),
-                    }
-                }
-            } else {
-                tracing::warn!("enable skipped re-apply: draft has unsaved changes");
-            }
+            enable_and_reapply(inner, ctx);
             ok()
         }
 
@@ -1022,17 +1030,17 @@ fn handle_action(
             ok()
         }
         Action::ToggleEnabled => {
-            inner.layout_enabled = !inner.layout_enabled;
-            ctx.notifier.set_toggle_label(inner.layout_enabled);
-            ctx.notifier.rebuild_menu(inner);
-            inner.log(
-                "info",
-                if inner.layout_enabled {
-                    "Layout enabled"
-                } else {
-                    "Layout disabled (runtime only)"
-                },
-            );
+            if inner.layout_enabled {
+                // enabled → disabled: just flip + notify, no apply (D4).
+                inner.layout_enabled = false;
+                ctx.notifier.set_toggle_label(false);
+                ctx.notifier.rebuild_menu(inner);
+                inner.log("info", "Layout disabled (runtime only)");
+            } else {
+                // disabled → enabled: same re-apply path as the UI Enable
+                // command, so the tray and UI verbs behave identically (F6).
+                enable_and_reapply(inner, ctx);
+            }
             ok()
         }
         Action::ProfileApply(name) => {
@@ -2136,6 +2144,80 @@ mod tests {
         assert!(!inner.layout_enabled);
         handle(CommandPayload::Enable, &mut inner, &mut ctx).unwrap();
         assert!(inner.layout_enabled);
+    }
+
+    /// F6: the tray toggle's disabled→enabled transition must re-apply the
+    /// selected profile exactly like the UI Enable command (D4).
+    #[test]
+    fn tray_enable_on_clean_draft_reapplies_selected_profile() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner.layout_enabled = false;
+        inner.selected_profile = "Coding".into();
+        inner.applied_profile = "Website".into();
+        assert!(!inner.is_dirty(), "default draft must be clean");
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+
+        handle(
+            CommandPayload::Action(Action::ToggleEnabled),
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+
+        assert!(inner.layout_enabled, "tray toggle must enable the layout");
+        assert_eq!(
+            inner.applied_profile, "Coding",
+            "clean enable must re-apply the selected profile"
+        );
+        assert_eq!(inner.selected_profile, "Coding");
+    }
+
+    /// F6 + D2: a dirty draft is never applied, even when the tray enables.
+    #[test]
+    fn tray_enable_on_dirty_draft_does_not_reapply() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner.layout_enabled = false;
+        inner.selected_profile = "Coding".into();
+        inner.applied_profile = "Website".into();
+        inner.draft.gap = 99; // make the draft dirty
+        assert!(inner.is_dirty());
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+
+        handle(
+            CommandPayload::Action(Action::ToggleEnabled),
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+
+        assert!(inner.layout_enabled, "the runtime flag still flips");
+        assert_eq!(
+            inner.applied_profile, "Website",
+            "dirty draft must never be applied (D2)"
+        );
+        assert_eq!(inner.selected_profile, "Coding", "selection is untouched");
+    }
+
+    /// F6: the enabled→disabled transition only flips the flag and notifies;
+    /// it must not apply anything or change the applied/selected dimensions.
+    #[test]
+    fn tray_disable_just_flips_without_apply() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner.selected_profile = "Coding".into();
+        inner.applied_profile = "Website".into();
+        assert!(inner.layout_enabled);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+
+        handle(
+            CommandPayload::Action(Action::ToggleEnabled),
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+
+        assert!(!inner.layout_enabled, "tray toggle must disable the layout");
+        assert_eq!(inner.applied_profile, "Website", "disable must not apply");
+        assert_eq!(inner.selected_profile, "Coding", "selection is untouched");
     }
 
     #[test]

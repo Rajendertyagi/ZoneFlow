@@ -22,7 +22,7 @@
   import { assignAppGuarded, doApply, doDisable, doEnable, doPreview, doRevert, doSave } from '$lib/actions';
   import { store } from '$lib/state/app.svelte';
   import { ui } from '$lib/state/ui.svelte';
-  import { actionEligibility } from '$lib/state/workflow';
+  import { actionEligibility, canRemoveZone } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
   import ZoneCanvas from '$lib/components/Canvas/ZoneCanvas.svelte';
   import AppLibrary from '$lib/components/LeftRail/AppLibrary.svelte';
@@ -116,7 +116,13 @@
     <Button size="sm" variant="outline" title="Merge: pick a source zone, then a target zone" onclick={() => canvas?.startMerge()}>
       <GitMerge size={14} /> Merge
     </Button>
-    <Button size="sm" variant="ghost" title="Remove selected zone" onclick={() => canvas?.removeSelected()}>
+    <Button
+      size="sm"
+      variant="ghost"
+      title="Remove selected zone"
+      disabled={!canRemoveZone(zones.length)}
+      onclick={() => canvas?.removeSelected()}
+    >
       <Trash size={14} /> Remove
     </Button>
 

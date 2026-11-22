@@ -551,6 +551,10 @@ pub struct NativeLoop {
     tints: Vec<(u8, u8, u8)>,
     inactive_alpha: u8,
     active_alpha: u8,
+    /// D4: runtime layout-enabled state mirrored from `RebuildMenu`. When
+    /// false, Ctrl+drag must never show the overlay (the worker would reject
+    /// the drop as inactive), so the gesture is ignored entirely.
+    enabled: bool,
 }
 
 impl NativeLoop {
@@ -699,6 +703,7 @@ impl NativeLoop {
             tints,
             inactive_alpha: cfg.settings.overlay_inactive_alpha,
             active_alpha: cfg.settings.overlay_active_alpha,
+            enabled: true,
         })
     }
 
@@ -859,17 +864,23 @@ impl NativeLoop {
             }
 
             // Gesture detection (§3.7): global key state, focus-independent.
+            // While the layout is disabled (D4) the overlay is never shown, so
+            // a Ctrl+drag cannot highlight zones whose drop would be ignored.
             let down = gesture_down();
-            if down && !active {
-                active = true;
-                self.show_overlay();
-                self.update_overlay();
-            } else if !down && active {
-                active = false;
-                self.hide_overlay();
-                self.on_drag_release(&cmd_tx);
-            } else if down && active {
-                self.update_overlay();
+            let (next_active, step) = gesture_step(self.enabled, down, active);
+            active = next_active;
+            match step {
+                GestureStep::Begin => {
+                    self.show_overlay();
+                    self.update_overlay();
+                }
+                GestureStep::Track => self.update_overlay(),
+                GestureStep::End => {
+                    self.hide_overlay();
+                    self.on_drag_release(&cmd_tx);
+                }
+                GestureStep::Cancel => self.hide_overlay(),
+                GestureStep::Idle => {}
             }
 
             if shutdown.is_shutting_down() {
@@ -887,9 +898,13 @@ impl NativeLoop {
                     selected,
                     profiles,
                     enabled,
-                } => self
-                    .system
-                    .rebuild_profiles(&applied, &selected, &profiles, enabled),
+                } => {
+                    // Mirror the authoritative enabled flag so gesture
+                    // detection can suppress the overlay while disabled (D4).
+                    self.enabled = enabled;
+                    self.system
+                        .rebuild_profiles(&applied, &selected, &profiles, enabled);
+                }
                 NativeMessage::SetToggleLabel { enabled } => self.system.set_toggle_label(enabled),
                 NativeMessage::ReregisterHotkeys { hotkeys } => {
                     self.system.reregister_hotkeys(&hotkeys);
@@ -1109,9 +1124,13 @@ impl NativeLoop {
                     selected,
                     profiles,
                     enabled,
-                } => self
-                    .system
-                    .rebuild_profiles(&applied, &selected, &profiles, enabled),
+                } => {
+                    // Mirror the authoritative enabled flag so gesture
+                    // detection can suppress the overlay while disabled (D4).
+                    self.enabled = enabled;
+                    self.system
+                        .rebuild_profiles(&applied, &selected, &profiles, enabled);
+                }
                 NativeMessage::SetToggleLabel { enabled } => self.system.set_toggle_label(enabled),
                 NativeMessage::ReregisterHotkeys { hotkeys } => {
                     self.system.reregister_hotkeys(&hotkeys)
@@ -1161,6 +1180,48 @@ impl NativeLoop {
 
         // Unregistering classes at process exit is optional; skip it to avoid
         // racing any other in-process instance.
+    }
+}
+
+/// Pure gesture → overlay decision (D3/D4). Kept separate from the Win32 loop
+/// so the disabled-state behavior is unit-testable without a real window.
+#[derive(Debug, PartialEq, Eq)]
+enum GestureStep {
+    /// Begin a drag: show and paint the overlay.
+    Begin,
+    /// Continue a drag: repaint the hover highlight.
+    Track,
+    /// End a drag: hide the overlay and send the drop to the worker.
+    End,
+    /// A drag was in flight when the layout was disabled: hide the overlay
+    /// without sending a drop (the worker would reject it as inactive).
+    Cancel,
+    /// Nothing to do.
+    Idle,
+}
+
+/// Decide the next gesture state and overlay action. When `enabled` is false
+/// the overlay is never shown or updated, so a Ctrl+drag cannot highlight
+/// zones whose drop the worker would silently ignore (D3/D4).
+fn gesture_step(enabled: bool, down: bool, active: bool) -> (bool, GestureStep) {
+    if !enabled {
+        return (
+            false,
+            if active {
+                GestureStep::Cancel
+            } else {
+                GestureStep::Idle
+            },
+        );
+    }
+    if down && !active {
+        (true, GestureStep::Begin)
+    } else if !down && active {
+        (false, GestureStep::End)
+    } else if down && active {
+        (true, GestureStep::Track)
+    } else {
+        (active, GestureStep::Idle)
     }
 }
 
@@ -1295,6 +1356,41 @@ mod tests {
         assert_eq!(parse_tint("#010203"), (1, 2, 3));
         assert_eq!(parse_tint("F5B544"), (0xF5, 0xB5, 0x44));
         assert_eq!(parse_tint("nonsense"), (128, 128, 128));
+    }
+
+    /* --------------------------- D3/D4 gesture -------------------------- */
+
+    #[test]
+    fn gesture_step_disabled_never_shows_overlay_on_ctrl_drag() {
+        // The core D-3 finding: Ctrl+drag while disabled must not highlight
+        // zones, because the worker would silently ignore the drop.
+        assert_eq!(gesture_step(false, true, false), (false, GestureStep::Idle));
+        assert_eq!(
+            gesture_step(false, false, false),
+            (false, GestureStep::Idle)
+        );
+    }
+
+    #[test]
+    fn gesture_step_disabled_cancels_in_flight_drag_without_drop() {
+        // If the layout is disabled mid-drag, hide the overlay but do NOT send
+        // a drop (Cancel never calls on_drag_release).
+        assert_eq!(
+            gesture_step(false, true, true),
+            (false, GestureStep::Cancel)
+        );
+        assert_eq!(
+            gesture_step(false, false, true),
+            (false, GestureStep::Cancel)
+        );
+    }
+
+    #[test]
+    fn gesture_step_enabled_drives_normal_begin_track_end() {
+        assert_eq!(gesture_step(true, true, false), (true, GestureStep::Begin));
+        assert_eq!(gesture_step(true, true, true), (true, GestureStep::Track));
+        assert_eq!(gesture_step(true, false, true), (false, GestureStep::End));
+        assert_eq!(gesture_step(true, false, false), (false, GestureStep::Idle));
     }
 
     #[test]

@@ -5,7 +5,7 @@
   import { unassignApp } from '$lib/actions';
   import { store } from '$lib/state/app.svelte';
   import { toast } from '$lib/state/ui.svelte';
-  import { errorMessage } from '$lib/state/workflow';
+  import { errorMessage, stripAppIdentity } from '$lib/state/workflow';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Input from '$lib/components/ui/input.svelte';
@@ -29,7 +29,9 @@
     if (!zone || busy) return;
     busy = true;
     try {
-      await api.updateZone(zone.id, { ...zone, ...patch });
+      // App identity is display-only here; the guarded picker owns exe/path
+      // so D3's confirmation and rule reset can never be bypassed (F4).
+      await api.updateZone(zone.id, { ...zone, ...stripAppIdentity(patch) });
       await refreshState();
     } catch (error) {
       toast('error', `Update failed: ${errorMessage(error)}`);
@@ -98,25 +100,26 @@
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-exe">Executable</Label>
-                <Input
+                <span class="text-xs font-medium text-zf-text">Executable</span>
+                <div
                   id="insp-exe"
-                  value={zone.exe}
-                  placeholder="chrome.exe"
-                  class="font-mono text-xs"
-                  onchange={(e) => void commit({ exe: textValue(e) })}
-                />
+                  class="rounded-md border border-zf-border bg-zf-bg px-3 py-2 font-mono text-xs text-zf-muted"
+                >
+                  {zone.exe || '—'}
+                </div>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-path">Full path (optional)</Label>
-                <Input
+                <span class="text-xs font-medium text-zf-text">Full path (optional)</span>
+                <div
                   id="insp-path"
-                  value={zone.path}
-                  placeholder="C:\\Program Files\\…"
-                  class="font-mono text-xs"
-                  onchange={(e) => void commit({ path: textValue(e) })}
-                />
+                  class="break-all rounded-md border border-zf-border bg-zf-bg px-3 py-2 font-mono text-xs text-zf-muted"
+                >
+                  {zone.path || '—'}
+                </div>
               </div>
+              <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+                App identity is read-only here. Use <span class="text-zf-muted">Assign app…</span> to change it — reassigning resets this zone's rules after confirmation.
+              </p>
               <div class="flex flex-col gap-1.5">
                 <Label for="insp-mode">Launch mode</Label>
                 <Select

@@ -22,6 +22,7 @@
   import { refreshState } from '$lib/api/events';
   import { getSnapshot, patchZoneLocal, store } from '$lib/state/app.svelte';
   import { reconcileSelection } from '$lib/state/selection';
+  import { canRemoveZone } from '$lib/state/workflow';
   import DragPreview from './DragPreview.svelte';
   import SnapGuides from './SnapGuides.svelte';
   import ZoneRect from './ZoneRect.svelte';
@@ -47,8 +48,12 @@
     showGap: boolean;
     splitRatio: number;
     onnotice?: (message: string) => void;
-    /** Parent-owned assignment (applies the D3 confirmation + real API). */
-    onassign?: (zoneId: number, spec: AssignDto) => void | Promise<void>;
+    /**
+     * Parent-owned assignment — REQUIRED so every assignment goes through the
+     * D3 confirmation + rule-reset guard (`assignAppGuarded`). Never add a
+     * direct `api.assignZone` fallback here: that would silently bypass D3.
+     */
+    onassign: (zoneId: number, spec: AssignDto) => void | Promise<void>;
     /** Open the application picker for a zone (context-menu action). */
     onpick?: (zoneId: number) => void;
   }
@@ -418,21 +423,6 @@
     void commitMerge(source, id);
   }
 
-  async function assignApp(id: number, spec: AssignDto): Promise<void> {
-    if (onassign) {
-      await onassign(id, spec);
-      return;
-    }
-    // Fallback for standalone use; the editor always supplies `onassign` so the
-    // D3 confirmation and real result reporting are never bypassed.
-    try {
-      await api.assignZone(id, spec);
-      await refreshState();
-    } catch (error) {
-      notice(`Assign failed: ${errorMessage(error)}`);
-    }
-  }
-
   async function unassign(id: number): Promise<void> {
     try {
       await api.unassignZone(id);
@@ -534,7 +524,9 @@
       const spec = JSON.parse(raw) as AssignDto;
       if (typeof spec.label === 'string' && typeof spec.exe === 'string') {
         selectedId = zone.id;
-        void assignApp(zone.id, spec);
+        // Always route through the parent-owned guard (D3); there is no
+        // unguarded `api.assignZone` fallback in this component.
+        void onassign(zone.id, spec);
       }
     } catch {
       notice('Dropped app payload was not valid.');
@@ -584,7 +576,9 @@
       });
       items.push({
         label: 'Remove zone',
-        disabled: zones.length <= 1,
+        // The backend allows deleting the last zone; both delete surfaces
+        // may empty a profile (F3).
+        disabled: !canRemoveZone(zones.length),
         onselect: () => void remove(zone.id),
       });
     } else {

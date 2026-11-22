@@ -67,10 +67,16 @@ export function hasNonDefaultRules(zone: ZoneDto): boolean {
   );
 }
 
-/** D3: replacing a *different* app with custom rules must be confirmed. */
-export function needsReplaceConfirmation(zone: ZoneDto, next: AssignDto): boolean {
-  const replacingDifferentApp = zone.exe.trim() !== '' && zone.exe !== next.exe;
-  return replacingDifferentApp && hasNonDefaultRules(zone);
+/**
+ * D3: any assignment that will reset non-default rules must be confirmed —
+ * including re-picking the *same* app. `ZoneAssign` resets all rules
+ * unconditionally, so re-assigning the same exe (e.g. to add a path) would
+ * otherwise silently destroy launch mode / URL / tab / macro / notes. The
+ * geometry, id and position are preserved and the library item is never
+ * deleted; only the rules are reset, and only after confirmation.
+ */
+export function needsReplaceConfirmation(zone: ZoneDto, _next: AssignDto): boolean {
+  return hasNonDefaultRules(zone);
 }
 
 /* ---------------------------------- D4 ------------------------------------ */
@@ -111,22 +117,70 @@ export interface DuplicateAssignment {
 }
 
 /**
- * The backend places a single HWND per exe/path, so two zones with the same app
- * in one profile cannot both be reliably positioned. Detect and warn; never
- * silently claim multi-window support.
+ * Path-aware port of the backend's `duplicate_app_assignments` (engine_core.rs).
+ * Zones are grouped by case-insensitive exe name; within a group, two zones
+ * with distinct non-empty full paths are NOT duplicates (exact path matching
+ * resolves them to different windows). A group is ambiguous only when at least
+ * one zone has no path (it can fall back to the first exe-name match and
+ * collide) or when multiple zones share the same path. Paths are normalized
+ * (`/` → `\`, lowercased) exactly like the backend before comparison.
  */
 export function duplicateAssignments(zones: ZoneDto[]): DuplicateAssignment[] {
-  const byExe = new Map<string, number[]>();
+  const byExe = new Map<string, ZoneDto[]>();
   for (const zone of zones) {
     const exe = zone.exe.trim().toLowerCase();
     if (!exe) continue;
-    const ids = byExe.get(exe) ?? [];
-    ids.push(zone.id);
-    byExe.set(exe, ids);
+    const group = byExe.get(exe) ?? [];
+    group.push(zone);
+    byExe.set(exe, group);
   }
-  return [...byExe.entries()]
-    .filter(([, ids]) => ids.length > 1)
-    .map(([exe, ids]) => ({ exe, zoneIds: ids }));
+  const out: DuplicateAssignment[] = [];
+  for (const [exe, group] of byExe) {
+    if (group.length < 2) continue;
+    const paths = new Set<string>();
+    let hasExeOnly = false;
+    for (const zone of group) {
+      const path = zone.path.trim();
+      if (path === '') {
+        hasExeOnly = true;
+      } else {
+        paths.add(path.replace(/\//g, '\\').toLowerCase());
+      }
+    }
+    // Distinct full paths with no exe-only zone resolve to different windows —
+    // not a duplicate. Otherwise the whole exe group is ambiguous.
+    if (!hasExeOnly && paths.size > 1) continue;
+    out.push({ exe, zoneIds: group.map((z) => z.id) });
+  }
+  return out;
+}
+
+/* --------------------------- inspector field policy ----------------------- */
+
+/**
+ * F4: app identity (`exe`/`path`) is display-only in the inspector. Changing it
+ * must go through the guarded picker (`assignAppGuarded`) so D3's confirmation
+ * and rule reset always run — a direct `ZoneUpdate` would silently keep the old
+ * app's URL/title/macro rules. Strip identity fields from any inspector patch
+ * as defense in depth, even if a future edit accidentally adds one.
+ */
+export function stripAppIdentity(patch: Partial<ZoneDto>): Partial<ZoneDto> {
+  const safe: Partial<ZoneDto> = { ...patch };
+  delete safe.exe;
+  delete safe.path;
+  return safe;
+}
+
+/* ----------------------------- delete surfaces ---------------------------- */
+
+/**
+ * F3: both delete surfaces (toolbar Remove and canvas context-menu Remove) may
+ * empty a profile — the backend allows deleting the last zone. No count-based
+ * guard belongs on either surface; this shared policy keeps them consistent.
+ */
+export function canRemoveZone(zoneCount: number): boolean {
+  // A profile may always be emptied, regardless of how many zones it has.
+  return zoneCount >= 0;
 }
 
 /* ------------------------------- misc helpers ----------------------------- */
