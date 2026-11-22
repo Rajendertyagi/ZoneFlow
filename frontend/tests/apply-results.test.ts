@@ -8,6 +8,7 @@ import {
   outcomeTone,
   toOutcomeRows,
 } from '../src/lib/state/apply-results';
+import { summarizeApplyResult } from '../src/lib/state/apply-result';
 import type {
   ApplyResultDto,
   InactiveResult,
@@ -102,5 +103,35 @@ describe('isApplyResult', () => {
     expect(isApplyResult(inactive)).toBe(false);
     expect(isApplyResult({ ok: true })).toBe(false);
     expect(isApplyResult(null)).toBe(false);
+  });
+});
+
+/**
+ * B-1: a per-profile Apply must be reported with the same honest summary/panel
+ * as doApply, never a canned success toast. These are the exact pure helpers
+ * `guardedProfileOp` now composes (the Svelte store wiring is not importable in
+ * a bun test, so the mapping is asserted at helper level).
+ */
+describe('guarded profile apply reporting (B-1)', () => {
+  test('an all-failing ApplyResult is detected and summarized as error', () => {
+    const failing = result([
+      outcome(1, 'no_eligible_window'),
+      outcome(2, 'launch_failed'),
+    ]);
+    expect(isApplyResult(failing)).toBe(true);
+    const summary = summarizeApplyResult(failing);
+    expect(summary.tone).toBe('error');
+    expect(summary.message).not.toContain('success');
+  });
+
+  test('a partially failing ApplyResult is summarized as warning', () => {
+    const partial = result([outcome(1, 'snapped'), outcome(2, 'not_running')]);
+    expect(isApplyResult(partial)).toBe(true);
+    expect(summarizeApplyResult(partial).tone).toBe('warning');
+  });
+
+  test('isApplyResult distinguishes an ApplyResult from a plain OkResult', () => {
+    expect(isApplyResult({ ok: true })).toBe(false);
+    expect(isApplyResult(result([outcome(1, 'snapped')]))).toBe(true);
   });
 });

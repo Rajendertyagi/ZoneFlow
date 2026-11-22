@@ -12,7 +12,7 @@ use crate::api::worker::Command;
 use crate::api::ApiError;
 use crate::config::AppConfig;
 use crate::engine_core::Rect;
-use crate::system::{Action, System};
+use crate::system::{Action, HotkeyFailures, System};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -556,7 +556,12 @@ pub struct NativeLoop {
 impl NativeLoop {
     /// Create the hidden window, overlay, tray/hotkeys and shutdown event.
     /// Must be called on the main thread after the HTTP port is known.
-    pub fn new(cfg: &AppConfig, queue: Arc<NativeQueue>, event: HANDLE) -> Result<Self, String> {
+    pub fn new(
+        cfg: &AppConfig,
+        queue: Arc<NativeQueue>,
+        event: HANDLE,
+        hotkey_failures: HotkeyFailures,
+    ) -> Result<Self, String> {
         // SAFETY: GetModuleHandleW(None) returns the current module's HINSTANCE
         // or an error; no caller pointers are involved.
         let hinstance = unsafe { GetModuleHandleW(None) }.map_err(|e| e.to_string())?;
@@ -659,8 +664,8 @@ impl NativeLoop {
             tracing::warn!("SetTimer failed; native queue safety drain unavailable");
         }
 
-        let system =
-            System::with_config(cfg).map_err(|e| format!("tray/hotkey init failed: {e}"))?;
+        let system = System::with_config(cfg, hotkey_failures)
+            .map_err(|e| format!("tray/hotkey init failed: {e}"))?;
 
         // Send an initial full-state refresh so the tray reflects applied and
         // selected profiles from the very first frame.

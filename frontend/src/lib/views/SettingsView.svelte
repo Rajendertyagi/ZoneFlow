@@ -75,7 +75,7 @@
       await api.setSettings({ ...settings, snap_points: snapPoints });
       await api.setAppOptions(options);
       await refreshState();
-      toast('success', 'Settings saved. Save the profile to persist draft changes.');
+      toast('success', 'Settings applied to draft — save the profile to persist.');
     } catch (error) {
       toast('error', `Could not save settings: ${errorMessage(error)}`);
       await refreshState();
@@ -106,10 +106,14 @@
           <RotateCcw size={14} /> Reload
         </Button>
         <Button size="sm" disabled={!loaded || busy} onclick={() => void save()}>
-          <Save size={14} /> Save settings
+          <Save size={14} /> Apply settings
         </Button>
       </div>
     </div>
+
+    <p class="text-[0.7rem] leading-relaxed text-zf-muted">
+      Settings are part of your draft. Use Save in the editor to persist them to disk.
+    </p>
 
     {#if !loaded}
       <p class="text-sm text-zf-faint">Loading settings…</p>

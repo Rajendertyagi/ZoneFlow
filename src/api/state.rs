@@ -9,6 +9,7 @@ use super::dto::{
     ZoneDto,
 };
 use crate::config::AppConfig;
+use crate::system::HotkeyFailures;
 use std::collections::VecDeque;
 
 /// Maximum number of retained log lines (oldest are dropped first).
@@ -277,10 +278,15 @@ impl Inner {
         Ok(())
     }
 
-    /// Build the full `GET /api/state` snapshot. `work_area` is supplied by the
-    /// caller (the worker reads it from `engine::work_area()`) so this method
-    /// stays pure and unit-testable.
-    pub fn state_snapshot(&self, work_area: RectDto) -> StateSnapshot {
+    /// Build the full `GET /api/state` snapshot. `work_area` and the shared
+    /// `hotkey_failures` slot are supplied by the caller (the worker reads the
+    /// area from `engine::work_area()` and owns the slot handle) so this method
+    /// stays unit-testable without native objects.
+    pub fn state_snapshot(
+        &self,
+        work_area: RectDto,
+        hotkey_failures: &HotkeyFailures,
+    ) -> StateSnapshot {
         let profiles: Vec<ProfileSummary> = self
             .draft
             .profiles
@@ -304,6 +310,12 @@ impl Inner {
             })
             .collect();
         let logs: Vec<LogLineDto> = self.logs.iter().map(LogLineDto::from).collect();
+        // Tolerate a poisoned slot: it holds only display strings, so the
+        // snapshot must still be buildable.
+        let hotkey_failures = match hotkey_failures.lock() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
         StateSnapshot {
             draft: self.draft.clone(),
             dirty: self.is_dirty(),
@@ -322,6 +334,7 @@ impl Inner {
                 applied: self.applied_profile.clone(),
                 enabled: self.layout_enabled,
             },
+            hotkey_failures,
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
         }
@@ -346,6 +359,7 @@ impl Inner {
 mod tests {
     use super::*;
     use crate::config::{default_config, Profile, Zone};
+    use std::sync::{Arc, Mutex};
 
     fn cfg() -> AppConfig {
         default_config()
@@ -437,12 +451,15 @@ mod tests {
         s.selected_profile = "Trading".into();
         s.layout_enabled = false;
         s.draft.gap = 3;
-        let snap = s.state_snapshot(RectDto {
-            x: 0,
-            y: 0,
-            w: 1920,
-            h: 1040,
-        });
+        let snap = s.state_snapshot(
+            RectDto {
+                x: 0,
+                y: 0,
+                w: 1920,
+                h: 1040,
+            },
+            &HotkeyFailures::default(),
+        );
         assert!(snap.dirty);
         assert_eq!(snap.applied, "Coding");
         assert_eq!(snap.selected, "Trading");
@@ -459,18 +476,46 @@ mod tests {
     }
 
     #[test]
+    fn state_snapshot_includes_hotkey_failures_from_shared_slot() {
+        let s = Inner::new(cfg());
+        let slot: HotkeyFailures = Arc::new(Mutex::new(vec![
+            "clear_layout (Ctr+Shift+0)".into(),
+            "move_left (Ctrl+Alt+Left)".into(),
+        ]));
+        let snap = s.state_snapshot(
+            RectDto {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            &slot,
+        );
+        assert_eq!(
+            snap.hotkey_failures,
+            vec!["clear_layout (Ctr+Shift+0)", "move_left (Ctrl+Alt+Left)"]
+        );
+        // The snapshot is a copy: later native writes must not mutate it.
+        slot.lock().unwrap().push("later (X)".into());
+        assert_eq!(snap.hotkey_failures.len(), 2);
+    }
+
+    #[test]
     fn state_snapshot_zones_come_from_active_profile() {
         let mut s = Inner::new(cfg());
         s.draft
             .active_mut()
             .zones
             .push(Zone::new(1, "A", "a.exe", 0.0, 0.0, 50.0, 100.0));
-        let snap = s.state_snapshot(RectDto {
-            x: 0,
-            y: 0,
-            w: 1,
-            h: 1,
-        });
+        let snap = s.state_snapshot(
+            RectDto {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            &HotkeyFailures::default(),
+        );
         assert_eq!(snap.zones.len(), 1);
         assert_eq!(snap.zones[0].exe, "a.exe");
         assert_eq!(snap.status.zone_count, 1);

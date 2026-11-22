@@ -13,7 +13,7 @@ use super::ApiError;
 use crate::apps::{self, AppEntry};
 use crate::config::{Profile, Zone};
 use crate::native_loop::{NativeNotifier, ShutdownHandle};
-use crate::system::Action;
+use crate::system::{validate_binding, Action, HotkeyFailures};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -197,6 +197,8 @@ pub struct CommandContext<'a> {
     pub editor_url: Arc<String>,
     /// 2-second TTL cache for running-app enumeration (§5.4).
     pub running_cache: &'a mut Option<(Instant, Vec<AppEntry>)>,
+    /// Shared hotkey-registration failures written on the native thread (U-03).
+    pub hotkey_failures: HotkeyFailures,
 }
 
 /// D2 unified dirty contract. Clean → proceed. Dirty + discard → revert the
@@ -223,6 +225,12 @@ fn not_found(what: &str) -> ApiError {
 
 fn bad_request(msg: impl Into<String>) -> ApiError {
     ApiError::BadRequest(msg.into())
+}
+
+/// Map an autostart registry failure to the API error the UI surfaces. Kept as
+/// a pure function so the mapping is testable without touching the registry.
+fn autostart_api_error(message: String) -> ApiError {
+    ApiError::Internal(message)
 }
 
 /// Map an engine failure to its wire status. Kept as a pure function so every
@@ -336,12 +344,14 @@ pub fn handle(
     match payload {
         CommandPayload::StateGet => {
             let area = RectDto::from(&crate::engine::work_area());
-            Ok(serde_json::to_value(inner.state_snapshot(area))
-                .map_err(|e| ApiError::Internal(e.to_string()))?)
+            Ok(
+                serde_json::to_value(inner.state_snapshot(area, &ctx.hotkey_failures))
+                    .map_err(|e| ApiError::Internal(e.to_string()))?,
+            )
         }
         CommandPayload::StatusGet => {
             let area = RectDto::from(&crate::engine::work_area());
-            let status = inner.state_snapshot(area).status;
+            let status = inner.state_snapshot(area, &ctx.hotkey_failures).status;
             Ok(serde_json::to_value(status).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::Shutdown => {
@@ -883,7 +893,9 @@ pub fn handle(
         }
         CommandPayload::SettingsSet { settings } => {
             inner.draft.settings = settings.into();
-            crate::autostart::set_auto_start(inner.draft.auto_start);
+            // Autostart is owned by AppOptionsSet, which the Settings view calls
+            // immediately afterwards. Re-writing the OLD value here was both
+            // redundant and misleading (R-01); do not touch the registry here.
             inner.push_history();
             // Reverse update: overlay tints/alpha are cached on the native
             // thread, so a Settings edit must refresh them (§3.3 step 4).
@@ -894,9 +906,11 @@ pub fn handle(
         CommandPayload::AppOptionsSet { options } => {
             // Only touch the registry when the value actually changes — avoids a
             // redundant HKCU write on every Settings save (and keeps tests inert
-            // when the value is unchanged).
+            // when the value is unchanged). A registry failure is surfaced to the
+            // UI as an Internal error instead of a false success (R-01).
             if inner.draft.auto_start != options.auto_start {
-                crate::autostart::set_auto_start(options.auto_start);
+                crate::autostart::set_auto_start(options.auto_start)
+                    .map_err(autostart_api_error)?;
             }
             inner.draft.auto_start = options.auto_start;
             inner.draft.close_action = options.close_action;
@@ -918,6 +932,21 @@ pub fn handle(
             Ok(serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::HotkeysSet { hotkeys } => {
+            // Validate ALL bindings before mutating state so a typo can never
+            // leave an invalid binding in the draft (U-03, layer 1). Native
+            // registration conflicts are still surfaced asynchronously via the
+            // shared failure slot (layer 2).
+            let invalid: Vec<String> = hotkeys
+                .iter()
+                .filter(|(_, binding)| validate_binding(binding).is_err())
+                .map(|(name, binding)| format!("{} ({})", name, binding))
+                .collect();
+            if !invalid.is_empty() {
+                return Err(bad_request(format!(
+                    "invalid hotkey bindings: {}",
+                    invalid.join(", ")
+                )));
+            }
             inner.draft.hotkeys = hotkeys.clone();
             inner.push_history();
             ctx.notifier.reregister_hotkeys(&hotkeys);
@@ -1113,6 +1142,7 @@ mod tests {
             shutdown: shutdown.clone(),
             editor_url: Arc::new(crate::browser::EDITOR_URL.to_string()),
             running_cache: cache,
+            hotkey_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -1348,12 +1378,15 @@ mod tests {
             "a new profile must have zero zones"
         );
         assert!(inner.draft.active().zones.is_empty());
-        let snap = inner.state_snapshot(RectDto {
-            x: 0,
-            y: 0,
-            w: 1,
-            h: 1,
-        });
+        let snap = inner.state_snapshot(
+            RectDto {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            &HotkeyFailures::default(),
+        );
         assert!(snap.zones.is_empty());
         assert_eq!(snap.selected, "Gaming");
     }
@@ -2103,6 +2136,66 @@ mod tests {
         assert!(!inner.draft.auto_start);
         assert_eq!(inner.draft.close_action, crate::config::CloseAction::Exit);
         assert_eq!(inner.draft.gap, 12);
+    }
+
+    #[test]
+    fn autostart_failure_maps_to_internal_api_error() {
+        let err = autostart_api_error("RegSetValueExW failed".into());
+        match err {
+            ApiError::Internal(message) => assert_eq!(message, "RegSetValueExW failed"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hotkeys_set_rejects_invalid_binding_without_state_change() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let before = inner.draft.hotkeys.clone();
+        let before_dirty = inner.is_dirty();
+        let mut hotkeys = before.clone();
+        hotkeys.insert("clear_layout".into(), "Ctr+Shift+0".into());
+
+        let err = handle(CommandPayload::HotkeysSet { hotkeys }, &mut inner, &mut ctx)
+            .expect_err("invalid binding must be rejected");
+        match err {
+            ApiError::BadRequest(message) => {
+                assert!(message.contains("invalid hotkey bindings"), "{message}");
+                assert!(message.contains("clear_layout (Ctr+Shift+0)"), "{message}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        assert_eq!(
+            inner.draft.hotkeys, before,
+            "no state change on invalid binding"
+        );
+        assert_eq!(
+            inner.is_dirty(),
+            before_dirty,
+            "no history/dirty change on rejection"
+        );
+    }
+
+    #[test]
+    fn state_get_surfaces_hotkey_failures_from_shared_slot() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let slot: HotkeyFailures = Arc::new(std::sync::Mutex::new(vec![
+            "move_left (Ctrl+Alt+Left)".into(),
+        ]));
+        let mut ctx = CommandContext {
+            notifier: Arc::new(NativeNotifier::new(
+                queue.clone(),
+                Arc::new(std::sync::OnceLock::new()),
+            )),
+            shutdown: shutdown.clone(),
+            editor_url: Arc::new(crate::browser::EDITOR_URL.to_string()),
+            running_cache: &mut cache,
+            hotkey_failures: slot,
+        };
+        let value = handle(CommandPayload::StateGet, &mut inner, &mut ctx).unwrap();
+        let failures = value["hotkey_failures"].as_array().unwrap();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].as_str().unwrap(), "move_left (Ctrl+Alt+Left)");
     }
 
     /// Seed one zone in the active profile and keep the draft clean so the

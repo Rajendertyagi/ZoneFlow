@@ -13,7 +13,12 @@ fn wide(s: &str) -> Vec<u16> {
 
 /// Enable or disable launching the app at Windows login by writing/removing the
 /// Run registry value. The registry key is unchanged from the original code.
-pub fn set_auto_start(enable: bool) {
+///
+/// Returns a descriptive error on every failure path so callers can surface a
+/// real failure instead of reporting a false "settings saved" success. The key
+/// handle is always closed exactly once after `RegCreateKeyW` succeeds, even
+/// when the value write/delete fails.
+pub fn set_auto_start(enable: bool) -> Result<(), String> {
     // Resolve the executable path before touching the registry so a failure can
     // be reported and handled without leaving an open key behind. When disabling,
     // no path is needed (the registry value is simply deleted).
@@ -21,8 +26,9 @@ pub fn set_auto_start(enable: bool) {
         match std::env::current_exe() {
             Ok(p) => Some(p),
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to resolve current exe path for auto-start");
-                return;
+                return Err(format!(
+                    "failed to resolve current exe path for auto-start: {e}"
+                ));
             }
         }
     } else {
@@ -39,10 +45,15 @@ pub fn set_auto_start(enable: bool) {
     unsafe {
         let key_path = wide(RUN_KEY);
         let mut hkey: HKEY = HKEY::default();
-        if RegCreateKeyW(HKEY_CURRENT_USER, PCWSTR(key_path.as_ptr()), &mut hkey).is_err() {
-            return;
+        if let Err(e) = RegCreateKeyW(HKEY_CURRENT_USER, PCWSTR(key_path.as_ptr()), &mut hkey).ok()
+        {
+            return Err(format!("failed to open Run registry key: {e}"));
         }
         let name = wide(APP_NAME);
+        // Capture the first operation error but still close the key below. A
+        // close failure is reported only when no earlier, more specific error
+        // exists (otherwise it is logged so it is not silently lost).
+        let mut result: Result<(), String> = Ok(());
         if let Some(exe) = exe {
             let value = format!("\"{}\"", exe.to_string_lossy());
             let v = wide(&value);
@@ -50,14 +61,19 @@ pub fn set_auto_start(enable: bool) {
             if let Err(e) =
                 RegSetValueExW(hkey, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes)).ok()
             {
-                tracing::warn!(error = %e, "RegSetValueExW failed while enabling auto-start");
+                result = Err(format!("failed to set auto-start registry value: {e}"));
             }
         } else if let Err(e) = RegDeleteValueW(hkey, PCWSTR(name.as_ptr())).ok() {
-            tracing::warn!(error = %e, "RegDeleteValueW failed while disabling auto-start");
+            result = Err(format!("failed to delete auto-start registry value: {e}"));
         }
         if let Err(e) = RegCloseKey(hkey).ok() {
-            tracing::warn!(error = %e, "RegCloseKey failed in set_auto_start");
+            if result.is_ok() {
+                result = Err(format!("failed to close Run registry key: {e}"));
+            } else {
+                tracing::warn!(error = %e, "RegCloseKey failed in set_auto_start");
+            }
         }
+        result
     }
 }
 
@@ -88,5 +104,18 @@ pub fn is_auto_start() -> bool {
             tracing::warn!(error = %e, "RegCloseKey failed in is_auto_start");
         }
         status.is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_auto_start;
+
+    /// Compile-time proof that registry failures are returned to the caller
+    /// instead of being swallowed. The test never invokes the function (which
+    /// would touch the real registry); it only pins the signature.
+    #[test]
+    fn set_auto_start_returns_a_descriptive_result() {
+        let _signature: fn(bool) -> Result<(), String> = set_auto_start;
     }
 }

@@ -2,10 +2,19 @@ use crate::config::AppConfig;
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 use tray_icon::menu::{
     CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
 };
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+
+/// Shared slot mirroring [`System::failures`] for the API state snapshot.
+///
+/// Created by `main`, written on the native thread by [`System::register_bindings`]
+/// and read by the command worker when it builds `StateSnapshot`. This keeps the
+/// non-`Send` `System` authoritative while letting the UI surface registration
+/// conflicts persistently (Finding U-03).
+pub type HotkeyFailures = Arc<Mutex<Vec<String>>>;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -46,6 +55,8 @@ pub struct System {
     registered: Vec<HotKey>,
     /// Bindings that could not be parsed or registered (shown in the UI log).
     pub failures: Vec<String>,
+    /// Shared mirror of `failures` for the API state snapshot (U-03).
+    hotkey_failures: HotkeyFailures,
     /// Dynamic profile submenu and its check items (rebuilt on NativeUpdate).
     profiles_submenu: Option<Submenu>,
     profile_items: Vec<CheckMenuItem>,
@@ -60,7 +71,10 @@ impl System {
     /// Constructs the tray icon and hotkey manager, registering hotkeys from
     /// `cfg.hotkeys` (§2c). Tray creation is fatal; individual hotkey failures
     /// are logged and recorded in [`System::failures`] but never abort startup.
-    pub fn with_config(cfg: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn with_config(
+        cfg: &AppConfig,
+        hotkey_failures: HotkeyFailures,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Tray icon first — always available even if hotkeys fail.
         let menu = Menu::new();
 
@@ -134,8 +148,11 @@ impl System {
         let manager = GlobalHotKeyManager::new()?;
 
         // Apply the config's autostart preference at startup so the registry
-        // value stays in sync with the (authoritative) config file.
-        crate::autostart::set_auto_start(cfg.auto_start);
+        // value stays in sync with the (authoritative) config file. Startup is
+        // fail-soft (no user action to report to), so log rather than abort.
+        if let Err(e) = crate::autostart::set_auto_start(cfg.auto_start) {
+            tracing::warn!(error = %e, "failed to apply autostart preference at startup");
+        }
 
         let mut system = Self {
             manager,
@@ -143,6 +160,7 @@ impl System {
             hotkey_map: HashMap::new(),
             registered: Vec::new(),
             failures: Vec::new(),
+            hotkey_failures,
             profiles_submenu: Some(profiles_submenu),
             profile_items,
             header_item: Some(header),
@@ -190,8 +208,7 @@ impl System {
                 continue;
             };
 
-            let normalized = normalize_binding(binding);
-            let hk = match normalized.parse::<HotKey>() {
+            let hk = match validate_binding(binding) {
                 Ok(hk) => hk,
                 Err(e) => {
                     tracing::warn!(
@@ -223,7 +240,20 @@ impl System {
             }
         }
 
+        self.publish_failures();
         Ok(())
+    }
+
+    /// Mirror the current failure list into the shared slot so the command
+    /// worker can include it in `StateSnapshot`. Poisoning is tolerated: the
+    /// slot holds only display strings, so a poisoned mutex still yields a
+    /// usable snapshot via `into_inner`.
+    fn publish_failures(&self) {
+        let snapshot = self.failures.clone();
+        match self.hotkey_failures.lock() {
+            Ok(mut slot) => *slot = snapshot,
+            Err(poisoned) => *poisoned.into_inner() = snapshot,
+        }
     }
 
     pub fn poll(&self) -> Vec<Action> {
@@ -387,6 +417,18 @@ fn normalize_binding(binding: &str) -> String {
     out
 }
 
+/// Validate an AHK-style binding string and parse it into a `HotKey`.
+///
+/// Pure and side-effect free so the worker can reject invalid bindings
+/// synchronously (before mutating state) and tests can exercise it without a
+/// native hotkey manager. `Win`/`Windows` are normalised to `Meta` first, so
+/// the config defaults parse exactly as they do at registration time.
+pub fn validate_binding(binding: &str) -> Result<HotKey, String> {
+    normalize_binding(binding)
+        .parse::<HotKey>()
+        .map_err(|e| format!("invalid binding '{binding}': {e}"))
+}
+
 /// Tray icon brand colours. These are the fixed app-icon identity (a raster
 /// asset), not UI theme colours, so they are intentionally not sourced from the
 /// web UI palette or config. Named constants keep the literals out of the
@@ -435,6 +477,20 @@ mod tests {
     fn win_is_normalised_to_meta() {
         assert_eq!(normalize_binding("Win+Up"), "Meta+Up");
         assert_eq!(normalize_binding("Ctrl+Shift+1"), "Ctrl+Shift+1");
+    }
+
+    #[test]
+    fn validate_binding_accepts_valid_and_rejects_typos() {
+        assert!(validate_binding("Ctrl+Shift+1").is_ok());
+        assert!(
+            validate_binding("Win+Up").is_ok(),
+            "Win must normalise to Meta"
+        );
+        let err = validate_binding("Ctr+Shift+0").expect_err("typo must be rejected");
+        assert!(
+            err.contains("Ctr+Shift+0"),
+            "error must name the bad binding: {err}"
+        );
     }
 
     #[test]

@@ -17,7 +17,8 @@ use native_loop::{
     HwndSend, NativeDirtyConfirm, NativeLoop, NativeNotifier, NativeQueue, SharedEvent,
     ShutdownHandle,
 };
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use system::HotkeyFailures;
 use tokio::sync::{broadcast, oneshot, watch};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HANDLE;
@@ -78,6 +79,9 @@ fn main() {
 
     let queue = Arc::new(NativeQueue::new());
     let event = create_shutdown_event();
+    // Shared hotkey-registration failure slot: written on the native thread by
+    // `System`, read by the command worker into `StateSnapshot` (Finding U-03).
+    let hotkey_failures: HotkeyFailures = Arc::new(Mutex::new(Vec::new()));
     let hwnd_slot = Arc::new(OnceLock::<HwndSend>::new());
     let notifier = NativeNotifier::new(queue.clone(), hwnd_slot.clone());
     let shutdown = ShutdownHandle::new(
@@ -190,10 +194,11 @@ fn main() {
         notifier,
         shutdown.clone(),
         editor_url,
+        hotkey_failures.clone(),
     );
 
     // --- thread 1 (main): native objects + message loop (§3.2 step 4) ---
-    let mut native = match NativeLoop::new(&cfg, queue.clone(), event) {
+    let mut native = match NativeLoop::new(&cfg, queue.clone(), event, hotkey_failures) {
         Ok(n) => n,
         Err(e) => {
             tracing::error!(error = %e, "native initialization failed; shutting down");

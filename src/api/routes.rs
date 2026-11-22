@@ -513,6 +513,7 @@ mod tests {
             notifier,
             shutdown.clone(),
             Arc::new(crate::browser::EDITOR_URL.to_string()),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
         );
         let state = AppState {
             cmd_tx,

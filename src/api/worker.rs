@@ -9,6 +9,7 @@ use super::state::Inner;
 use super::ApiError;
 use crate::config::AppConfig;
 use crate::native_loop::{NativeNotifier, ShutdownHandle};
+use crate::system::HotkeyFailures;
 use serde_json::Value;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ pub fn spawn_worker(
     notifier: NativeNotifier,
     shutdown: ShutdownHandle,
     editor_url: Arc<String>,
+    hotkey_failures: HotkeyFailures,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("zoneflow-worker".into())
@@ -48,6 +50,7 @@ pub fn spawn_worker(
                     shutdown: shutdown.clone(),
                     editor_url: editor_url.clone(),
                     running_cache: &mut running_cache,
+                    hotkey_failures: hotkey_failures.clone(),
                 };
                 let result = handle(cmd.payload, &mut inner, &mut ctx);
                 let succeeded = result.is_ok();
@@ -111,6 +114,7 @@ mod tests {
             notifier,
             shutdown,
             Arc::new(crate::browser::EDITOR_URL.to_string()),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
         );
 
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -152,6 +156,7 @@ mod tests {
             notifier,
             shutdown,
             Arc::new(crate::browser::EDITOR_URL.to_string()),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
         );
 
         fn send(tx: &mpsc::Sender<Command>, payload: CommandPayload) -> Result<Value, ApiError> {

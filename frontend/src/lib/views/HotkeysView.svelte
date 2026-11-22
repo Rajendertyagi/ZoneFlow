@@ -3,6 +3,7 @@
   import { api } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
   import { store } from '$lib/state/app.svelte';
+  import { hotkeyFailureWarning } from '$lib/state/hotkey-failures';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
@@ -40,6 +41,10 @@
   const changed = $derived(
     (store.snapshot?.hotkeys ?? []).some((r) => bindings[r.name] !== r.binding),
   );
+  // Persistent, non-dismissible warning for bindings the native side could not
+  // register (syntax is rejected synchronously by the worker; conflicts arrive
+  // via the shared failure slot and SSE refresh — U-03).
+  const failureWarning = $derived(hotkeyFailureWarning(store.snapshot?.hotkey_failures));
 
   async function save(): Promise<void> {
     try {
@@ -77,6 +82,15 @@
         </Button>
       </div>
     </div>
+
+    {#if failureWarning}
+      <div
+        role="alert"
+        class="mb-4 rounded-md border border-zf-warn/40 bg-zf-warn/10 px-3 py-2 text-xs leading-relaxed text-zf-warn"
+      >
+        {failureWarning}
+      </div>
+    {/if}
 
     <div class="overflow-hidden rounded-lg border border-zf-border">
       {#each Object.keys(bindings).sort() as name (name)}

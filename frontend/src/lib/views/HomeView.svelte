@@ -85,7 +85,8 @@
     await guardedProfileOp((discard) => api.applyProfile(name, discard), {
       profile: name,
       action: `apply ${name}`,
-      successMessage: `Applied ${name}.`,
+      // No canned successMessage: the backend returns per-zone outcomes, which
+      // guardedProfileOp now reports with an honest tone + results panel (B-1).
     });
   }
 

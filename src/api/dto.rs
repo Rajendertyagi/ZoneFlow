@@ -298,6 +298,9 @@ pub struct StateSnapshot {
     pub hotkeys: Vec<HotkeyDto>,
     pub logs: Vec<LogLineDto>,
     pub status: EngineStatusDto,
+    /// Hotkey bindings that failed syntax validation or native registration
+    /// (Finding U-03). Mirrored from the native thread through a shared slot.
+    pub hotkey_failures: Vec<String>,
     pub can_undo: bool,
     pub can_redo: bool,
 }

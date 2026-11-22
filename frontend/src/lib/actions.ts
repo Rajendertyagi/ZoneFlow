@@ -47,8 +47,12 @@ export async function guardedProfileOp(
     await refreshState();
     const inactive = isInactiveResult(result);
     reportInactive(result, options.action);
-    // Never show a success toast for a disabled/inactive result (D4).
-    if (!inactive && options.successMessage) toast('success', options.successMessage);
+    // Apply results carry per-zone outcomes: report them honestly (tone + panel)
+    // exactly like doApply. Only plain select/load results keep the caller's
+    // successMessage toast (B-1). Never show a success toast for inactive (D4).
+    if (!reportApplyResult(result) && !inactive && options.successMessage) {
+      toast('success', options.successMessage);
+    }
     return true;
   } catch (error) {
     if (!isDirtyError(error)) {
@@ -70,6 +74,9 @@ export async function guardedProfileOp(
       const result = await op(true);
       await refreshState();
       reportInactive(result, options.action);
+      // Same honest reporting on the discard-retry path (B-1); the discard
+      // notice below is preserved exactly (D2).
+      reportApplyResult(result);
       toast('info', `Discarded unsaved changes in ${options.profile}.`);
       return true;
     } catch (retryError) {
@@ -83,6 +90,20 @@ function reportInactive(result: unknown, action: string): void {
   if (isInactiveResult(result)) {
     toast('info', `Layout is disabled — ${action} changed selection only.`);
   }
+}
+
+/**
+ * Report a real ApplyResult the same way `doApply` does: an honest tone/message
+ * derived from per-zone outcomes plus the dismissible results panel. Returns
+ * `true` when the result was an ApplyResult (so callers can skip their generic
+ * success toast). Inactive/Ok results are left untouched (B-1).
+ */
+function reportApplyResult(result: unknown): boolean {
+  if (!isApplyResult(result)) return false;
+  const summary = summarizeApplyResult(result);
+  toast(summary.tone, summary.message);
+  showApplyResults(result);
+  return true;
 }
 
 /* -------------------------------- assignment (D3) -------------------------- */

@@ -145,6 +145,8 @@ export interface StateSnapshot {
   hotkeys: HotkeyDto[];
   logs: LogLineDto[];
   status: EngineStatusDto;
+  /** Hotkey bindings that failed validation or native registration (U-03). */
+  hotkey_failures: string[];
   can_undo: boolean;
   can_redo: boolean;
 }
