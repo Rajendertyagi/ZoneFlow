@@ -567,6 +567,8 @@ pub fn enumerate_installed_apps() -> Vec<AppEntry> {
 
 #[cfg(windows)]
 struct RunningProcess {
+    /// OS process id, used to match against PIDs that own a real window (U-06).
+    pid: u32,
     /// Image name from `tasklist` (used only when the path lookup fails).
     name: String,
     /// Authoritative full image path, empty when the OS refused the lookup.
@@ -600,6 +602,7 @@ fn enumerate_running_processes() -> Vec<RunningProcess> {
         // Reuse the engine's single Win32 implementation (Decision 1).
         let path = crate::engine::process_path(pid).unwrap_or_default();
         out.push(RunningProcess {
+            pid,
             name: name.to_string(),
             path,
         });
@@ -607,12 +610,104 @@ fn enumerate_running_processes() -> Vec<RunningProcess> {
     out
 }
 
-/// Enumerate currently running processes via `tasklist /FO CSV /NH`.
+/// Collect the PIDs of processes that own at least one real top-level window
+/// (visible, non-tool, larger than `min_window_px`). Reuses the engine's single
+/// `is_real_window_min` implementation so the Running UI list agrees with the
+/// window matcher (U-06). System-only processes such as `System`, `Registry`
+/// and `csrss` own no such window and are therefore excluded.
+///
+/// Returns `None` when `EnumWindows` fails. The caller must then skip window
+/// filtering entirely (fail-open) so a Win32 failure cannot empty the Running
+/// list — that was the pre-WP5 behaviour.
+#[cfg(windows)]
+fn pids_with_real_windows() -> Option<HashSet<u32>> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
+
+    struct WindowPidCtx {
+        pids: HashSet<u32>,
+        min_px: i32,
+    }
+
+    // SAFETY: this callback is only ever handed to `EnumWindows` by
+    // `pids_with_real_windows`, with `lparam` set to the address of a live
+    // `WindowPidCtx`. `EnumWindows` is synchronous, so the pointer is valid for
+    // every invocation and the context is not dropped until it returns.
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam.0 as *mut WindowPidCtx);
+        if crate::engine::is_real_window_min(hwnd, ctx.min_px) {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid != 0 {
+                ctx.pids.insert(pid);
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut ctx = WindowPidCtx {
+        pids: HashSet::new(),
+        min_px: crate::config::loaded_settings().min_window_px,
+    };
+    // SAFETY: `ctx` is a live stack local for the whole call; its address is
+    // passed as `LPARAM` and cast back by `enum_proc` while `EnumWindows` runs.
+    unsafe {
+        if let Err(e) = EnumWindows(Some(enum_proc), LPARAM(&mut ctx as *mut _ as isize)) {
+            // One warning for the whole enumeration (never per process). The
+            // caller sees `None` and keeps every tasklist process unfiltered.
+            tracing::warn!(
+                error = %e,
+                "EnumWindows failed while collecting window PIDs — showing all running processes unfiltered (fail-open)"
+            );
+            return None;
+        }
+    }
+    Some(ctx.pids)
+}
+
+/// Pure filter for the Running UI list: keep only entries whose PID owns a real
+/// window. `has_window` is injected so the rule is unit-testable without any
+/// Win32 calls (U-06). `#[allow(dead_code)]` because on non-Windows builds only
+/// the unit tests reference it.
+#[allow(dead_code)]
+fn retain_with_windows<T, F>(entries: Vec<(u32, T)>, has_window: F) -> Vec<T>
+where
+    F: Fn(u32) -> bool,
+{
+    entries
+        .into_iter()
+        .filter_map(|(pid, entry)| has_window(pid).then_some(entry))
+        .collect()
+}
+
+/// Pure application of the optional window filter (U-06 fail-open). `None`
+/// means window enumeration was unavailable, so filtering is skipped entirely
+/// and every process is retained — matching pre-WP5 behaviour. Kept separate
+/// from `retain_with_windows` so that helper and its tests stay unchanged.
+fn apply_window_filter<T>(entries: Vec<(u32, T)>, window_pids: Option<&HashSet<u32>>) -> Vec<T> {
+    match window_pids {
+        Some(pids) => retain_with_windows(entries, |pid| pids.contains(&pid)),
+        None => entries.into_iter().map(|(_, entry)| entry).collect(),
+    }
+}
+
+/// Enumerate currently running processes via `tasklist /FO CSV /NH`, filtered
+/// to those owning at least one real window when that information is available
+/// (U-06). If window enumeration fails, the list is returned unfiltered.
 pub fn enumerate_running_apps() -> Vec<AppEntry> {
     #[cfg(windows)]
     {
+        let window_pids = pids_with_real_windows();
+        let processes = apply_window_filter(
+            enumerate_running_processes()
+                .into_iter()
+                .map(|p| (p.pid, p))
+                .collect(),
+            window_pids.as_ref(),
+        );
         let mut candidates: Vec<AppCandidate> = Vec::new();
-        for p in enumerate_running_processes() {
+        for p in processes {
             let (exe, path) = if p.path.is_empty() {
                 // Lookup failed: keep it selectable with the process name as
                 // exe; runtime resolution will retry on a fresh enumeration.
@@ -1014,6 +1109,68 @@ mod tests {
             3,
             "the three entries must be distinct identities"
         );
+    }
+
+    #[test]
+    fn running_list_keeps_only_processes_with_real_windows() {
+        // U-06: the pure filter must drop PIDs without a real window (System,
+        // Registry, csrss, …) and keep those that own one, preserving order.
+        let entries = vec![
+            (4u32, "System"),
+            (100u32, "explorer.exe"),
+            (248u32, "Registry"),
+            (500u32, "chrome.exe"),
+            (612u32, "csrss.exe"),
+        ];
+        let with_window: HashSet<u32> = [100u32, 500u32].into_iter().collect();
+        let kept = retain_with_windows(entries, |pid| with_window.contains(&pid));
+        assert_eq!(kept, vec!["explorer.exe", "chrome.exe"]);
+    }
+
+    #[test]
+    fn running_list_filter_handles_empty_and_all_filtered() {
+        let empty: Vec<(u32, &str)> = Vec::new();
+        assert!(retain_with_windows(empty, |_| true).is_empty());
+        let kept = retain_with_windows(vec![(1u32, "a"), (2u32, "b")], |_| false);
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn running_list_fails_open_when_window_filter_unavailable() {
+        // MAJOR regression guard: an EnumWindows failure yields `None`, which
+        // must keep EVERY tasklist process (pre-WP5 behaviour), never an empty
+        // list. System/Registry/csrss are retained on this fallback path.
+        let entries = vec![
+            (4u32, "System"),
+            (100u32, "explorer.exe"),
+            (248u32, "Registry"),
+            (500u32, "chrome.exe"),
+            (612u32, "csrss.exe"),
+        ];
+        let kept = apply_window_filter(entries, None);
+        assert_eq!(
+            kept,
+            vec![
+                "System",
+                "explorer.exe",
+                "Registry",
+                "chrome.exe",
+                "csrss.exe"
+            ]
+        );
+    }
+
+    #[test]
+    fn running_list_filters_when_window_pids_available() {
+        // Success path still filters to windowed processes only.
+        let entries = vec![
+            (4u32, "System"),
+            (100u32, "explorer.exe"),
+            (500u32, "chrome.exe"),
+        ];
+        let pids: HashSet<u32> = [100u32].into_iter().collect();
+        let kept = apply_window_filter(entries, Some(&pids));
+        assert_eq!(kept, vec!["explorer.exe"]);
     }
 
     #[cfg(windows)]

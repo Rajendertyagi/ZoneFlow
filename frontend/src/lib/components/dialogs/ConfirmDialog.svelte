@@ -16,7 +16,9 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if request}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+  <!-- Above the other z-50 dialogs: confirm() can be invoked from inside a
+       dialog (e.g. the wizard's replace warning, the picker's replace rules). -->
+  <div class="fixed inset-0 z-[70] flex items-center justify-center p-4">
     <button
       type="button"
       aria-label="Cancel dialog"

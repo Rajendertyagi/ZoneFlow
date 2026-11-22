@@ -2,6 +2,7 @@
   import { FolderOpen, RefreshCw, Search } from '@lucide/svelte';
   import { api, type AppEntryDto, type ZoneDto } from '$lib/api/client';
   import { assignAppGuarded } from '$lib/actions';
+  import { appsOnTabEnter } from '$lib/state/app-source';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
@@ -54,11 +55,18 @@
     }
   }
 
-  // Switching tabs loads that source. Browse is explicit (native file picker).
+  // Switching tabs loads that source. Browse is explicit (native file picker):
+  // entering it clears any previously loaded list so a stale Installed/Running
+  // result is never shown as if it were a browse result (B-6).
   $effect(() => {
     if (!open) return;
     const next = source;
-    if (next === 'browse') return;
+    const browseApps = appsOnTabEnter(next);
+    if (browseApps !== null) {
+      apps = browseApps;
+      selected = null;
+      return;
+    }
     void load(next);
   });
 

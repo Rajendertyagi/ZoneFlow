@@ -3,7 +3,8 @@
   import { api } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
   import { store } from '$lib/state/app.svelte';
-  import { toast } from '$lib/state/ui.svelte';
+  import { confirm, toast } from '$lib/state/ui.svelte';
+  import { countAssignedZonesToRemove } from '$lib/state/wizard';
   import { errorMessage } from '$lib/state/workflow';
   import { blankZone } from '$lib/components/Canvas/geometry';
   import {
@@ -43,6 +44,19 @@
         // Reuse the first zone (the backend refuses deleting the last one), then
         // remove the rest and create the remaining template zones.
         const keep = existing[0];
+        // U-09: warn before silently dropping application assignments on the
+        // zones that are about to be deleted. The kept zone keeps its exe/path.
+        const assignedToRemove = countAssignedZonesToRemove(existing, keep.id);
+        if (assignedToRemove > 0) {
+          const ok = await confirm({
+            title: 'Replace assigned zones?',
+            description: `This template will delete ${assignedToRemove} assigned zone${assignedToRemove === 1 ? '' : 's'}, removing their application assignments. This cannot be undone. Continue?`,
+            confirmLabel: 'Replace zones',
+            cancelLabel: 'Cancel',
+            destructive: true,
+          });
+          if (!ok) return;
+        }
         await api.updateZone(keep.id, {
           ...keep,
           ...rects[0],

@@ -9,6 +9,7 @@
     renameProfile,
   } from '$lib/actions';
   import { getProfiles, isDirty, store } from '$lib/state/app.svelte';
+  import { compactProfileLoadOptions } from '$lib/state/profile-switch';
   import { prompt } from '$lib/state/ui.svelte';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
@@ -50,11 +51,7 @@
   }
 
   async function load(name: string): Promise<void> {
-    await guardedProfileOp((discard) => api.loadProfile(name, discard), {
-      profile: name,
-      action: `switch to ${name}`,
-      successMessage: `Loaded ${name} into the editor draft.`,
-    });
+    await guardedProfileOp((discard) => api.loadProfile(name, discard), compactProfileLoadOptions(name));
   }
 </script>
 

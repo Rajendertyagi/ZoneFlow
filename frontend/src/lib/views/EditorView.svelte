@@ -19,8 +19,19 @@
     Trash,
     Undo2,
   } from '@lucide/svelte';
-  import { assignAppGuarded, doApply, doDisable, doEnable, doPreview, doRevert, doSave } from '$lib/actions';
-  import { store } from '$lib/state/app.svelte';
+  import { api } from '$lib/api/client';
+  import {
+    assignAppGuarded,
+    doApply,
+    doDisable,
+    doEnable,
+    doPreview,
+    doRevert,
+    doSave,
+    guardedProfileOp,
+  } from '$lib/actions';
+  import { getProfiles, store } from '$lib/state/app.svelte';
+  import { compactProfileLoadOptions } from '$lib/state/profile-switch';
   import { ui } from '$lib/state/ui.svelte';
   import { actionEligibility, canRemoveZone } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
@@ -49,6 +60,8 @@
   let canvas: ZoneCanvas | undefined = $state();
 
   const zones = $derived(store.snapshot?.zones ?? []);
+  const profiles = $derived(getProfiles());
+  const selectedProfile = $derived(store.snapshot?.selected ?? '');
   const dirty = $derived(store.snapshot?.dirty ?? false);
   const enabled = $derived(store.snapshot?.enabled ?? false);
   const canUndo = $derived(store.snapshot?.can_undo ?? false);
@@ -68,6 +81,14 @@
     const zone = zones.find((z) => z.id === zoneId);
     if (!zone) return;
     await assignAppGuarded(zone, spec);
+  }
+
+  /** U-07: same load action as the rail's ProfilesPanel, for narrow widths. */
+  async function loadCompactProfile(name: string): Promise<void> {
+    await guardedProfileOp(
+      (discard) => api.loadProfile(name, discard),
+      compactProfileLoadOptions(name),
+    );
   }
 </script>
 
@@ -92,6 +113,22 @@
         <PenTool size={14} /> Draw
       </button>
     </div>
+
+    <!-- U-07: compact profile selector for widths below `lg`, where the rail
+         (and its ProfilesPanel) is hidden. Calls the same load action. -->
+    <label class="flex items-center gap-1.5 text-xs text-zf-muted lg:hidden" title="Load a profile into the editor draft">
+      Profile
+      <select
+        aria-label="Profile"
+        class="h-7 max-w-40 rounded border border-zf-border bg-zf-bg px-2 text-xs text-zf-text focus:border-zf-accent focus:outline-none"
+        value={selectedProfile}
+        onchange={(e) => void loadCompactProfile((e.currentTarget as HTMLSelectElement).value)}
+      >
+        {#each profiles as profile (profile.name)}
+          <option value={profile.name}>{profile.name}</option>
+        {/each}
+      </select>
+    </label>
 
     <span class="mx-1 h-5 w-px bg-zf-border" aria-hidden="true"></span>
 

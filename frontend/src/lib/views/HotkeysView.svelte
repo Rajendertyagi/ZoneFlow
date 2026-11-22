@@ -5,26 +5,10 @@
   import { store } from '$lib/state/app.svelte';
   import { HOTKEY_SAVE_SUCCESS_TOAST, hotkeyFailureWarning } from '$lib/state/hotkey-failures';
   import { toast } from '$lib/state/ui.svelte';
+  import { hotkeyLabel } from '$lib/state/hotkey-labels';
   import { errorMessage } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
   import Input from '$lib/components/ui/input.svelte';
-
-  const FRIENDLY: Record<string, string> = {
-    clear_layout: 'Clear layout',
-    move_left: 'Move window left',
-    move_right: 'Move window right',
-    move_up: 'Move window up',
-    move_down: 'Move window down',
-    maximize: 'Maximize window',
-    restore: 'Restore window',
-    reload: 'Reload configuration',
-  };
-
-  function label(name: string): string {
-    if (FRIENDLY[name]) return FRIENDLY[name];
-    const match = /^profile_(\d)$/.exec(name);
-    return match ? `Apply profile ${match[1]}` : name;
-  }
 
   let bindings = $state<Record<string, string>>({});
   let lastSnapshotHotkeys = '';
@@ -95,9 +79,11 @@
     <div class="overflow-hidden rounded-lg border border-zf-border">
       {#each Object.keys(bindings).sort() as name (name)}
         <div class="flex items-center gap-4 border-b border-zf-border bg-zf-surface px-4 py-2.5 last:border-0">
-          <span class="min-w-0 flex-1 text-sm text-zf-text">{label(name)}</span>
+          <span class="min-w-0 flex-1 text-sm text-zf-text">{hotkeyLabel(name)}</span>
           <span class="hidden font-mono text-[0.65rem] text-zf-faint sm:block">{name}</span>
           <Input
+            id={`hk-${name}`}
+            ariaLabel={hotkeyLabel(name)}
             value={bindings[name]}
             class="h-8 w-52 font-mono text-xs"
             oninput={(e) => (bindings[name] = (e.currentTarget as HTMLInputElement).value)}

@@ -13,7 +13,8 @@
   "dependencies": {
     "@lucide/svelte": "1.77.0",
     "bits-ui": "2.22.0",
-    "paneforge": "1.0.2"
+    "paneforge": "1.0.2",
+    "tailwind-merge": "^3.7.1"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "7.3.1",

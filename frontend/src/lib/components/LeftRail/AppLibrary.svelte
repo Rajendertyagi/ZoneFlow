@@ -1,6 +1,7 @@
 <script lang="ts">
   import { FolderOpen, GripVertical, RefreshCw, Search, Send } from '@lucide/svelte';
   import { api, type AppEntryDto } from '$lib/api/client';
+  import { sourceAfterBrowse } from '$lib/state/app-source';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
@@ -55,7 +56,9 @@
       const picked = await api.browseApps();
       if (picked.length) {
         apps = picked;
-        source = 'installed';
+        // B-3: keep the active tab. Switching `source` here would re-run the
+        // load effect and immediately overwrite the picked entries.
+        source = sourceAfterBrowse(source);
         toast('success', `Added ${picked.length} application(s) from disk.`);
       } else {
         toast('info', 'No executable was selected.');

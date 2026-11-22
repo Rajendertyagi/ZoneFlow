@@ -7,6 +7,8 @@
     type?: string;
     disabled?: boolean;
     id?: string;
+    /** Accessible name for inputs without a visible <label for> association. */
+    ariaLabel?: string;
     class?: string;
     oninput?: (event: Event) => void;
     onchange?: (event: Event) => void;
@@ -18,6 +20,7 @@
     type = 'text',
     disabled = false,
     id,
+    ariaLabel,
     class: className = '',
     oninput,
     onchange,
@@ -29,6 +32,7 @@
   {type}
   {placeholder}
   {disabled}
+  aria-label={ariaLabel}
   {oninput}
   {onchange}
   bind:value

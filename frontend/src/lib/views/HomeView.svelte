@@ -10,6 +10,7 @@
     Power,
     Rocket,
     Trash2,
+    Type,
   } from '@lucide/svelte';
   import { api } from '$lib/api/client';
   import {
@@ -168,7 +169,7 @@
       <div class="overflow-hidden rounded-lg border border-zf-border">
         {#each profiles as profile (profile.name)}
           <div class="flex flex-wrap items-center gap-3 border-b border-zf-border bg-zf-surface px-4 py-3 last:border-0 hover:bg-zf-panel">
-            <button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => void select(profile.name)} title="Select only (D6)">
+            <button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => void select(profile.name)} title="Select this profile without applying it">
               <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zf-border-strong bg-zf-bg font-mono text-xs text-zf-accent">
                 {profile.name.slice(0, 2).toUpperCase()}
               </span>
@@ -182,7 +183,6 @@
               {#if profile.selected}<Badge variant="outline" class="!text-[0.6rem]">selected</Badge>{/if}
             </div>
             <div class="flex items-center gap-1">
-              <Button size="sm" variant="ghost" title="Select only" onclick={() => void select(profile.name)}>Select</Button>
               <Button size="sm" variant="outline" title="Apply this profile" onclick={() => void applyProfile(profile.name)}>
                 <Play size={13} /> Apply
               </Button>
@@ -193,7 +193,7 @@
                 <Copy size={13} />
               </Button>
               <Button size="sm" variant="ghost" title="Rename" onclick={() => void rename(profile.name)}>
-                <Pencil size={13} />
+                <Type size={13} />
               </Button>
               <Button size="sm" variant="ghost" title="Delete" onclick={() => void deleteProfile(profile.name)}>
                 <Trash2 size={13} />
