@@ -55,7 +55,15 @@ The current code takes only field 0. Correct behavior:
   skip the installed entry entirely — a wrong path is worse than no entry.
   Running and Browse sources still cover those apps.
 - Update `push_app` dedup: an entry with a non-empty path always beats one
-  without, regardless of label length/priority.
+  without, regardless of label length/priority. Entries with *different*
+  verified full paths are kept as separate entries even when label and exe name
+  are identical (Finding 2).
+- **Known limitation:** only `IShellLinkW::GetPath` is read. `GetArguments` and
+  `GetWorkingDirectory` are deliberately dropped: `AppEntry` stores one exe path
+  and `config::Zone` has no argument/working-directory fields, so preserving
+  them would require a config-schema and UI change (out of scope). The resolved
+  exe is launched with no arguments and the default working directory. See the
+  "Known limitations" section below.
 
 ### Decision 3 — SearchPathW search-order issue (do not use it)
 
@@ -184,6 +192,17 @@ new `src/lib/state/apply-result.ts` and test that):
 This will not make `Antigravity.exe` arrangeable — it has zero top-level windows
 (only a 0×0 one after launch). Correct resolution reports `no_eligible_window`
 accurately; there is no window to snap until Antigravity's UI is actually open.
+
+## Known limitation — `.lnk` arguments and working directory
+
+`resolve_lnk_target` uses `IShellLinkW::GetPath` only. Shortcut arguments
+(`GetArguments`) and working directory (`GetWorkingDirectory`) are not read and
+are not preserved. The resolved target exe path is stored in `AppEntry.path`
+and launched via `launch_target` with **no arguments** and the **default working
+directory**. Supporting them would require new `Zone` config fields plus UI and
+a schema migration, which is explicitly out of scope; embedding them in the
+stored path string would be a fragile hack. This is a launch-fidelity limitation,
+not a matching change — window identity remains strict full-path comparison.
 
 ## Relevant files
 

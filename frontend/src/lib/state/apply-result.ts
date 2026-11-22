@@ -23,6 +23,24 @@ export interface ApplySummary {
 
 const INACTIVE_MESSAGE = 'Layout is disabled — nothing was applied or launched.';
 
+/** Human-readable label for one backend outcome status (per-zone results panel). */
+const OUTCOME_LABELS: Record<ZoneOutcomeStatus, string> = {
+  snapped: 'Snapped',
+  launched_and_snapped: 'Launched & snapped',
+  unassigned: 'Unassigned',
+  unresolved: 'Unresolved',
+  ambiguous_path: 'Ambiguous path',
+  not_running: 'Not running',
+  no_eligible_window: 'No eligible window',
+  launch_failed: 'Launch failed',
+  error: 'Error',
+};
+
+/** Pure status → human label. Unknown wire values fall back to a readable form. */
+export function formatOutcome(status: ZoneOutcomeStatus): string {
+  return OUTCOME_LABELS[status] ?? String(status).replace(/_/g, ' ');
+}
+
 function isSnapped(status: ZoneOutcomeStatus): boolean {
   return status === 'snapped' || status === 'launched_and_snapped';
 }

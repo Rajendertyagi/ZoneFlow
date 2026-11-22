@@ -366,6 +366,9 @@ pub enum ZoneOutcomeStatus {
     LaunchedAndSnapped,
     Unassigned,
     Unresolved,
+    /// A pathless legacy assignment matched multiple distinct installations.
+    /// Always a failure — no arbitrary installation is selected.
+    AmbiguousPath,
     NotRunning,
     NoEligibleWindow,
     LaunchFailed,
@@ -391,6 +394,7 @@ impl ZoneOutcomeStatus {
             Self::LaunchedAndSnapped => "launched & snapped",
             Self::Unassigned => "unassigned",
             Self::Unresolved => "unresolved",
+            Self::AmbiguousPath => "ambiguous path",
             Self::NotRunning => "not running",
             Self::NoEligibleWindow => "no eligible window",
             Self::LaunchFailed => "launch failed",
@@ -700,5 +704,28 @@ mod tests {
         let result = ApplyResultDto::new("Empty".into(), ApplyIntent::Apply, vec![]);
         assert_eq!(result.message, "no zones in profile");
         assert_eq!((result.succeeded, result.failed, result.skipped), (0, 0, 0));
+    }
+
+    #[test]
+    fn ambiguous_path_is_a_failure_never_a_success() {
+        let status = ZoneOutcomeStatus::AmbiguousPath;
+        assert!(!status.is_success());
+        assert!(!status.is_skipped());
+        assert!(status.is_failure());
+        assert_eq!(
+            serde_json::to_string(&status).unwrap(),
+            "\"ambiguous_path\""
+        );
+    }
+
+    #[test]
+    fn ambiguous_path_counts_as_failure_and_is_summarized() {
+        let result = ApplyResultDto::new(
+            "Coding".into(),
+            ApplyIntent::LaunchArrange,
+            vec![outcome(1, ZoneOutcomeStatus::AmbiguousPath)],
+        );
+        assert_eq!((result.succeeded, result.failed, result.skipped), (0, 1, 0));
+        assert_eq!(result.message, "1 ambiguous path");
     }
 }

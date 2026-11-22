@@ -29,6 +29,7 @@
   import ProfilesPanel from '$lib/components/LeftRail/ProfilesPanel.svelte';
   import ZoneInspector from '$lib/components/Inspector/ZoneInspector.svelte';
   import StatusBar from '$lib/components/StatusBar.svelte';
+  import ApplyResults from '$lib/components/ApplyResults.svelte';
 
   interface Props {
     onwizard: () => void;
@@ -194,6 +195,9 @@
       <span class="rounded-full bg-zf-warn/15 px-2 py-0.5 text-[0.7rem] font-medium text-zf-warn ring-1 ring-zf-warn/30">unsaved</span>
     {/if}
   </div>
+
+  <!-- Per-zone results from the last Apply / Launch & Arrange (Finding 3) -->
+  <ApplyResults />
 
   <!-- Three-pane workspace: rails · canvas (primary) · contextual inspector -->
   <div class="flex min-h-0 flex-1">

@@ -22,7 +22,14 @@ pub struct AppEntry {
     pub path: String,
 }
 
-type SeenMap = HashMap<String, (usize, u8)>;
+/// Dedup identity: `(normalized label key, normalized full path)`.
+///
+/// Path-bearing entries are keyed by BOTH label and path, so two verified
+/// installations with the same label and exe name but different full paths are
+/// preserved (Finding 2). Pathless entries use an empty path, so they still
+/// dedup among themselves by label only.
+type DedupKey = (String, String);
+type SeenMap = HashMap<DedupKey, (usize, u8)>;
 
 const JUNK_PHRASES: &[&str] = &[
     "uninstall",
@@ -104,6 +111,13 @@ fn dedup_key(clean: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Normalize a full path for dedup identity: trim, `/` → `\`, lowercase.
+/// Mirrors `engine::normalize_path` so the same installation is recognized
+/// regardless of separator case or style.
+fn dedup_path_key(path: &str) -> String {
+    path.trim().replace('/', "\\").to_lowercase()
 }
 
 /// Parse one line of `tasklist /FO CSV /NH` into unquoted fields.
@@ -215,6 +229,8 @@ fn verified_exe<F: Fn(&str) -> bool>(candidate: &str, exists: F) -> Option<(Stri
 
 /// Insert or replace an entry. A verified full path always beats an entry
 /// without one, regardless of label length or source priority (Decision 2).
+/// Entries with DIFFERENT verified full paths are kept as separate entries even
+/// when their label and exe name are identical (Finding 2).
 fn push_app(
     label: String,
     exe: String,
@@ -229,38 +245,64 @@ fn push_app(
     if clean.is_empty() || is_junk(&clean) || exe.is_empty() {
         return;
     }
-    let key = dedup_key(&clean);
-    if key.is_empty() {
+    let label_key = dedup_key(&clean);
+    if label_key.is_empty() {
         return;
     }
-    match seen.get(&key) {
-        Some(&(idx, old_prio)) => {
-            let old_has_path = !apps[idx].path.is_empty();
-            let new_has_path = !path.is_empty();
-            let better = if new_has_path != old_has_path {
-                new_has_path
-            } else {
-                clean.len() < apps[idx].label.len()
-                    || (clean.len() == apps[idx].label.len() && priority > old_prio)
-            };
-            if better {
-                apps[idx] = AppEntry {
-                    label: clean,
-                    exe,
-                    path,
-                };
-                seen.insert(key, (idx, priority));
-            }
-        }
-        None => {
-            seen.insert(key, (apps.len(), priority));
-            apps.push(AppEntry {
+    let path_key = dedup_path_key(&path);
+    let key = (label_key.clone(), path_key.clone());
+
+    // Same identity (same label + same normalized path): keep the better entry.
+    if let Some(&(idx, old_prio)) = seen.get(&key) {
+        let old_has_path = !apps[idx].path.is_empty();
+        let new_has_path = !path.is_empty();
+        let better = if new_has_path != old_has_path {
+            new_has_path
+        } else {
+            clean.len() < apps[idx].label.len()
+                || (clean.len() == apps[idx].label.len() && priority > old_prio)
+        };
+        if better {
+            apps[idx] = AppEntry {
                 label: clean,
                 exe,
                 path,
-            });
+            };
+            seen.insert(key, (idx, priority));
+        }
+        return;
+    }
+
+    if !path_key.is_empty() {
+        // A verified path always supersedes a pathless entry with the same
+        // label (Decision 2). Replace it in place rather than adding a second,
+        // strictly-worse entry.
+        let pathless_key = (label_key.clone(), String::new());
+        if let Some(&(idx, _)) = seen.get(&pathless_key) {
+            apps[idx] = AppEntry {
+                label: clean,
+                exe,
+                path,
+            };
+            seen.remove(&pathless_key);
+            seen.insert(key, (idx, priority));
+            return;
+        }
+    } else {
+        // A pathless entry never displaces a verified path-bearing entry with
+        // the same label — that would reintroduce a strictly-worse duplicate.
+        let has_path_bearing = seen.keys().any(|(k, p)| k == &label_key && !p.is_empty());
+        if has_path_bearing {
+            return;
         }
     }
+
+    seen.insert(key, (apps.len(), priority));
+    apps.push(AppEntry {
+        label: clean,
+        exe,
+        path,
+    });
 }
 
 #[cfg(windows)]
@@ -275,6 +317,14 @@ fn hidden_command(program: &str) -> std::process::Command {
 /// Resolve a Start Menu `.lnk` to its target with `IShellLinkW::GetPath`.
 /// COM is initialized and uninitialized in matched pairs on this thread; the
 /// wide path buffer is NUL-terminated and lives for the whole call.
+///
+/// Only `GetPath` is used — `IShellLinkW::GetArguments` and
+/// `GetWorkingDirectory` are deliberately ignored. `AppEntry` stores a single
+/// verified exe path and `config::Zone` has no argument or working-directory
+/// fields, so preserving them would require a config-schema and UI change.
+/// Embedding them in the stored path string would be a fragile hack. The
+/// resolved target exe is therefore launched with no arguments and the default
+/// working directory (documented in README "Known limitations").
 #[cfg(windows)]
 fn resolve_lnk_target(lnk: &std::path::Path) -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
@@ -721,6 +771,48 @@ mod tests {
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].exe, "real.exe");
         assert_eq!(apps[0].path, r"C:\Program Files\Vendor\real.exe");
+    }
+
+    #[test]
+    fn dedup_preserves_distinct_paths_with_identical_label_and_exe() {
+        let mut apps = Vec::new();
+        let mut seen = SeenMap::new();
+        // Two verified installations: same label, same exe name, different paths.
+        push_app(
+            "Chrome".into(),
+            "chrome.exe".into(),
+            r"C:\Program Files\Google\Chrome\chrome.exe".into(),
+            2,
+            &mut apps,
+            &mut seen,
+        );
+        push_app(
+            "Chrome".into(),
+            "chrome.exe".into(),
+            r"D:\Portable\chrome.exe".into(),
+            2,
+            &mut apps,
+            &mut seen,
+        );
+        assert_eq!(
+            apps.len(),
+            2,
+            "distinct verified full paths must survive dedup even with identical label + exe"
+        );
+        assert!(apps.iter().any(|a| a
+            .path
+            .eq_ignore_ascii_case(r"C:\Program Files\Google\Chrome\chrome.exe")));
+        assert!(apps
+            .iter()
+            .any(|a| a.path.eq_ignore_ascii_case(r"D:\Portable\chrome.exe")));
+    }
+
+    #[test]
+    fn dedup_path_key_ignores_separator_and_case() {
+        assert_eq!(
+            dedup_path_key(r"C:/Program Files/Vendor/App.EXE"),
+            dedup_path_key(r"c:\program files\vendor\app.exe")
+        );
     }
 
     #[test]

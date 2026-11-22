@@ -28,6 +28,7 @@
   import { actionEligibility } from '$lib/state/workflow';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
+  import ApplyResults from '$lib/components/ApplyResults.svelte';
 
   const profiles = $derived(getProfiles());
   const applied = $derived(store.snapshot?.applied || 'Not applied');
@@ -147,6 +148,9 @@
         {/if}
       </div>
     </section>
+
+    <!-- Per-zone results from the last Apply / Launch & Arrange (Finding 3) -->
+    <ApplyResults />
 
     <!-- Profile management -->
     <section>

@@ -138,8 +138,8 @@ cd frontend; bun test
 - **Primary monitor only** — the work area is the primary display's work area.
 - **Browser-on-demand UX** — the editor opens in the default browser rather than a native window; the tray is the primary interface.
 - The **running-apps** list is a ~2-second cached snapshot (`running_apps_ttl_secs`), not live.
-- Installed-app `.lnk` targets are **guessed from shortcut names**; use the Browse tab for an exact executable path.
+- Installed-app `.lnk` targets are resolved with `IShellLinkW::GetPath` (the verified exe path is stored), but **shortcut arguments and working directory are not preserved** — the app is launched with no arguments and the default working directory. `Zone` has no fields for them, and embedding them in the path string would be fragile; use the Browse tab when you need an exact executable path.
 - **Same-executable multi-window** limitation remains documented; no multi-window claim.
 - **Display changes** are handled by polling the work area every `display_debounce_ms` (default 200 ms) and re-tiling on change — no Win32 message hook.
-- **Path-based window matching** is supported: when a zone has a `path`, an exact full-path match is preferred with an exe-name fallback (`find_window_by_path_min`).
+- **Path-based window matching** — an exact configured `path` is used as-is; a pathless assignment resolves from running processes by exe basename. Multiple distinct matches are reported as `ambiguous_path` (no arbitrary installation is chosen). Window identity is always a strict full-path match (`find_window_by_paths_min`) — no exe-name or title fallback.
 - Installer/signing, release-tag artifact attachment, and i18n label centralization remain out of scope. They are not part of the completed Phase 7 release-hardening gate, which covers the CI-produced release artifact (fresh embedded assets) and the verification checklist.

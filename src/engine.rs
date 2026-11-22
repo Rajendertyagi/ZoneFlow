@@ -335,6 +335,11 @@ pub enum ZoneResolution {
     Unassigned,
     /// `exe` is set but no full path could be obtained in attach mode.
     Unresolved,
+    /// A pathless legacy assignment matched MORE THAN ONE distinct full path.
+    /// We refuse to pick an arbitrary installation (Finding 2). This is a
+    /// resolution-time ambiguity, not a window-matching fallback: strict
+    /// full-path matching is unchanged.
+    Ambiguous { paths: Vec<String> },
     /// One or more candidate full paths, with the source they came from.
     Resolved {
         candidates: Vec<String>,
@@ -347,6 +352,8 @@ pub enum ZoneResolution {
 pub enum ZoneFailure {
     Unassigned,
     Unresolved,
+    /// A pathless legacy assignment resolved to multiple distinct installations.
+    AmbiguousPath,
     NotRunning,
     NoEligibleWindow,
     LaunchFailed,
@@ -416,22 +423,33 @@ pub fn resolve_zone_paths(zone: &Zone, running_paths: &[String]) -> ZoneResoluti
         return ZoneResolution::Unassigned;
     }
     let target = zone.exe.trim();
-    let candidates: Vec<String> = running_paths
-        .iter()
-        .filter(|p| {
-            p.rsplit(['\\', '/'])
-                .next()
-                .is_some_and(|name| name.eq_ignore_ascii_case(target))
-        })
-        .cloned()
-        .collect();
-    if candidates.is_empty() {
-        ZoneResolution::Unresolved
-    } else {
-        ZoneResolution::Resolved {
+    // Collect distinct full paths (case/separator normalized) whose exe
+    // basename matches. The basename comparison is only used to obtain
+    // candidate paths from process identity — window identity is still decided
+    // by strict full-path comparison in `find_window_by_paths_min`.
+    let mut seen: Vec<String> = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
+    for path in running_paths.iter().filter(|p| {
+        p.rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(target))
+    }) {
+        let normalized = normalize_path(path);
+        if !seen.contains(&normalized) {
+            seen.push(normalized);
+            candidates.push(path.clone());
+        }
+    }
+    match candidates.len() {
+        0 => ZoneResolution::Unresolved,
+        // A pathless legacy assignment with several distinct installations is
+        // ambiguous. Do NOT silently pick the first one — report the paths so
+        // the user can re-assign with an exact path (Finding 2).
+        _ if candidates.len() > 1 => ZoneResolution::Ambiguous { paths: candidates },
+        _ => ZoneResolution::Resolved {
             candidates,
             source: ResolutionSource::RunningProcess,
-        }
+        },
     }
 }
 
@@ -451,6 +469,47 @@ fn no_window_failure(process_still_running: bool) -> ZoneFailure {
         ZoneFailure::NoEligibleWindow
     } else {
         ZoneFailure::NotRunning
+    }
+}
+
+/// Pure launch gate for one zone, given the current running-path snapshot.
+///
+/// Launch mode spawns only when there is no running candidate. A zone explicitly
+/// configured as Attach never launches (the UI promises exactly this), even
+/// during Launch & Arrange. An ambiguous pathless assignment is never launched —
+/// it is reported so the user can re-assign with an exact path.
+///
+/// Kept pure so the "two zones, one launch" behavior (Finding 1) is testable
+/// without spawning a real process: callers simulate a spawn by feeding the
+/// recorded path back into the snapshot via [`record_launched_path`].
+fn zone_needs_launch(
+    zone: &Zone,
+    resolution: &ZoneResolution,
+    launch: bool,
+    running_paths: &[String],
+) -> bool {
+    if !launch || matches!(zone.launch_mode, crate::config::LaunchMode::Attach) {
+        return false;
+    }
+    match resolution {
+        ZoneResolution::Unassigned | ZoneResolution::Ambiguous { .. } => false,
+        ZoneResolution::Unresolved => true,
+        ZoneResolution::Resolved { candidates, .. } => {
+            let normalized: Vec<String> = candidates.iter().map(|c| normalize_path(c)).collect();
+            !running_paths
+                .iter()
+                .any(|p| normalized.contains(&normalize_path(p)))
+        }
+    }
+}
+
+/// Record a successfully launched process path in the running snapshot so
+/// later zones in the same Launch & Arrange operation see it as running and do
+/// not spawn a duplicate. Pure and idempotent (dedup by normalized path).
+fn record_launched_path(snapshot: &mut Vec<String>, path: String) {
+    let normalized = normalize_path(&path);
+    if !snapshot.iter().any(|p| normalize_path(p) == normalized) {
+        snapshot.push(path);
     }
 }
 
@@ -474,14 +533,14 @@ pub fn focus_window(hwnd: HWND) {
 /// Public compatibility wrapper; UI callers use [`execute_zone_with_config`].
 #[allow(dead_code)]
 pub fn execute_zone(zone: &Zone, rect: Rect) -> ZoneExecution {
-    let running = crate::apps::running_process_image_paths();
+    let mut running = crate::apps::running_process_image_paths();
     execute_zone_inner(
         zone,
         rect,
         DWM_SNAP_RETRIES,
         DEFAULT_MIN_WINDOW_PX,
         true,
-        &running,
+        &mut running,
     )
 }
 
@@ -499,13 +558,30 @@ pub fn execute_zone_with_config(
 }
 
 /// Variant that accepts a pre-enumerated running-process path snapshot. The
-/// API layer enumerates once per profile and reuses it for every zone.
+/// caller's snapshot is treated as immutable: any path launched by this zone is
+/// recorded in a local copy that is discarded on return, so single-zone callers
+/// (hotkeys, `execute_zone`, `execute_zone_with_config`) keep their behavior.
 pub fn execute_zone_with_context(
     zone: &Zone,
     rect: Rect,
     cfg: &AppConfig,
     launch: bool,
     running_paths: &[String],
+) -> ZoneExecution {
+    let mut snapshot = running_paths.to_vec();
+    execute_zone_with_mutable_context(zone, rect, cfg, launch, &mut snapshot)
+}
+
+/// Variant used by `apply_profile`: the running-path snapshot is mutable and
+/// evolves as zones launch. After a zone spawns a process, its resolved full
+/// path is pushed into the snapshot so subsequent zones in the same operation
+/// see it as running and do NOT spawn a duplicate (Finding 1).
+pub fn execute_zone_with_mutable_context(
+    zone: &Zone,
+    rect: Rect,
+    cfg: &AppConfig,
+    launch: bool,
+    running_paths: &mut Vec<String>,
 ) -> ZoneExecution {
     execute_zone_inner(
         zone,
@@ -523,7 +599,7 @@ fn execute_zone_inner(
     retries: u32,
     min_px: i32,
     launch: bool,
-    running_paths: &[String],
+    running_paths: &mut Vec<String>,
 ) -> ZoneExecution {
     let mut resolution = resolve_zone_paths(zone, running_paths);
     let mut launched = false;
@@ -533,19 +609,7 @@ fn execute_zone_inner(
     // UI promises exactly this), even during Launch & Arrange. `CreateProcess`
     // resolves the target (path or exe name); the spawned PID's image path is
     // the exact image it launched, by construction.
-    let needs_launch = launch
-        && !matches!(zone.launch_mode, crate::config::LaunchMode::Attach)
-        && match &resolution {
-            ZoneResolution::Unassigned => false,
-            ZoneResolution::Unresolved => true,
-            ZoneResolution::Resolved { candidates, .. } => {
-                let normalized: Vec<String> =
-                    candidates.iter().map(|c| normalize_path(c)).collect();
-                !running_paths
-                    .iter()
-                    .any(|p| normalized.contains(&normalize_path(p)))
-            }
-        };
+    let needs_launch = zone_needs_launch(zone, &resolution, launch, running_paths);
 
     if needs_launch {
         let target = launch_target(zone);
@@ -580,6 +644,11 @@ fn execute_zone_inner(
             .into_iter()
             .next()
             .expect("resolution_from_pid always yields exactly one candidate");
+        // Finding 1: publish the launched path into the shared snapshot so the
+        // next zone in this operation sees it as running and does not spawn a
+        // duplicate. This happens immediately after a successful spawn + path
+        // resolution, before any window lookup.
+        record_launched_path(running_paths, path.clone());
         match &mut resolution {
             ZoneResolution::Resolved { candidates, source } => {
                 if !candidates
@@ -596,7 +665,9 @@ fn execute_zone_inner(
                     source: ResolutionSource::LaunchedProcess,
                 };
             }
-            ZoneResolution::Unassigned => unreachable!("unassigned zones never launch"),
+            ZoneResolution::Unassigned | ZoneResolution::Ambiguous { .. } => {
+                unreachable!("unassigned/ambiguous zones never launch")
+            }
         }
     }
 
@@ -612,6 +683,17 @@ fn execute_zone_inner(
             return ZoneExecution::Failed {
                 failure: ZoneFailure::Unresolved,
                 message: format!("could not resolve {} to a full path", zone.exe),
+                launched,
+            };
+        }
+        ZoneResolution::Ambiguous { paths } => {
+            return ZoneExecution::Failed {
+                failure: ZoneFailure::AmbiguousPath,
+                message: format!(
+                    "{} matches multiple installations; re-assign with an exact path: {}",
+                    zone.exe,
+                    paths.join(", ")
+                ),
                 launched,
             };
         }
@@ -808,12 +890,25 @@ pub fn retile(cfg: &AppConfig) {
     }
     let running = crate::apps::running_process_image_paths();
     for z in cfg.active().zones.iter() {
-        if let Some(r) = zone_by_id(&zones, z.id) {
-            if let ZoneResolution::Resolved { candidates, .. } = resolve_zone_paths(z, &running) {
-                if let Some(h) = find_window_by_paths_min(&candidates, min_px) {
-                    move_window_with_retries(h, r, retries);
+        match resolve_zone_paths(z, &running) {
+            ZoneResolution::Resolved { candidates, .. } => {
+                if let Some(r) = zone_by_id(&zones, z.id) {
+                    if let Some(h) = find_window_by_paths_min(&candidates, min_px) {
+                        move_window_with_retries(h, r, retries);
+                    }
                 }
             }
+            // Skipping is correct: picking one of several distinct
+            // installations would be arbitrary. Warn so it is observable.
+            ZoneResolution::Ambiguous { paths } => {
+                tracing::warn!(
+                    zone_id = z.id,
+                    exe = %z.exe,
+                    paths = ?paths,
+                    "ambiguous zone skipped during retile; re-assign with an exact path"
+                );
+            }
+            ZoneResolution::Unassigned | ZoneResolution::Unresolved => {}
         }
     }
 }
@@ -842,13 +937,27 @@ pub fn restore_active(cfg: &AppConfig) {
         let zones = compute_zones(cfg.active(), area, cfg.gap);
         let running = crate::apps::running_process_image_paths();
         for z in cfg.active().zones.iter() {
-            if let ZoneResolution::Resolved { candidates, .. } = resolve_zone_paths(z, &running) {
-                if find_window_by_paths_min(&candidates, cfg.settings.min_window_px) == Some(h) {
-                    if let Some(r) = zone_by_id(&zones, z.id) {
-                        move_window_with_retries(h, r, cfg.settings.dwm_snap_retries);
-                        return;
+            match resolve_zone_paths(z, &running) {
+                ZoneResolution::Resolved { candidates, .. } => {
+                    if find_window_by_paths_min(&candidates, cfg.settings.min_window_px) == Some(h)
+                    {
+                        if let Some(r) = zone_by_id(&zones, z.id) {
+                            move_window_with_retries(h, r, cfg.settings.dwm_snap_retries);
+                            return;
+                        }
                     }
                 }
+                // Skipping is correct: picking one of several distinct
+                // installations would be arbitrary. Warn so it is observable.
+                ZoneResolution::Ambiguous { paths } => {
+                    tracing::warn!(
+                        zone_id = z.id,
+                        exe = %z.exe,
+                        paths = ?paths,
+                        "ambiguous zone skipped during restore; re-assign with an exact path"
+                    );
+                }
+                ZoneResolution::Unassigned | ZoneResolution::Unresolved => {}
             }
         }
         if !ShowWindow(h, SW_RESTORE).as_bool() {
@@ -1023,18 +1132,15 @@ mod tests {
     #[test]
     fn resolution_collects_running_process_paths_by_exe_basename() {
         let zone = Zone::new(1, "Chrome", "CHROME.EXE", 0.0, 0.0, 50.0, 100.0);
+        // A single matching installation still resolves normally.
         let running = vec![
             r"C:\Program Files\Google\Chrome\chrome.exe".to_string(),
-            r"D:\Portable\chrome.exe".to_string(),
             r"C:\Windows\System32\notepad.exe".to_string(),
         ];
         assert_eq!(
             resolve_zone_paths(&zone, &running),
             ZoneResolution::Resolved {
-                candidates: vec![
-                    r"C:\Program Files\Google\Chrome\chrome.exe".to_string(),
-                    r"D:\Portable\chrome.exe".to_string(),
-                ],
+                candidates: vec![r"C:\Program Files\Google\Chrome\chrome.exe".to_string()],
                 source: ResolutionSource::RunningProcess,
             }
         );
@@ -1141,6 +1247,146 @@ mod tests {
         assert_eq!(
             execution.message(),
             "app.exe has no arrangeable window (minimized/hidden/0x0)"
+        );
+    }
+
+    /* ---------------- Finding 1: no duplicate launches in one operation --------------- */
+
+    #[test]
+    fn record_launched_path_is_idempotent_and_normalizes() {
+        let mut snapshot = Vec::new();
+        record_launched_path(&mut snapshot, r"C:\Program Files\Vendor\app.exe".into());
+        // Same path with different separators/case must not be added twice.
+        record_launched_path(&mut snapshot, r"c:/program files/vendor/APP.EXE".into());
+        assert_eq!(snapshot.len(), 1);
+    }
+
+    #[test]
+    fn two_zones_same_exe_launch_only_once_with_evolving_snapshot() {
+        // Deterministic simulation of apply_profile's loop using the exact pure
+        // helpers the real execution path uses — no real process is spawned.
+        let zone1 = Zone::new(1, "App", "app.exe", 0.0, 0.0, 50.0, 100.0);
+        let zone2 = Zone::new(2, "App", "app.exe", 50.0, 0.0, 50.0, 100.0);
+        let mut snapshot: Vec<String> = Vec::new(); // app initially not running
+
+        // Zone 1: no running candidate -> launch.
+        let r1 = resolve_zone_paths(&zone1, &snapshot);
+        assert_eq!(r1, ZoneResolution::Unresolved);
+        assert!(zone_needs_launch(&zone1, &r1, true, &snapshot));
+        // execute_zone_inner records the launched path into the shared snapshot.
+        let launched = r"C:\Program Files\Vendor\app.exe".to_string();
+        record_launched_path(&mut snapshot, launched.clone());
+
+        // Zone 2: same exe now resolves to the launched path -> no second launch.
+        let r2 = resolve_zone_paths(&zone2, &snapshot);
+        assert_eq!(
+            r2,
+            ZoneResolution::Resolved {
+                candidates: vec![launched],
+                source: ResolutionSource::RunningProcess,
+            }
+        );
+        assert!(
+            !zone_needs_launch(&zone2, &r2, true, &snapshot),
+            "the second zone must see the launched app as running"
+        );
+    }
+
+    #[test]
+    fn two_zones_same_exact_path_launch_only_once_with_evolving_snapshot() {
+        let path = r"C:\Program Files\Vendor\app.exe".to_string();
+        let mut zone1 = Zone::new(1, "App", "app.exe", 0.0, 0.0, 50.0, 100.0);
+        zone1.path = path.clone();
+        let mut zone2 = Zone::new(2, "App", "app.exe", 50.0, 0.0, 50.0, 100.0);
+        zone2.path = path.clone();
+        let mut snapshot: Vec<String> = Vec::new();
+
+        // Exact configured path is a candidate even when not running -> launch.
+        let r1 = resolve_zone_paths(&zone1, &snapshot);
+        assert_eq!(
+            r1,
+            ZoneResolution::Resolved {
+                candidates: vec![path.clone()],
+                source: ResolutionSource::ExactConfig,
+            }
+        );
+        assert!(zone_needs_launch(&zone1, &r1, true, &snapshot));
+        record_launched_path(&mut snapshot, path.clone());
+
+        // Second zone sees the exact path as running -> no second launch.
+        let r2 = resolve_zone_paths(&zone2, &snapshot);
+        assert!(
+            !zone_needs_launch(&zone2, &r2, true, &snapshot),
+            "the second zone must not spawn the same exact path again"
+        );
+    }
+
+    /* ---------------- Finding 2: ambiguity instead of arbitrary selection --------------- */
+
+    #[test]
+    fn pathless_zone_with_two_distinct_paths_is_ambiguous_and_never_launches() {
+        let zone = Zone::new(1, "Chrome", "chrome.exe", 0.0, 0.0, 50.0, 100.0);
+        let running = vec![
+            r"C:\Program Files\Google\Chrome\chrome.exe".to_string(),
+            r"D:\Portable\chrome.exe".to_string(),
+        ];
+        let resolution = resolve_zone_paths(&zone, &running);
+        assert_eq!(
+            resolution,
+            ZoneResolution::Ambiguous {
+                paths: running.clone(),
+            }
+        );
+        assert!(
+            !zone_needs_launch(&zone, &resolution, true, &running),
+            "an ambiguous assignment must never be launched"
+        );
+    }
+
+    #[test]
+    fn ambiguous_zone_reports_failure_with_both_paths_without_spawning() {
+        let zone = Zone::new(1, "Chrome", "chrome.exe", 0.0, 0.0, 50.0, 100.0);
+        let cfg = crate::config::AppConfig::default();
+        let a = r"C:\Program Files\Google\Chrome\chrome.exe".to_string();
+        let b = r"D:\Portable\chrome.exe".to_string();
+        let execution = execute_zone_with_context(
+            &zone,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            &cfg,
+            true, // Launch & Arrange — still must not pick an arbitrary install
+            &[a.clone(), b.clone()],
+        );
+        assert_eq!(
+            execution,
+            ZoneExecution::Failed {
+                failure: ZoneFailure::AmbiguousPath,
+                message: format!(
+                    "chrome.exe matches multiple installations; re-assign with an exact path: {a}, {b}"
+                ),
+                launched: false,
+            }
+        );
+    }
+
+    #[test]
+    fn exact_path_still_wins_unambiguously_over_running_duplicates() {
+        let mut zone = Zone::new(1, "Chrome", "chrome.exe", 0.0, 0.0, 50.0, 100.0);
+        zone.path = r"D:\Portable\chrome.exe".into();
+        let running = vec![
+            r"C:\Program Files\Google\Chrome\chrome.exe".to_string(),
+            r"D:\Portable\chrome.exe".to_string(),
+        ];
+        assert_eq!(
+            resolve_zone_paths(&zone, &running),
+            ZoneResolution::Resolved {
+                candidates: vec![r"D:\Portable\chrome.exe".to_string()],
+                source: ResolutionSource::ExactConfig,
+            }
         );
     }
 }

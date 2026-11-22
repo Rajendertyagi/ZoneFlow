@@ -174,6 +174,7 @@ fn outcome_status(failure: crate::engine::ZoneFailure) -> ZoneOutcomeStatus {
     match failure {
         ZoneFailure::Unassigned => ZoneOutcomeStatus::Unassigned,
         ZoneFailure::Unresolved => ZoneOutcomeStatus::Unresolved,
+        ZoneFailure::AmbiguousPath => ZoneOutcomeStatus::AmbiguousPath,
         ZoneFailure::NotRunning => ZoneOutcomeStatus::NotRunning,
         ZoneFailure::NoEligibleWindow => ZoneOutcomeStatus::NoEligibleWindow,
         ZoneFailure::LaunchFailed => ZoneOutcomeStatus::LaunchFailed,
@@ -193,8 +194,10 @@ fn apply_profile(inner: &mut Inner, name: &str, launch: bool) -> Result<ApplyRes
     let area = crate::engine::work_area();
     let zones = crate::engine_core::compute_zones(cfg.active(), area, cfg.gap);
     // One process snapshot for the whole profile — resolution is per zone but
-    // enumeration is not (Decision 5).
-    let running_paths = crate::apps::running_process_image_paths();
+    // enumeration is not (Decision 5). The snapshot is mutable: when a zone
+    // launches an app, its resolved path is added so later zones targeting the
+    // same exe/path see it as running and do not spawn a duplicate (Finding 1).
+    let mut running_paths = crate::apps::running_process_image_paths();
     let intent = if launch {
         ApplyIntent::LaunchArrange
     } else {
@@ -214,8 +217,13 @@ fn apply_profile(inner: &mut Inner, name: &str, launch: bool) -> Result<ApplyRes
             });
             continue;
         };
-        let execution =
-            crate::engine::execute_zone_with_context(z, rect, &cfg, launch, &running_paths);
+        let execution = crate::engine::execute_zone_with_mutable_context(
+            z,
+            rect,
+            &cfg,
+            launch,
+            &mut running_paths,
+        );
         let status = match &execution {
             crate::engine::ZoneExecution::Snapped { launched, .. } => {
                 if *launched {
@@ -1676,6 +1684,10 @@ mod tests {
         assert_eq!(
             outcome_status(ZoneFailure::Unresolved),
             ZoneOutcomeStatus::Unresolved
+        );
+        assert_eq!(
+            outcome_status(ZoneFailure::AmbiguousPath),
+            ZoneOutcomeStatus::AmbiguousPath
         );
         assert_eq!(
             outcome_status(ZoneFailure::NotRunning),

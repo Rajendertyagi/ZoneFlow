@@ -188,6 +188,7 @@ export type ZoneOutcomeStatus =
   | 'launched_and_snapped'
   | 'unassigned'
   | 'unresolved'
+  | 'ambiguous_path'
   | 'not_running'
   | 'no_eligible_window'
   | 'launch_failed'

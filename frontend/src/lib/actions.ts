@@ -14,6 +14,8 @@ import {
 import { refreshState } from './api/events';
 import { getSelected, isDirty } from './state/app.svelte';
 import { summarizeApplyResult } from './state/apply-result';
+import { isApplyResult } from './state/apply-results';
+import { showApplyResults } from './state/apply-results.svelte';
 import { confirm, toast } from './state/ui.svelte';
 import {
   errorMessage,
@@ -164,6 +166,9 @@ export async function doApply(launch: boolean): Promise<void> {
     // success). Inactive results are handled there too (D4).
     const summary = summarizeApplyResult(result);
     toast(summary.tone, summary.message);
+    // Finding 3: also expose the backend's per-zone outcomes in a dismissible
+    // panel. The aggregate toast above is unchanged (D1–D6 / tone mapping).
+    if (isApplyResult(result)) showApplyResults(result);
   } catch (error) {
     if (error instanceof ApiError && error.code === 'dirty_state') {
       toast('error', 'Save or revert your changes before applying.');

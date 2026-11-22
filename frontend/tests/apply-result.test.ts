@@ -3,7 +3,7 @@
  * `apply-result.ts` has no Svelte runes, so bun can import it directly.
  */
 import { describe, expect, test } from 'bun:test';
-import { summarizeApplyResult } from '../src/lib/state/apply-result';
+import { formatOutcome, summarizeApplyResult } from '../src/lib/state/apply-result';
 import type {
   ApplyIntent,
   ApplyResultDto,
@@ -116,5 +116,23 @@ describe('summarizeApplyResult', () => {
     const summary = summarizeApplyResult(apply);
     expect(summary.tone).toBe('error');
     expect(summary.message).not.toContain('success');
+  });
+});
+
+describe('formatOutcome', () => {
+  test('maps every known status to a human label', () => {
+    expect(formatOutcome('snapped')).toBe('Snapped');
+    expect(formatOutcome('launched_and_snapped')).toBe('Launched & snapped');
+    expect(formatOutcome('unassigned')).toBe('Unassigned');
+    expect(formatOutcome('unresolved')).toBe('Unresolved');
+    expect(formatOutcome('ambiguous_path')).toBe('Ambiguous path');
+    expect(formatOutcome('not_running')).toBe('Not running');
+    expect(formatOutcome('no_eligible_window')).toBe('No eligible window');
+    expect(formatOutcome('launch_failed')).toBe('Launch failed');
+    expect(formatOutcome('error')).toBe('Error');
+  });
+
+  test('unknown wire values degrade to a readable label', () => {
+    expect(formatOutcome('some_new_status' as ZoneOutcomeStatus)).toBe('some new status');
   });
 });
