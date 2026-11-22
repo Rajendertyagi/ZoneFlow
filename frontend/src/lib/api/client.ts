@@ -147,6 +147,8 @@ export interface StateSnapshot {
   status: EngineStatusDto;
   /** Hotkey bindings that failed validation or native registration (U-03). */
   hotkey_failures: string[];
+  /** Actual Windows autostart registration state (read from the registry). */
+  auto_start_registered: boolean;
   can_undo: boolean;
   can_redo: boolean;
 }
@@ -394,6 +396,12 @@ export const api = {
   getSettings: () => apiFetch<SettingsDto>('/api/settings'),
   setSettings: (settings: SettingsDto) =>
     apiFetch<OkResult>('/api/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+  /** Apply settings + app options in one request, producing one undo point. */
+  applySettings: (settings: SettingsDto, options: AppOptionsDto) =>
+    apiFetch<OkResult>('/api/settings/apply', {
+      method: 'PUT',
+      body: JSON.stringify({ settings, options }),
+    }),
   /** AppConfig-level options (autostart + close behavior) — see §5.6 gap. */
   setAppOptions: (options: AppOptionsDto) =>
     apiFetch<OkResult>('/api/app-options', { method: 'PUT', body: JSON.stringify(options) }),

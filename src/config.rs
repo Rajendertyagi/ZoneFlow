@@ -13,6 +13,10 @@ fn zero() -> u32 {
 
 /* ---- Defaults for the domain tunables (§2.2) ---- */
 
+fn default_snap_points() -> Vec<f32> {
+    vec![25.0, 50.0, 75.0]
+}
+
 fn default_resolutions() -> Vec<ResolutionPreset> {
     vec![
         ResolutionPreset {
@@ -158,15 +162,15 @@ pub struct Profile {
 
 /* ============================ Resolution presets ============================ */
 
-/// A user-editable resolution preset for the UI's resolution selector
-/// (§2d item 11).
+/// A resolution preset retained for config compatibility. There is currently
+/// no resolution selector in the UI, so these values are not consumed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolutionPreset {
-    /// Label shown in the resolution selector.
+    /// Label for the preset (retained for config compatibility).
     pub label: String,
-    /// Screen width in pixels (used to convert zone percentages to pixels).
+    /// Screen width in pixels (retained for config compatibility).
     pub width: u32,
-    /// Work-area height in pixels (screen height minus the taskbar).
+    /// Work-area height in pixels (retained for config compatibility).
     pub work_height: u32,
 }
 
@@ -182,21 +186,25 @@ pub struct Settings {
     pub grid_cols: u32,
     pub grid_rows: u32,
     pub min_zone_pct: f32,
+    /// Retained for config compatibility; currently unused (no UI control or
+    /// consumer). Kept so older config files still load without data loss.
     pub resize_step_pct: f32,
     pub boundary_tolerance_pct: f32,
     pub undo_depth: usize,
+    /// Retained for config compatibility; currently unused (no display-change
+    /// detection in this package). Kept so older config files still load.
     pub display_debounce_ms: u64,
     pub overlay_inactive_alpha: u8,
     pub overlay_active_alpha: u8,
     pub dwm_snap_retries: u32,
     pub min_window_px: i32,
     pub zone_tints: Vec<String>,
-    /// Launch and snap every bound app on startup (AHK `AutoLaunchAndSnapAll`
-    /// parity, §2c). Defaults to `false` so development runs never surprise-launch
-    /// apps; enable it here (or in the Settings view) for normal use.
+    /// Retained for config compatibility; currently unused (no consumer). The
+    /// Settings view no longer presents a toggle for it.
     #[serde(default)]
     pub auto_launch_on_startup: bool,
-    /// Resolution presets shown in the UI's resolution selector (§2d item 11).
+    /// Retained for config compatibility; currently unused (no resolution
+    /// selector in the UI). Kept so older config files still load unchanged.
     #[serde(default = "default_resolutions")]
     pub resolutions: Vec<ResolutionPreset>,
     /// Maximum number of installed apps shown in the library / picker.
@@ -205,17 +213,17 @@ pub struct Settings {
     /// Seconds a running-app enumeration stays fresh before it is re-run.
     #[serde(default = "default_running_apps_ttl_secs")]
     pub running_apps_ttl_secs: u64,
-    /// Height of the fake taskbar strip drawn at the bottom of the canvas.
+    /// Retained for config compatibility; currently unused (no consumer).
     #[serde(default = "default_taskbar_h")]
     pub taskbar_h: f32,
-    /// Vertical space reserved below the canvas for hint/action/apps bars.
+    /// Retained for config compatibility; currently unused (no consumer).
     #[serde(default = "default_stage_lower_h")]
     pub stage_lower_h: f32,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            snap_points: vec![25.0, 50.0, 75.0],
+            snap_points: default_snap_points(),
             grid_cols: 12,
             grid_rows: 8,
             min_zone_pct: 15.0,
@@ -242,6 +250,51 @@ impl Default for Settings {
                 "#4DD0E1".into(),
             ],
         }
+    }
+}
+
+/// Clamp a float to `lo..=hi`, substituting `default` for NaN/infinity so a
+/// corrupt value can never poison the editor. `f32::clamp` panics on a NaN
+/// input, so the finite check must come first.
+fn clamp_f32(v: f32, lo: f32, hi: f32, default: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(lo, hi)
+    } else {
+        default
+    }
+}
+
+impl Settings {
+    /// Clamp every numeric tunable to the range the Settings UI advertises.
+    ///
+    /// The loopback API is unauthenticated, so HTML `min`/`max` attributes are
+    /// not a security boundary: a crafted PUT can carry any value. This is the
+    /// authoritative repair point, applied on config load and on every settings
+    /// write. Values already in range are left untouched (no data loss).
+    pub fn validate(&mut self) {
+        self.grid_cols = self.grid_cols.clamp(1, 24);
+        self.grid_rows = self.grid_rows.clamp(1, 24);
+        self.min_zone_pct = clamp_f32(self.min_zone_pct, 1.0, 50.0, 15.0);
+        self.boundary_tolerance_pct = clamp_f32(self.boundary_tolerance_pct, 0.0, 10.0, 1.5);
+        self.undo_depth = self.undo_depth.clamp(1, 200);
+        // `u8` is inherently 0..255 — the UI's alpha range needs no clamping.
+        self.display_debounce_ms = self.display_debounce_ms.clamp(0, 5000);
+        self.dwm_snap_retries = self.dwm_snap_retries.clamp(0, 20);
+        self.min_window_px = self.min_window_px.clamp(0, 500);
+        self.app_list_cap = self.app_list_cap.clamp(10, 2000);
+        self.running_apps_ttl_secs = self.running_apps_ttl_secs.clamp(0, 600);
+        self.resize_step_pct = clamp_f32(self.resize_step_pct, 0.5, 25.0, 1.0);
+        self.taskbar_h = clamp_f32(self.taskbar_h, 0.0, 200.0, 16.0);
+        self.stage_lower_h = clamp_f32(self.stage_lower_h, 0.0, 200.0, 200.0);
+
+        // Keep only finite snap points inside 0..100. An empty result would
+        // leave the editor with no guides at all, so restore the sane default.
+        self.snap_points
+            .retain(|p| p.is_finite() && (0.0..=100.0).contains(p));
+        if self.snap_points.is_empty() {
+            self.snap_points = default_snap_points();
+        }
+        // `zone_tints` is a free-form list of CSS colors; keep it as-is.
     }
 }
 
@@ -441,6 +494,10 @@ impl AppConfig {
                 .cloned()
                 .unwrap_or_else(|| "Website".into());
         }
+        // Repair corrupt/out-of-range tunables on load (via `migrate`) as well
+        // as on any other validation pass. Idempotent for already-valid values.
+        self.gap = self.gap.clamp(0, 20);
+        self.settings.validate();
     }
 
     /// Panic-free: falls back to an in-memory empty profile if the invariant is broken.
@@ -622,5 +679,104 @@ mod tests {
         assert_eq!(back.gap, 42);
         assert!(!path.with_extension("json.tmp").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_validate_clamps_every_out_of_range_field() {
+        let mut s = Settings {
+            grid_cols: 999,
+            grid_rows: 0,
+            min_zone_pct: -5.0,
+            boundary_tolerance_pct: 99.0,
+            undo_depth: 9999,
+            display_debounce_ms: 99_999,
+            dwm_snap_retries: 999,
+            min_window_px: -50,
+            app_list_cap: 99_999,
+            running_apps_ttl_secs: 99_999,
+            resize_step_pct: 999.0,
+            taskbar_h: -1.0,
+            stage_lower_h: 999.0,
+            ..Default::default()
+        };
+        s.validate();
+        assert_eq!(s.grid_cols, 24);
+        assert_eq!(s.grid_rows, 1);
+        assert_eq!(s.min_zone_pct, 1.0);
+        assert_eq!(s.boundary_tolerance_pct, 10.0);
+        assert_eq!(s.undo_depth, 200);
+        assert_eq!(s.display_debounce_ms, 5000);
+        assert_eq!(s.dwm_snap_retries, 20);
+        assert_eq!(s.min_window_px, 0);
+        assert_eq!(s.app_list_cap, 2000);
+        assert_eq!(s.running_apps_ttl_secs, 600);
+        assert_eq!(s.resize_step_pct, 25.0);
+        assert_eq!(s.taskbar_h, 0.0);
+        assert_eq!(s.stage_lower_h, 200.0);
+    }
+
+    #[test]
+    fn settings_validate_filters_snap_points_and_repairs_empty() {
+        let mut s = Settings {
+            snap_points: vec![f32::NAN, f32::INFINITY, -1.0, 101.0, 25.0, 50.0],
+            ..Default::default()
+        };
+        s.validate();
+        assert_eq!(s.snap_points, vec![25.0, 50.0]);
+
+        s.snap_points.clear();
+        s.validate();
+        assert_eq!(s.snap_points, vec![25.0, 50.0, 75.0]);
+    }
+
+    #[test]
+    fn settings_validate_leaves_valid_values_unchanged() {
+        let mut s = Settings {
+            grid_cols: 9,
+            grid_rows: 6,
+            min_zone_pct: 12.5,
+            boundary_tolerance_pct: 2.0,
+            undo_depth: 42,
+            display_debounce_ms: 150,
+            dwm_snap_retries: 3,
+            min_window_px: 120,
+            app_list_cap: 500,
+            running_apps_ttl_secs: 5,
+            resize_step_pct: 2.5,
+            taskbar_h: 32.0,
+            stage_lower_h: 180.0,
+            snap_points: vec![10.0, 33.3, 90.0],
+            zone_tints: vec!["#123456".into()],
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&s).unwrap();
+        s.validate();
+        let after = serde_json::to_value(&s).unwrap();
+        assert_eq!(before, after, "valid settings must not be modified");
+    }
+
+    #[test]
+    fn migrate_repairs_corrupt_settings_on_load() {
+        // A crafted/legacy config with out-of-range values must be repaired by
+        // the same path `load_config` uses, without dropping any other data.
+        let json = r#"{"profiles":{},"active_profile":"","gap":5,"settings":{"grid_cols":999,"min_zone_pct":-5,"snap_points":[],"app_list_cap":1}}"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        let migrated = migrate(cfg);
+        assert_eq!(migrated.gap, 5, "unrelated data must survive");
+        assert_eq!(migrated.settings.grid_cols, 24);
+        assert_eq!(migrated.settings.min_zone_pct, 1.0);
+        assert_eq!(migrated.settings.app_list_cap, 10);
+        assert_eq!(migrated.settings.snap_points, vec![25.0, 50.0, 75.0]);
+    }
+
+    #[test]
+    fn migrate_clamps_out_of_range_gap_on_load() {
+        let json = r#"{"profiles":{},"active_profile":"","gap":999}"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(migrate(cfg).gap, 20);
+
+        let json = r#"{"profiles":{},"active_profile":"","gap":-5}"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(migrate(cfg).gap, 0);
     }
 }

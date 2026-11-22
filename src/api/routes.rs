@@ -399,6 +399,33 @@ async fn set_app_options(
     }
 }
 
+/// Body of `PUT /api/settings/apply` — settings + app options in one request.
+#[derive(Debug, Deserialize)]
+struct SettingsApplyBody {
+    settings: SettingsDto,
+    options: AppOptionsDto,
+}
+
+/// `PUT /api/settings/apply` — apply both DTOs as one mutation with a single
+/// undo point, so one Settings save cannot create two history entries.
+async fn settings_apply(
+    State(state): State<AppState>,
+    Json(body): Json<SettingsApplyBody>,
+) -> Response {
+    match call(
+        &state,
+        CommandPayload::SettingsApply {
+            settings: body.settings,
+            options: body.options,
+        },
+    )
+    .await
+    {
+        Ok(v) => json_response(v),
+        Err(e) => e.into_response(),
+    }
+}
+
 async fn get_hotkeys(State(state): State<AppState>) -> Response {
     match call(&state, CommandPayload::HotkeysGet).await {
         Ok(v) => json_response(v),
@@ -462,6 +489,7 @@ pub fn build(state: AppState) -> Router {
         .route("/disable", post(disable))
         .route("/enable", post(enable))
         .route("/settings", get(get_settings).put(set_settings))
+        .route("/settings/apply", put(settings_apply))
         .route("/app-options", put(set_app_options))
         .route("/hotkeys", get(get_hotkeys).put(set_hotkeys))
         .route("/logs", get(get_logs))
@@ -780,6 +808,51 @@ mod tests {
             .unwrap();
         let json = body_json(res).await;
         assert_eq!(json["draft"]["close_action"], "exit");
+    }
+
+    #[tokio::test]
+    async fn settings_apply_endpoint_creates_one_undo_point() {
+        let h = harness();
+        // One PUT carries both DTOs. `auto_start` is unchanged so no registry
+        // write occurs; the test stays inert on Windows.
+        let body = r#"{"settings":{"grid_cols":9},"options":{"auto_start":false,"close_action":"exit","gap":12}}"#;
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/settings/apply", "PUT", Body::from(body)))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/state", "GET", Body::empty()))
+            .await
+            .unwrap();
+        let json = body_json(res).await;
+        assert_eq!(json["draft"]["settings"]["grid_cols"], 9);
+        assert_eq!(json["draft"]["close_action"], "exit");
+        assert_eq!(json["draft"]["gap"], 12);
+
+        // A single undo reverts settings and options together.
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/undo", "POST", Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/state", "GET", Body::empty()))
+            .await
+            .unwrap();
+        let json = body_json(res).await;
+        assert_eq!(json["draft"]["settings"]["grid_cols"], 12);
+        assert_eq!(json["draft"]["close_action"], "ask");
+        assert_eq!(json["draft"]["gap"], 8);
     }
 
     #[tokio::test]

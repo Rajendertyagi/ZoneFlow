@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { CircleCheck, CircleAlert, Info, TriangleAlert, X } from '@lucide/svelte';
-  import { readViewFromHash } from '$lib/api/client';
+  import { api, readViewFromHash } from '$lib/api/client';
   import {
     refreshState,
     setSseEventHandler,
@@ -10,8 +10,11 @@
     type SseEvent,
   } from '$lib/api/events';
   import { isDirty, store } from '$lib/state/app.svelte';
+  import { performRememberedClose, persistCloseChoice } from '$lib/state/close-action';
   import { getCanvasCommands } from '$lib/state/canvas-commands';
+  import { resolveCloseAction } from '$lib/state/settings-helpers';
   import { resolveUndoShortcut } from '$lib/state/undo-shortcut';
+  import { errorMessage } from '$lib/state/workflow';
   import {
     dismissToast,
     navigate,
@@ -136,6 +139,48 @@
     ui.canvasMode = 'draw';
     navigate('editor');
   }
+
+  /**
+   * Single decision point for the editor's close button. `ask` opens the
+   * confirmation dialog; a remembered choice persists the whole draft first
+   * (so a dirty draft is never lost) and only then closes or shuts down.
+   */
+  async function requestClose(): Promise<void> {
+    const action = resolveCloseAction(store.snapshot?.draft.close_action);
+    if (action === 'dialog') {
+      closeOpen = true;
+      return;
+    }
+    const draft = store.snapshot?.draft;
+    const result = await performRememberedClose(action, {
+      persist: (chosen) =>
+        persistCloseChoice(
+          { auto_start: draft?.auto_start ?? false, gap: draft?.gap ?? 8 },
+          chosen,
+          true,
+          {
+            onError: (error) =>
+              toast('error', `Could not persist the close choice: ${errorMessage(error)}`),
+          },
+        ),
+      closeWindow: () => window.close(),
+      shutdown: async () => {
+        try {
+          await api.shutdown();
+          toast('info', 'ZoneFlow is shutting down.');
+        } catch (error) {
+          toast('error', `Shutdown failed: ${errorMessage(error)}`);
+        }
+      },
+    });
+    if (result === 'persist_failed') {
+      // onError already reported the reason; keep the editor open.
+      return;
+    }
+    if (result === 'minimize') {
+      toast('info', 'Editor closed. ZoneFlow is still running in the tray.');
+    }
+  }
 </script>
 
 <svelte:head>
@@ -143,7 +188,7 @@
 </svelte:head>
 
 <div class="flex h-screen min-h-[560px] flex-col overflow-hidden bg-zf-bg text-zf-text">
-  <TopBar onclose={() => (closeOpen = true)} />
+  <TopBar onclose={requestClose} />
 
   {#if store.connection === 'lost'}
     <div role="alert" class="mx-5 mt-3 rounded-md border border-zf-warn/40 bg-zf-warn/10 px-4 py-2 text-sm text-zf-warn">

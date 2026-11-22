@@ -278,14 +278,16 @@ impl Inner {
         Ok(())
     }
 
-    /// Build the full `GET /api/state` snapshot. `work_area` and the shared
-    /// `hotkey_failures` slot are supplied by the caller (the worker reads the
-    /// area from `engine::work_area()` and owns the slot handle) so this method
-    /// stays unit-testable without native objects.
+    /// Build the full `GET /api/state` snapshot. `work_area`, the shared
+    /// `hotkey_failures` slot and the registry-derived `auto_start_registered`
+    /// flag are supplied by the caller (the worker reads the area from
+    /// `engine::work_area()`, owns the slot handle and queries the registry) so
+    /// this method stays unit-testable without native or registry access.
     pub fn state_snapshot(
         &self,
         work_area: RectDto,
         hotkey_failures: &HotkeyFailures,
+        auto_start_registered: bool,
     ) -> StateSnapshot {
         let profiles: Vec<ProfileSummary> = self
             .draft
@@ -335,6 +337,7 @@ impl Inner {
                 enabled: self.layout_enabled,
             },
             hotkey_failures,
+            auto_start_registered,
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
         }
@@ -459,6 +462,7 @@ mod tests {
                 h: 1040,
             },
             &HotkeyFailures::default(),
+            false,
         );
         assert!(snap.dirty);
         assert_eq!(snap.applied, "Coding");
@@ -490,6 +494,7 @@ mod tests {
                 h: 1,
             },
             &slot,
+            false,
         );
         assert_eq!(
             snap.hotkey_failures,
@@ -515,6 +520,7 @@ mod tests {
                 h: 1,
             },
             &HotkeyFailures::default(),
+            false,
         );
         assert_eq!(snap.zones.len(), 1);
         assert_eq!(snap.zones[0].exe, "a.exe");
@@ -675,5 +681,25 @@ mod tests {
         assert!(s.redo());
         assert_eq!(s.selected_zone, 1);
         assert_eq!(s.draft.active().zones.len(), 1);
+    }
+
+    /// The registry flag is injected through a pure seam (a bool argument), so
+    /// this test proves the snapshot carries it without touching the real
+    /// registry. Both `true` and `false` must round-trip verbatim.
+    #[test]
+    fn state_snapshot_carries_registry_autostart_flag() {
+        let s = Inner::new(cfg());
+        let area = RectDto {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        let registered = s.state_snapshot(area, &HotkeyFailures::default(), true);
+        assert!(registered.auto_start_registered);
+        let not_registered = s.state_snapshot(area, &HotkeyFailures::default(), false);
+        assert!(!not_registered.auto_start_registered);
+        // The flag is independent of the draft's target value.
+        assert!(!registered.draft.auto_start);
     }
 }

@@ -2,6 +2,7 @@
   import { Minimize2, Power, X } from '@lucide/svelte';
   import { api } from '$lib/api/client';
   import { store } from '$lib/state/app.svelte';
+  import { persistCloseChoice } from '$lib/state/close-action';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
   import Button from '$lib/components/ui/button.svelte';
@@ -26,18 +27,18 @@
    * failure so callers never discard data on a failed write.
    */
   async function persist(action: 'minimize' | 'exit'): Promise<boolean> {
-    try {
-      await api.setAppOptions({
+    return persistCloseChoice(
+      {
         auto_start: store.snapshot?.draft.auto_start ?? false,
-        close_action: remember ? action : 'ask',
         gap: store.snapshot?.draft.gap ?? 8,
-      });
-      await api.save();
-      return true;
-    } catch (error) {
-      toast('error', `Could not persist the close choice: ${errorMessage(error)}`);
-      return false;
-    }
+      },
+      action,
+      remember,
+      {
+        onError: (error) =>
+          toast('error', `Could not persist the close choice: ${errorMessage(error)}`),
+      },
+    );
   }
 
   async function minimize(): Promise<void> {

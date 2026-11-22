@@ -301,6 +301,10 @@ pub struct StateSnapshot {
     /// Hotkey bindings that failed syntax validation or native registration
     /// (Finding U-03). Mirrored from the native thread through a shared slot.
     pub hotkey_failures: Vec<String>,
+    /// Actual Windows autostart registration state, read from the registry.
+    /// The Settings toggle is seeded from this; `draft.auto_start` remains the
+    /// authoritative target that `set_auto_start` applies on save.
+    pub auto_start_registered: bool,
     pub can_undo: bool,
     pub can_redo: bool,
 }

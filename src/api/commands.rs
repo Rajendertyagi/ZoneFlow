@@ -115,6 +115,14 @@ pub enum CommandPayload {
     AppOptionsSet {
         options: super::dto::AppOptionsDto,
     },
+    /// Apply settings and app options together as ONE mutation with a single
+    /// undo point. The Settings view uses this so one "Apply settings" click
+    /// cannot create two history entries. The two individual commands above are
+    /// kept for compatibility with other callers (e.g. CloseDialog).
+    SettingsApply {
+        settings: super::dto::SettingsDto,
+        options: super::dto::AppOptionsDto,
+    },
     HotkeysGet,
     HotkeysSet {
         hotkeys: BTreeMap<String, String>,
@@ -188,6 +196,7 @@ impl CommandPayload {
             | CommandPayload::Enable
             | CommandPayload::SettingsSet { .. }
             | CommandPayload::AppOptionsSet { .. }
+            | CommandPayload::SettingsApply { .. }
             | CommandPayload::HotkeysSet { .. }
             | CommandPayload::Action(_)
             | CommandPayload::MoveWindow { .. }
@@ -238,6 +247,35 @@ fn bad_request(msg: impl Into<String>) -> ApiError {
 /// a pure function so the mapping is testable without touching the registry.
 fn autostart_api_error(message: String) -> ApiError {
     ApiError::Internal(message)
+}
+
+/// Convert a settings DTO into the authoritative config and repair any
+/// out-of-range values. Infallible by design — validation clamps rather than
+/// rejects, so a crafted PUT can never poison the editor.
+fn apply_settings_dto(inner: &mut Inner, settings: super::dto::SettingsDto) {
+    let mut settings: crate::config::Settings = settings.into();
+    settings.validate();
+    inner.draft.settings = settings;
+}
+
+/// Apply AppConfig-level options. The registry is the only fallible step and is
+/// performed first, so a failure leaves the draft completely unchanged.
+fn apply_options_dto(
+    inner: &mut Inner,
+    options: super::dto::AppOptionsDto,
+) -> Result<(), ApiError> {
+    // Only touch the registry when the value actually changes — avoids a
+    // redundant HKCU write on every Settings save (R-01). A registry failure is
+    // surfaced to the UI as an Internal error instead of a false success.
+    if inner.draft.auto_start != options.auto_start {
+        crate::autostart::set_auto_start(options.auto_start).map_err(autostart_api_error)?;
+    }
+    inner.draft.auto_start = options.auto_start;
+    inner.draft.close_action = options.close_action;
+    // The Settings UI advertises 0..20; clamp here too so a crafted PUT cannot
+    // store an out-of-range gap (the loopback API has no HTML validation).
+    inner.draft.gap = options.gap.clamp(0, 20);
+    Ok(())
 }
 
 /// Map an engine failure to its wire status. Kept as a pure function so every
@@ -379,14 +417,23 @@ pub fn handle(
     match payload {
         CommandPayload::StateGet => {
             let area = RectDto::from(&crate::engine::work_area());
-            Ok(
-                serde_json::to_value(inner.state_snapshot(area, &ctx.hotkey_failures))
-                    .map_err(|e| ApiError::Internal(e.to_string()))?,
-            )
+            // Read the real registry state so the Settings toggle can be seeded
+            // from what Windows actually has, not from the config draft.
+            let auto_start_registered = crate::autostart::is_auto_start();
+            Ok(serde_json::to_value(inner.state_snapshot(
+                area,
+                &ctx.hotkey_failures,
+                auto_start_registered,
+            ))
+            .map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::StatusGet => {
             let area = RectDto::from(&crate::engine::work_area());
-            let status = inner.state_snapshot(area, &ctx.hotkey_failures).status;
+            // Status-only response discards every other snapshot field, so no
+            // registry read is needed here.
+            let status = inner
+                .state_snapshot(area, &ctx.hotkey_failures, false)
+                .status;
             Ok(serde_json::to_value(status).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::Shutdown => {
@@ -907,7 +954,7 @@ pub fn handle(
             Ok(serde_json::to_value(dto).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
         CommandPayload::SettingsSet { settings } => {
-            inner.draft.settings = settings.into();
+            apply_settings_dto(inner, settings);
             // Autostart is owned by AppOptionsSet, which the Settings view calls
             // immediately afterwards. Re-writing the OLD value here was both
             // redundant and misleading (R-01); do not touch the registry here.
@@ -919,19 +966,20 @@ pub fn handle(
             ok()
         }
         CommandPayload::AppOptionsSet { options } => {
-            // Only touch the registry when the value actually changes — avoids a
-            // redundant HKCU write on every Settings save (and keeps tests inert
-            // when the value is unchanged). A registry failure is surfaced to the
-            // UI as an Internal error instead of a false success (R-01).
-            if inner.draft.auto_start != options.auto_start {
-                crate::autostart::set_auto_start(options.auto_start)
-                    .map_err(autostart_api_error)?;
-            }
-            inner.draft.auto_start = options.auto_start;
-            inner.draft.close_action = options.close_action;
-            inner.draft.gap = options.gap;
+            apply_options_dto(inner, options)?;
             inner.push_history();
             inner.log("info", "Application options updated");
+            ok()
+        }
+        CommandPayload::SettingsApply { settings, options } => {
+            // One atomic mutation: the fallible registry step runs first so a
+            // failure cannot leave a half-applied draft, then both DTOs are
+            // written and a SINGLE undo point is recorded.
+            apply_options_dto(inner, options)?;
+            apply_settings_dto(inner, settings);
+            inner.push_history();
+            ctx.notifier.sync_overlay_style(&inner.draft.settings);
+            inner.log("info", "Settings and application options updated");
             ok()
         }
         CommandPayload::HotkeysGet => {
@@ -1280,6 +1328,10 @@ mod tests {
             CommandPayload::AppOptionsSet {
                 options: AppOptionsDto::default(),
             },
+            CommandPayload::SettingsApply {
+                settings: SettingsDto::default(),
+                options: AppOptionsDto::default(),
+            },
             CommandPayload::HotkeysSet {
                 hotkeys: BTreeMap::new(),
             },
@@ -1303,9 +1355,9 @@ mod tests {
                 "mutation must emit state-changed: {payload:?}"
             );
         }
-        // 10 read-only + 30 mutations = all 40 variants. Guards against a new
+        // 10 read-only + 31 mutations = all 41 variants. Guards against a new
         // variant being added to the match but forgotten in this test.
-        assert_eq!(read_only.len() + mutating.len(), 40);
+        assert_eq!(read_only.len() + mutating.len(), 41);
     }
 
     /// The native completion ack must be classified as emitting so the worker
@@ -1416,6 +1468,7 @@ mod tests {
                 h: 1,
             },
             &HotkeyFailures::default(),
+            false,
         );
         assert!(snap.zones.is_empty());
         assert_eq!(snap.selected, "Gaming");
@@ -2240,6 +2293,97 @@ mod tests {
         assert!(!inner.draft.auto_start);
         assert_eq!(inner.draft.close_action, crate::config::CloseAction::Exit);
         assert_eq!(inner.draft.gap, 12);
+    }
+
+    #[test]
+    fn app_options_set_clamps_out_of_range_gap() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // A crafted PUT must not store a gap outside the UI's 0..20 range.
+        handle(
+            CommandPayload::AppOptionsSet {
+                options: AppOptionsDto {
+                    auto_start: false,
+                    close_action: crate::config::CloseAction::Ask,
+                    gap: 999,
+                },
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.draft.gap, 20);
+
+        handle(
+            CommandPayload::AppOptionsSet {
+                options: AppOptionsDto {
+                    auto_start: false,
+                    close_action: crate::config::CloseAction::Ask,
+                    gap: -5,
+                },
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.draft.gap, 0);
+    }
+
+    #[test]
+    fn settings_set_clamps_out_of_range_values() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let settings = SettingsDto {
+            grid_cols: 999,
+            min_zone_pct: -5.0,
+            snap_points: vec![],
+            ..SettingsDto::default()
+        };
+        handle(
+            CommandPayload::SettingsSet { settings },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.draft.settings.grid_cols, 24);
+        assert_eq!(inner.draft.settings.min_zone_pct, 1.0);
+        assert_eq!(inner.draft.settings.snap_points, vec![25.0, 50.0, 75.0]);
+    }
+
+    #[test]
+    fn settings_apply_creates_exactly_one_history_entry() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let before = inner.history.len();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let settings = SettingsDto {
+            grid_cols: 9,
+            ..SettingsDto::default()
+        };
+        let options = AppOptionsDto {
+            auto_start: false, // unchanged -> no registry write in tests
+            close_action: crate::config::CloseAction::Exit,
+            gap: 12,
+        };
+        handle(
+            CommandPayload::SettingsApply { settings, options },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            inner.history.len(),
+            before + 1,
+            "one Apply must create exactly one undo point"
+        );
+        assert_eq!(inner.draft.settings.grid_cols, 9);
+        assert_eq!(inner.draft.close_action, crate::config::CloseAction::Exit);
+        assert_eq!(inner.draft.gap, 12);
+
+        // A single undo reverts settings and options together.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.draft.settings.grid_cols, 12);
+        assert_eq!(inner.draft.close_action, crate::config::CloseAction::Ask);
+        assert_eq!(inner.draft.gap, 8);
     }
 
     #[test]

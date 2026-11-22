@@ -96,7 +96,6 @@ pub fn set_auto_start(enable: bool) -> Result<(), String> {
 /// app is configured to start at Windows login. Used to initialise the Settings
 /// toggle from the actual system state (the config value is the authoritative
 /// source that `set_auto_start` applies at startup).
-#[allow(dead_code)] // consumed by the rebuilt Settings UI (Phase 4/5)
 pub fn is_auto_start() -> bool {
     // SAFETY: `key_path` and `name` are UTF-16 vectors kept alive for the whole
     // block, so their `PCWSTR` pointers stay valid for every registry call.
