@@ -131,6 +131,64 @@ pub enum CommandPayload {
     },
 }
 
+impl CommandPayload {
+    /// Whether a *successful* command should broadcast a `state-changed` SSE
+    /// event. Strictly read-only commands return `false`: a client that
+    /// re-fetches its snapshot on `state-changed` would otherwise trigger yet
+    /// another event on every fetch — the idle-CPU feedback loop. Every
+    /// mutation/action returns `true` so the UI stays in sync after a real
+    /// state change.
+    ///
+    /// The match is deliberately exhaustive: adding a new variant forces the
+    /// author to decide whether it changes authoritative state.
+    pub fn emits_state_change(&self) -> bool {
+        match self {
+            // --- read-only: no authoritative state change ---
+            CommandPayload::StateGet
+            | CommandPayload::StatusGet
+            | CommandPayload::ProfilesList
+            | CommandPayload::ZonesList
+            | CommandPayload::AppsList { .. }
+            | CommandPayload::AppsBrowse
+            | CommandPayload::Preview
+            | CommandPayload::SettingsGet
+            | CommandPayload::HotkeysGet
+            | CommandPayload::LogsGet { .. } => false,
+
+            // --- mutations / actions ---
+            CommandPayload::Shutdown
+            | CommandPayload::ProfileCreate { .. }
+            | CommandPayload::ProfileRename { .. }
+            | CommandPayload::ProfileDelete { .. }
+            | CommandPayload::ProfileDuplicate { .. }
+            | CommandPayload::ProfileLoad { .. }
+            | CommandPayload::ProfileSelect { .. }
+            | CommandPayload::ProfileApply { .. }
+            | CommandPayload::ZoneCreate { .. }
+            | CommandPayload::ZoneUpdate { .. }
+            | CommandPayload::ZonesBatchUpdate { .. }
+            | CommandPayload::ZoneDelete { .. }
+            | CommandPayload::ZoneSplit { .. }
+            | CommandPayload::ZoneMerge { .. }
+            | CommandPayload::ZoneAssign { .. }
+            | CommandPayload::ZoneUnassign { .. }
+            | CommandPayload::Undo
+            | CommandPayload::Redo
+            | CommandPayload::Save
+            | CommandPayload::Apply
+            | CommandPayload::LaunchArrange
+            | CommandPayload::Revert
+            | CommandPayload::Disable
+            | CommandPayload::Enable
+            | CommandPayload::SettingsSet { .. }
+            | CommandPayload::AppOptionsSet { .. }
+            | CommandPayload::HotkeysSet { .. }
+            | CommandPayload::Action(_)
+            | CommandPayload::MoveWindow { .. } => true,
+        }
+    }
+}
+
 /// Non-authoritative context passed to the handler: side-effect channels and
 /// short-lived caches that do not belong in the persisted draft.
 pub struct CommandContext<'a> {
@@ -1041,6 +1099,7 @@ fn handle_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::dto::{AppOptionsDto, SettingsDto};
     use crate::config::default_config;
     use crate::native_loop::{HwndSend, NativeMessage, NativeQueue, SharedEvent};
     use std::sync::Arc;
@@ -1079,6 +1138,124 @@ mod tests {
             None,
         );
         (inner, queue, shutdown, None)
+    }
+
+    /// Every variant is listed exactly once so this test is exhaustive: if a
+    /// new `CommandPayload` variant is added, the exhaustive match in
+    /// `emits_state_change` fails to compile until it is classified here too.
+    #[test]
+    fn emits_state_change_classifies_every_variant() {
+        let read_only: Vec<CommandPayload> = vec![
+            CommandPayload::StateGet,
+            CommandPayload::StatusGet,
+            CommandPayload::ProfilesList,
+            CommandPayload::ZonesList,
+            CommandPayload::AppsList {
+                source: "installed".into(),
+            },
+            CommandPayload::AppsBrowse,
+            CommandPayload::Preview,
+            CommandPayload::SettingsGet,
+            CommandPayload::HotkeysGet,
+            CommandPayload::LogsGet { since: 0 },
+        ];
+        let mutating: Vec<CommandPayload> = vec![
+            CommandPayload::Shutdown,
+            CommandPayload::ProfileCreate {
+                name: "X".into(),
+                discard_dirty: false,
+            },
+            CommandPayload::ProfileRename {
+                name: "X".into(),
+                new_name: "Y".into(),
+            },
+            CommandPayload::ProfileDelete { name: "X".into() },
+            CommandPayload::ProfileDuplicate {
+                name: "X".into(),
+                new_name: "Y".into(),
+            },
+            CommandPayload::ProfileLoad {
+                name: "X".into(),
+                discard_dirty: false,
+            },
+            CommandPayload::ProfileSelect {
+                name: "X".into(),
+                discard_dirty: false,
+            },
+            CommandPayload::ProfileApply {
+                name: "X".into(),
+                discard_dirty: false,
+            },
+            CommandPayload::ZoneCreate {
+                zone: ZoneDto::default(),
+            },
+            CommandPayload::ZoneUpdate {
+                id: 1,
+                zone: ZoneDto::default(),
+            },
+            CommandPayload::ZonesBatchUpdate { updates: vec![] },
+            CommandPayload::ZoneDelete { id: 1 },
+            CommandPayload::ZoneSplit {
+                id: 1,
+                spec: SplitDto {
+                    axis: "x".into(),
+                    ratio: 0.5,
+                },
+            },
+            CommandPayload::ZoneMerge {
+                spec: MergeDto {
+                    source_id: 1,
+                    target_id: 2,
+                },
+            },
+            CommandPayload::ZoneAssign {
+                id: 1,
+                spec: AssignDto {
+                    label: "L".into(),
+                    exe: "e.exe".into(),
+                    path: String::new(),
+                },
+            },
+            CommandPayload::ZoneUnassign { id: 1 },
+            CommandPayload::Undo,
+            CommandPayload::Redo,
+            CommandPayload::Save,
+            CommandPayload::Apply,
+            CommandPayload::LaunchArrange,
+            CommandPayload::Revert,
+            CommandPayload::Disable,
+            CommandPayload::Enable,
+            CommandPayload::SettingsSet {
+                settings: SettingsDto::default(),
+            },
+            CommandPayload::AppOptionsSet {
+                options: AppOptionsDto::default(),
+            },
+            CommandPayload::HotkeysSet {
+                hotkeys: BTreeMap::new(),
+            },
+            CommandPayload::Action(crate::system::Action::Retile),
+            CommandPayload::MoveWindow {
+                hwnd: 1,
+                zone_id: 1,
+            },
+        ];
+
+        for payload in &read_only {
+            assert!(
+                !payload.emits_state_change(),
+                "read-only command must not emit state-changed: {payload:?}"
+            );
+        }
+        for payload in &mutating {
+            assert!(
+                payload.emits_state_change(),
+                "mutation must emit state-changed: {payload:?}"
+            );
+        }
+        // 10 read-only + 29 mutations = all 39 variants. Guards against a new
+        // variant being added to the match but forgotten in this test.
+        assert_eq!(read_only.len() + mutating.len(), 39);
     }
 
     #[test]

@@ -15,6 +15,7 @@ import {
   setSnapshot,
 } from '$lib/state/app.svelte';
 import { api } from './client';
+import { shouldRefreshOnEvent } from '$lib/state/sse-policy';
 
 export interface SseEvent {
   type:
@@ -52,9 +53,13 @@ export async function refreshState(): Promise<void> {
 
 function handleEvent(event: SseEvent): void {
   noteEvent();
-  // Every backend mutation broadcasts `state-changed`; the other types are
-  // advisory. A full snapshot refresh is correct for all of them.
-  void refreshState();
+  // Only `state-changed` signals a real mutation. Advisory event types must not
+  // trigger a full snapshot fetch — doing so on every frame is what let a
+  // read-only GET feed back into another `state-changed` event (idle-CPU loop).
+  // The backend now breaks the loop at the source; this is defense in depth.
+  if (shouldRefreshOnEvent(event.type)) {
+    void refreshState();
+  }
   // Let the shell turn documented advisory events into real toasts. The current
   // backend only emits `state-changed`, so this is dormant until those types are
   // produced — it never fabricates feedback.

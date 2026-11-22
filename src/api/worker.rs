@@ -38,6 +38,11 @@ pub fn spawn_worker(
             let notifier = Arc::new(notifier);
 
             while let Ok(cmd) = rx.recv() {
+                // Capture before `cmd.payload` is moved into `handle`. Read-only
+                // commands (e.g. StateGet) must not broadcast `state-changed`,
+                // otherwise a client refreshing on that event feeds back into
+                // another event forever (idle-CPU loop).
+                let emits_state_change = cmd.payload.emits_state_change();
                 let mut ctx = CommandContext {
                     notifier: notifier.clone(),
                     shutdown: shutdown.clone(),
@@ -57,12 +62,14 @@ pub fn spawn_worker(
                     // overlay always shows exactly where a drop will snap.
                     notifier.set_zones(inner.drag_zones());
 
-                    let event = serde_json::json!({
-                        "type": "state-changed",
-                        "payload": {},
-                    });
-                    if let Err(e) = sse_tx.send(event.to_string()) {
-                        tracing::debug!(error = %e, "no SSE subscribers for state-changed event");
+                    if emits_state_change {
+                        let event = serde_json::json!({
+                            "type": "state-changed",
+                            "payload": {},
+                        });
+                        if let Err(e) = sse_tx.send(event.to_string()) {
+                            tracing::debug!(error = %e, "no SSE subscribers for state-changed event");
+                        }
                     }
                 }
             }
@@ -114,6 +121,76 @@ mod tests {
         .unwrap();
         let value = reply_rx.blocking_recv().unwrap().unwrap();
         assert!(value["enabled"].as_bool().unwrap());
+
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    /// A read-only `StateGet` must produce no SSE frame, while a mutation
+    /// (`Disable`) produces exactly one. A trailing `StateGet` after each
+    /// command acts as a deterministic barrier: the worker processes commands
+    /// in order, so receiving that barrier's reply proves the preceding
+    /// command's loop body (including the emission decision) has completed —
+    /// no sleeps or yields needed.
+    #[test]
+    fn read_only_commands_emit_no_sse_event_but_mutations_do() {
+        let (tx, rx) = mpsc::channel::<Command>();
+        let (sse_tx, mut sse_rx) = broadcast::channel(16);
+        let queue = Arc::new(NativeQueue::new());
+        let notifier = NativeNotifier::new(queue.clone(), Arc::new(std::sync::OnceLock::new()));
+        let shutdown = ShutdownHandle::new(
+            queue,
+            SharedEvent::new_test(),
+            Arc::new(std::sync::OnceLock::<HwndSend>::new()),
+            tokio::sync::watch::Sender::new(false),
+            None,
+        );
+        let worker = spawn_worker(
+            rx,
+            default_config(),
+            sse_tx,
+            notifier,
+            shutdown,
+            Arc::new(crate::browser::EDITOR_URL.to_string()),
+        );
+
+        fn send(tx: &mpsc::Sender<Command>, payload: CommandPayload) -> Result<Value, ApiError> {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            tx.send(Command {
+                payload,
+                reply: reply_tx,
+            })
+            .unwrap();
+            reply_rx.blocking_recv().unwrap()
+        }
+
+        // Two read-only commands; the second is the barrier.
+        send(&tx, CommandPayload::StateGet).unwrap();
+        send(&tx, CommandPayload::StateGet).unwrap();
+        assert!(
+            matches!(
+                sse_rx.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "StateGet must not emit a state-changed event"
+        );
+
+        // A mutation emits exactly one event; a trailing read-only command is
+        // the barrier proving the emission has already happened.
+        send(&tx, CommandPayload::Disable).unwrap();
+        send(&tx, CommandPayload::StateGet).unwrap();
+        let frame = sse_rx
+            .try_recv()
+            .expect("Disable must emit one state-changed event");
+        let parsed: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(parsed["type"], "state-changed");
+        assert!(
+            matches!(
+                sse_rx.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "Disable must emit exactly one event"
+        );
 
         drop(tx);
         worker.join().unwrap();
