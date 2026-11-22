@@ -14,7 +14,7 @@
     type ZoneGeometryUpdateDto,
   } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
-  import { patchZoneLocal, store } from '$lib/state/app.svelte';
+  import { getSnapshot, patchZoneLocal, store } from '$lib/state/app.svelte';
   import DragPreview from './DragPreview.svelte';
   import SnapGuides from './SnapGuides.svelte';
   import ZoneRect from './ZoneRect.svelte';
@@ -446,10 +446,27 @@
     }
   }
 
+  /**
+   * After an undo/redo the authoritative zone set can differ from the local
+   * selection (e.g. undoing a zone creation deletes the selected zone). Keep
+   * `selectedId` pointing at a zone that actually exists: prefer the backend's
+   * recorded `selected_zone` when it is valid, otherwise clear the selection so
+   * the inspector never shows a stale zone.
+   */
+  function reconcileSelectionAfterHistory(): void {
+    const snap = getSnapshot();
+    if (!snap) return;
+    if (selectedId !== null && !snap.zones.some((z) => z.id === selectedId)) {
+      const fallback = snap.selected_zone;
+      selectedId = snap.zones.some((z) => z.id === fallback) ? fallback : null;
+    }
+  }
+
   async function undo(): Promise<void> {
     try {
       await api.undo();
       await refreshState();
+      reconcileSelectionAfterHistory();
     } catch (error) {
       notice(`Undo failed: ${errorMessage(error)}`);
     }
@@ -459,6 +476,7 @@
     try {
       await api.redo();
       await refreshState();
+      reconcileSelectionAfterHistory();
     } catch (error) {
       notice(`Redo failed: ${errorMessage(error)}`);
     }

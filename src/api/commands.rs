@@ -1773,6 +1773,202 @@ mod tests {
         assert!(!inner.draft.profiles.contains_key("Copy"));
     }
 
+    /// Every runtime profile name must either be empty (Applied after a delete)
+    /// or name a profile that actually exists in the restored draft. This is the
+    /// invariant that broke when Snapshot captured only the draft config.
+    fn assert_profile_dimensions_coherent(inner: &Inner) {
+        assert!(
+            inner
+                .draft
+                .profiles
+                .contains_key(&inner.draft.active_profile),
+            "active_profile '{}' must exist in draft",
+            inner.draft.active_profile
+        );
+        if !inner.selected_profile.is_empty() {
+            assert!(
+                inner.draft.profiles.contains_key(&inner.selected_profile),
+                "selected_profile '{}' must exist in draft",
+                inner.selected_profile
+            );
+        }
+        if !inner.applied_profile.is_empty() {
+            assert!(
+                inner.draft.profiles.contains_key(&inner.applied_profile),
+                "applied_profile '{}' must exist in draft",
+                inner.applied_profile
+            );
+        }
+    }
+
+    #[test]
+    fn undo_rename_restores_profile_dimensions_and_apply_succeeds() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // Rename the active/applied/selected profile in one atomic command.
+        handle(
+            CommandPayload::ProfileRename {
+                name: "Website".into(),
+                new_name: "Home".into(),
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.selected_profile, "Home");
+        assert_eq!(inner.applied_profile, "Home");
+        assert_eq!(inner.draft.active_profile, "Home");
+
+        // Undo must restore the old name in all three dimensions, not leave
+        // selected/applied pointing at "Home" (absent from the restored draft).
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.applied_profile, "Website");
+        assert_eq!(inner.draft.active_profile, "Website");
+        assert!(inner.draft.profiles.contains_key("Website"));
+        assert!(!inner.draft.profiles.contains_key("Home"));
+        assert_profile_dimensions_coherent(&inner);
+
+        // The original failure mode: Apply on the selected profile returned
+        // not_found because selected_profile named a profile absent from draft.
+        let applied = handle(CommandPayload::Apply, &mut inner, &mut ctx).unwrap();
+        let result: ApplyResultDto = serde_json::from_value(applied).unwrap();
+        assert_eq!(result.profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+
+        // Redo restores the renamed state coherently.
+        handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.selected_profile, "Home");
+        assert_eq!(inner.applied_profile, "Home");
+        assert_profile_dimensions_coherent(&inner);
+    }
+
+    #[test]
+    fn undo_delete_restores_deleted_profile_dimensions() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // Delete the active/applied/selected profile. Applied is cleared (D-rule),
+        // Selected falls back to the first remaining profile.
+        handle(
+            CommandPayload::ProfileDelete {
+                name: "Website".into(),
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.applied_profile, "");
+        assert_eq!(inner.selected_profile, "Coding");
+        assert!(!inner.draft.profiles.contains_key("Website"));
+        assert_profile_dimensions_coherent(&inner);
+
+        // Undo restores the deleted profile and its exact dimension values.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert!(inner.draft.profiles.contains_key("Website"));
+        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.applied_profile, "Website");
+        assert_eq!(inner.draft.active_profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+
+        // Redo re-applies the delete coherently (Applied cleared, Selected valid).
+        handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
+        assert!(!inner.draft.profiles.contains_key("Website"));
+        assert_eq!(inner.applied_profile, "");
+        assert_eq!(inner.selected_profile, "Coding");
+        assert_profile_dimensions_coherent(&inner);
+    }
+
+    #[test]
+    fn undo_create_reverts_selected_and_applied_and_removes_new_profile() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        handle(
+            CommandPayload::ProfileCreate {
+                name: "Gaming".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.selected_profile, "Gaming");
+        assert_eq!(inner.applied_profile, "Website"); // D6: create never applies
+        assert!(inner.draft.profiles.contains_key("Gaming"));
+        assert_profile_dimensions_coherent(&inner);
+
+        // Undo removes the new profile and reverts Selected to the prior profile.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert!(!inner.draft.profiles.contains_key("Gaming"));
+        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.applied_profile, "Website");
+        assert_eq!(inner.draft.active_profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+
+        // Redo re-creates it coherently.
+        handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
+        assert!(inner.draft.profiles.contains_key("Gaming"));
+        assert_eq!(inner.selected_profile, "Gaming");
+        assert_eq!(inner.applied_profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+    }
+
+    #[test]
+    fn undo_after_profile_load_and_select_keeps_selected_coherent() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+
+        // ProfileLoad pushes a history point and changes both Selected and the
+        // draft's active profile.
+        handle(
+            CommandPayload::ProfileLoad {
+                name: "Coding".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.selected_profile, "Coding");
+        assert_eq!(inner.draft.active_profile, "Coding");
+        assert_profile_dimensions_coherent(&inner);
+
+        // Undo restores the pre-load snapshot; Selected must be coherent again.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.applied_profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+
+        // ProfileSelect changes only Selected (no history point). A subsequent
+        // undo of a later history entry must still leave a coherent Selected.
+        handle(
+            CommandPayload::ProfileSelect {
+                name: "Trading".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.selected_profile, "Trading");
+        assert_profile_dimensions_coherent(&inner);
+        handle(
+            CommandPayload::ProfileCreate {
+                name: "Fresh".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.selected_profile, "Fresh");
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.selected_profile, "Website");
+        assert_profile_dimensions_coherent(&inner);
+        handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(inner.selected_profile, "Fresh");
+        assert_profile_dimensions_coherent(&inner);
+    }
+
     #[test]
     fn apply_refreshes_tray_menu_after_applied_changes() {
         let (mut inner, queue, shutdown, mut cache) = setup();

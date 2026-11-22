@@ -16,10 +16,19 @@ const LOG_CAP: usize = 500;
 
 /// One undo/redo entry. The draft config is stored as JSON so snapshots are
 /// cheap to clone and compare (the same representation used for dirty checks).
+///
+/// The two profile dimensions are captured alongside the draft because profile
+/// commands (rename/delete/create/load) mutate `selected_profile` and
+/// `applied_profile` in the same atomic step as the draft. Restoring only the
+/// draft would leave those names pointing at profiles that no longer exist in
+/// the restored config (e.g. after undoing a rename), breaking `Apply` and the
+/// drag overlay.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub cfg_json: String,
     pub selected_zone: i32,
+    pub selected_profile: String,
+    pub applied_profile: String,
 }
 
 /// One console log line with a monotonic sequence number.
@@ -76,6 +85,8 @@ impl Inner {
         let history = vec![Snapshot {
             cfg_json: last_saved_json.clone(),
             selected_zone: -1,
+            selected_profile: active.clone(),
+            applied_profile: active.clone(),
         }];
         Self {
             draft: cfg,
@@ -98,11 +109,14 @@ impl Inner {
         serde_json::to_string(&self.draft).unwrap_or_default() != self.last_saved_json
     }
 
-    /// Current history snapshot (without pushing).
+    /// Current history snapshot (without pushing). Captures all four dimensions
+    /// that profile/zone commands can mutate atomically with the draft.
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             cfg_json: serde_json::to_string(&self.draft).unwrap_or_default(),
             selected_zone: self.selected_zone,
+            selected_profile: self.selected_profile.clone(),
+            applied_profile: self.applied_profile.clone(),
         }
     }
 
@@ -121,14 +135,36 @@ impl Inner {
         self.hindex = self.history.len() - 1;
     }
 
-    /// Restore a history snapshot into the draft.
+    /// Restore a history snapshot into the draft and the two runtime profile
+    /// dimensions. All-or-nothing: an invalid `cfg_json` leaves every dimension
+    /// untouched. Profile names are restored only when they exist in the
+    /// restored draft, so no undo/redo can leave a dangling name behind.
     pub fn apply_snapshot(&mut self, snap: &Snapshot) {
-        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&snap.cfg_json) {
-            self.draft = cfg;
-        } else {
-            tracing::warn!("undo snapshot failed to deserialize; draft left unchanged");
-        }
+        let Ok(cfg) = serde_json::from_str::<AppConfig>(&snap.cfg_json) else {
+            tracing::warn!("undo snapshot failed to deserialize; state left unchanged");
+            return;
+        };
+        self.draft = cfg;
+        // Guarantee the restored config has a valid active profile before any
+        // fallback reads `active_profile` below.
+        self.draft.validate();
         self.selected_zone = snap.selected_zone;
+
+        // Selected: restore when valid, otherwise fall back to the restored
+        // draft's active profile (always present after `validate()`).
+        if self.draft.profiles.contains_key(&snap.selected_profile) {
+            self.selected_profile = snap.selected_profile.clone();
+        } else {
+            self.selected_profile = self.draft.active_profile.clone();
+        }
+
+        // Applied: restore when valid, otherwise clear it — the same D-rule
+        // `ProfileDelete` uses when the applied profile disappears.
+        if self.draft.profiles.contains_key(&snap.applied_profile) {
+            self.applied_profile = snap.applied_profile.clone();
+        } else {
+            self.applied_profile.clear();
+        }
     }
 
     /// Move one step back in history. Returns `false` when already at the start.
@@ -471,5 +507,92 @@ mod tests {
             zones[0].0, 2,
             "drag zones must come from the selected profile"
         );
+    }
+
+    #[test]
+    fn snapshot_captures_all_four_dimensions() {
+        let mut s = Inner::new(cfg());
+        s.selected_zone = 4;
+        s.selected_profile = "Trading".into();
+        s.applied_profile = "Coding".into();
+        s.draft.gap = 12;
+        let snap = s.snapshot();
+        assert_eq!(snap.selected_zone, 4);
+        assert_eq!(snap.selected_profile, "Trading");
+        assert_eq!(snap.applied_profile, "Coding");
+        assert!(snap.cfg_json.contains("\"gap\":12"));
+    }
+
+    #[test]
+    fn apply_snapshot_repairs_stale_profile_names() {
+        let mut s = Inner::new(cfg());
+        // Both names are absent from the restored draft: selected falls back to
+        // the draft's active profile, applied is cleared (ProfileDelete D-rule).
+        let snap = Snapshot {
+            cfg_json: serde_json::to_string(&cfg()).unwrap(),
+            selected_zone: 7,
+            selected_profile: "Ghost".into(),
+            applied_profile: "Phantom".into(),
+        };
+        s.apply_snapshot(&snap);
+        assert_eq!(s.selected_zone, 7);
+        assert_eq!(s.selected_profile, "Website");
+        assert_eq!(s.applied_profile, "");
+        assert!(s.draft.profiles.contains_key(&s.selected_profile));
+    }
+
+    #[test]
+    fn apply_snapshot_restores_valid_names_and_repairs_only_stale_ones() {
+        let mut s = Inner::new(cfg());
+        // Selected is valid in the restored draft, applied is stale.
+        let snap = Snapshot {
+            cfg_json: serde_json::to_string(&cfg()).unwrap(),
+            selected_zone: 2,
+            selected_profile: "Coding".into(),
+            applied_profile: "Phantom".into(),
+        };
+        s.apply_snapshot(&snap);
+        assert_eq!(s.selected_profile, "Coding");
+        assert_eq!(s.applied_profile, "");
+        assert!(s.draft.profiles.contains_key(&s.selected_profile));
+    }
+
+    #[test]
+    fn apply_snapshot_invalid_json_leaves_all_dimensions_unchanged() {
+        let mut s = Inner::new(cfg());
+        s.selected_zone = 3;
+        s.selected_profile = "Coding".into();
+        s.applied_profile = "Trading".into();
+        s.draft.gap = 99;
+        let snap = Snapshot {
+            cfg_json: "not valid json".into(),
+            selected_zone: 99,
+            selected_profile: "Ghost".into(),
+            applied_profile: "Phantom".into(),
+        };
+        s.apply_snapshot(&snap);
+        assert_eq!(s.selected_zone, 3);
+        assert_eq!(s.selected_profile, "Coding");
+        assert_eq!(s.applied_profile, "Trading");
+        assert_eq!(s.draft.gap, 99);
+    }
+
+    #[test]
+    fn undo_of_zone_create_restores_prior_selected_zone() {
+        let mut s = Inner::new(cfg());
+        // Baseline snapshot has selected_zone = -1.
+        s.draft
+            .active_mut()
+            .zones
+            .push(Zone::new(1, "A", "a.exe", 0.0, 0.0, 100.0, 100.0));
+        s.selected_zone = 1;
+        s.push_history();
+        assert_eq!(s.selected_zone, 1);
+        assert!(s.undo());
+        assert_eq!(s.selected_zone, -1);
+        assert!(s.draft.active().zones.is_empty());
+        assert!(s.redo());
+        assert_eq!(s.selected_zone, 1);
+        assert_eq!(s.draft.active().zones.len(), 1);
     }
 }
