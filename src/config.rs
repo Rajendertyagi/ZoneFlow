@@ -426,15 +426,24 @@ pub fn load_config() -> AppConfig {
 }
 
 fn load_config_inner() -> AppConfig {
-    let path = config_path();
+    load_config_from(&config_path())
+}
+
+/// Load a config from an explicit path. This is the body of `load_config_inner`
+/// factored out so the unreadable-config recovery paths can be unit-tested with
+/// a temp path instead of the real config location. Production behaviour is
+/// unchanged: `load_config_inner` passes exactly `config_path()`.
+fn load_config_from(path: &Path) -> AppConfig {
     if !path.exists() {
         let cfg = default_config();
-        if let Err(e) = save_config(&cfg) {
+        // Write defaults to the GIVEN path, not the global config_path(): this
+        // helper is path-isolated so it can be exercised with a temp path.
+        if let Err(e) = save_config_to(path, &cfg) {
             tracing::warn!(error = %e, "Failed to write default config");
         }
         return cfg;
     }
-    let text = match fs::read_to_string(&path) {
+    let text = match fs::read_to_string(path) {
         Ok(t) => t,
         Err(_) => return default_config(),
     };
@@ -443,7 +452,7 @@ fn load_config_inner() -> AppConfig {
         Err(_) => {
             // Preserve the unreadable file for recovery instead of silently wiping it.
             let bad = path.with_extension("json.bad");
-            if let Err(e) = fs::rename(&path, &bad) {
+            if let Err(e) = fs::rename(path, &bad) {
                 tracing::warn!(error = %e, "Failed to preserve unreadable config for recovery");
             }
             return default_config();
@@ -452,10 +461,15 @@ fn load_config_inner() -> AppConfig {
     migrate(cfg)
 }
 
-/// Write `cfg` to `path` via temp file + atomic rename. On Windows
+/// Write `cfg` to an explicit `path` via temp file + atomic rename. On Windows
 /// `std::fs::rename` uses MoveFileExW(MOVEFILE_REPLACE_EXISTING), which replaces
 /// an existing destination atomically — no remove-first crash window (bug B11).
-fn write_config_to(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
+///
+/// This is the single atomic-write implementation: `save_config` delegates here
+/// with `config_path()`, and `load_config_from` uses it with its own path so the
+/// loader stays fully path-isolated. It intentionally has no global side effects
+/// (the settings snapshot is refreshed by the callers that own that state).
+fn save_config_to(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(cfg)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let tmp = path.with_extension("json.tmp");
@@ -464,8 +478,7 @@ fn write_config_to(path: &Path, cfg: &AppConfig) -> std::io::Result<()> {
 }
 
 pub fn save_config(cfg: &AppConfig) -> std::io::Result<()> {
-    let path = config_path();
-    write_config_to(&path, cfg)?;
+    save_config_to(&config_path(), cfg)?;
     // Keep the settings snapshot in sync with what was just saved (bug B7).
     refresh_loaded_settings(&cfg.settings);
     Ok(())
@@ -662,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn write_config_to_replaces_existing_file_atomically() {
+    fn save_config_to_replaces_existing_file_atomically() {
         // Bug B11: an existing destination must be replaced with new content
         // and no .tmp file left behind (no remove-first crash window).
         let dir = std::env::temp_dir().join(format!("zoneflow_atomic_test_{}", std::process::id()));
@@ -670,14 +683,106 @@ mod tests {
         let path = dir.join("ScreenLayout.json");
         let mut cfg = default_config();
         cfg.gap = 3;
-        write_config_to(&path, &cfg).unwrap();
+        save_config_to(&path, &cfg).unwrap();
         // Second write over an existing destination must succeed (rename replaces).
         cfg.gap = 42;
-        write_config_to(&path, &cfg).unwrap();
+        save_config_to(&path, &cfg).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         let back: AppConfig = serde_json::from_str(&text).unwrap();
         assert_eq!(back.gap, 42);
         assert!(!path.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_config_from_creates_defaults_at_given_path_when_missing() {
+        // The extracted loader must be fully path-isolated: for a nonexistent
+        // path it writes the default config to THAT path, not to the global
+        // config_path(). If it still called save_config(), the temp file below
+        // would never appear and this test would fail. We deliberately do not
+        // inspect the real config path; the temp file's existence is the signal.
+        let dir = std::env::temp_dir().join(format!("zoneflow_missing_cfg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ScreenLayout.json");
+        assert!(!path.exists(), "precondition: temp config must not exist");
+
+        let cfg = load_config_from(&path);
+
+        // Defaults are returned to the caller.
+        assert_eq!(cfg.schema_version, SCHEMA_VERSION);
+        assert_eq!(cfg.gap, 8);
+        assert_eq!(cfg.active_profile, "Website");
+
+        // The defaults were written to the GIVEN path as valid JSON with the
+        // same values, and the atomic write left no .tmp file behind.
+        assert!(path.exists(), "defaults must be written to the given path");
+        let text = fs::read_to_string(&path).unwrap();
+        let written: AppConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(written.schema_version, SCHEMA_VERSION);
+        assert_eq!(written.gap, 8);
+        assert_eq!(written.active_profile, "Website");
+        assert!(!path.with_extension("json.tmp").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_config_is_preserved_as_bad_and_defaults_returned() {
+        // R-05: an unreadable config must be renamed to `.json.bad` for
+        // recovery and the loader must fall back to defaults. Uses a temp path
+        // so the real config location is never touched.
+        let dir = std::env::temp_dir().join(format!("zoneflow_bad_cfg_a_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ScreenLayout.json");
+        let bad = path.with_extension("json.bad");
+        let invalid = "{ this is not valid json";
+        fs::write(&path, invalid).unwrap();
+
+        let cfg = load_config_from(&path);
+
+        // Defaults are returned, not a partial/garbage config.
+        assert_eq!(cfg.schema_version, SCHEMA_VERSION);
+        assert_eq!(cfg.gap, 8);
+        assert_eq!(cfg.active_profile, "Website");
+        // The unreadable original is gone and preserved verbatim as `.bad`.
+        assert!(!path.exists(), "unreadable config must be moved away");
+        assert!(bad.exists(), "unreadable config must be preserved as .bad");
+        assert_eq!(fs::read_to_string(&bad).unwrap(), invalid);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_config_with_existing_bad_file_still_returns_defaults() {
+        // R-05: when `.json.bad` already exists, the rename may fail (or replace
+        // it, depending on platform). The loader must still return defaults
+        // without panicking and without losing the unreadable config content.
+        let dir = std::env::temp_dir().join(format!("zoneflow_bad_cfg_b_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ScreenLayout.json");
+        let bad = path.with_extension("json.bad");
+        let invalid = "{ still not json";
+        fs::write(&path, invalid).unwrap();
+        fs::write(&bad, "previous bad content").unwrap();
+
+        let cfg = load_config_from(&path);
+
+        // No panic, defaults returned.
+        assert_eq!(cfg.schema_version, SCHEMA_VERSION);
+        assert_eq!(cfg.gap, 8);
+        assert_eq!(cfg.active_profile, "Website");
+        // The unreadable config must survive somewhere: at its original path
+        // (rename failed) or in the `.bad` file (rename replaced it).
+        let in_original = fs::read_to_string(&path).unwrap_or_default();
+        let in_bad = fs::read_to_string(&bad).unwrap_or_default();
+        assert!(
+            in_original == invalid || in_bad == invalid,
+            "unreadable config content must not be lost"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 

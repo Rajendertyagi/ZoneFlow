@@ -1,49 +1,44 @@
 # Integration tests
 
-## Why the main tests live inline in `src/`
+## Library target
 
-`screenlayout` is a **binary crate**: it has a `src/main.rs` but **no
-`src/lib.rs`**. Cargo integration tests are compiled as separate crates, so a
-file in `tests/` cannot do:
+`screenlayout` now exposes a **library target** (`src/lib.rs`) that re-exports
+the implementation modules (`config`, `engine_core`, `engine`, `api`, `apps`,
+`autostart`, `browser`, `clipboard`, `native_loop`, `system`, `web`). The binary
+(`src/main.rs`) consumes that library, so integration tests in `tests/` can do:
 
 ```rust
-use screenlayout::config::AppConfig; // ERROR: no library target to import from
+use screenlayout::config::AppConfig; // real type, not a mirror
 ```
 
-For that reason the project's unit tests are written as `#[cfg(test)]` modules
-inside the source modules themselves, where they can reach private items:
-
-- `src/config.rs` — config defaults, v0 → v1 migration, serde round-trips,
-  settings/zone defaults, invariant repair.
-- `src/engine_core.rs` — pure layout/geometry core.
-- `src/engine.rs` — engine helpers.
-- `src/system.rs` — system-level helpers.
-
-These are the authoritative tests for the crate's internals. Run them with
-`cargo test`.
+This replaced the old arrangement where the crate was binary-only and
+`tests/*.rs` could not import its modules. The refactor is behaviour-preserving:
+`main.rs` still drives the same threads and code paths, just linked through the
+library target.
 
 ## What lives in this directory
 
-`config_file_roundtrip.rs` tests the **on-disk JSON contract** independently of
-the binary's internals. It does not import the crate; instead it declares a
-small local mirror of the `AppConfig` JSON schema (using `serde` / `serde_json`,
-which are regular dependencies and therefore available to integration tests)
-and verifies two things:
+`config_file_roundtrip.rs` tests the **on-disk JSON contract** (§10.1) against
+the real `screenlayout::config` types. It verifies three things:
 
 1. A **v0-style config** (missing `schema_version`, `settings`, and newer
-   fields) deserializes with the documented defaults — this is the contract
-   that makes migration possible.
-2. A fully populated **v1 config** survives a serialize → deserialize round
-   trip, including the newer fields (`notes`, `auto_launch_on_startup`,
-   resolution presets, …).
+   fields) deserializes with the documented defaults — the contract that makes
+   migration possible.
+2. An old **zone** without `notes` deserializes with `notes = ""` and the
+   documented geometry defaults.
+3. A fully populated **v1 config** survives a serialize → deserialize round
+   trip. Every persisted field is asserted explicitly (field by field, since
+   `AppConfig` has no `PartialEq` derive), including the newer fields (`path`,
+   `launch_mode`, `title_match`, `url`, `tab_behavior`, `macro_enabled`,
+   `trigger_title`, `notes`, all `Settings` tunables, resolution presets, …).
 
-This catches accidental changes to field names or default values in the
-serialized format even though the test crate cannot link against the binary.
+Because the test uses the real types and names every field, dropping a field
+from the schema or changing its serde name/default fails this test (compile
+error or assertion failure) instead of being silently ignored by serde's
+"unknown fields are skipped" behaviour.
 
-## Deferred: expose a library target
+## Inline unit tests
 
-A future improvement is to add a `src/lib.rs` that re-exports the modules
-(`pub mod config; pub mod engine_core; …`) and have `main.rs` consume that
-library. That would let `tests/` import the real types directly and would make
-the local mirror in `config_file_roundtrip.rs` unnecessary. This is **deferred**
-because it is a structural change outside the scope of the current step.
+The authoritative tests for crate internals remain `#[cfg(test)]` modules inside
+the source files (e.g. `src/config.rs`, `src/engine_core.rs`, `src/api/dto.rs`).
+Run everything with `cargo test`.

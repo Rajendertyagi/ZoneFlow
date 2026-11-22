@@ -1,16 +1,10 @@
 #![windows_subsystem = "windows"]
 
-mod api;
-mod apps;
-mod autostart;
-mod browser;
-mod clipboard;
-mod config;
-mod engine;
-mod engine_core;
-mod native_loop;
-mod system;
-mod web;
+// The implementation lives in the `screenlayout` library crate (src/lib.rs).
+// Importing the modules from there keeps this binary as a thin entry point and
+// lets integration tests link against the real types. Runtime behaviour is
+// unchanged: the same modules, threads and code paths are used as before.
+use screenlayout::{api, browser, config, native_loop, system};
 
 use api::AppState;
 use native_loop::{

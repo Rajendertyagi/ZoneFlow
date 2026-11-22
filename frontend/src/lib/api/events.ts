@@ -16,6 +16,10 @@ import {
 } from '$lib/state/app.svelte';
 import { api } from './client';
 import { shouldRefreshOnEvent } from '$lib/state/sse-policy';
+import {
+  INITIAL_RECONNECT_DELAY_MS,
+  nextReconnectDelay,
+} from './sse-backoff';
 
 export interface SseEvent {
   type:
@@ -31,8 +35,7 @@ export interface SseEvent {
 let source: EventSource | null = null;
 let stopped = false;
 let reconnectTimer: number | null = null;
-let reconnectDelayMs = 1000;
-const MAX_RECONNECT_DELAY_MS = 15000;
+let reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
 
 /** Optional UI handler for advisory events (apply-result, log, hotkey-action). */
 type SseEventHandler = (event: SseEvent) => void;
@@ -78,7 +81,7 @@ function onMessage(ev: MessageEvent<string>): void {
 }
 
 function onOpen(): void {
-  reconnectDelayMs = 1000;
+  reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
   noteSseOpen();
   // The backend only broadcasts on mutation and sends no replay on (re)connect,
   // so any change that happened while the stream was down would otherwise be
@@ -101,7 +104,7 @@ function scheduleReconnect(): void {
     reconnectTimer = null;
     connect();
   }, reconnectDelayMs);
-  reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+  reconnectDelayMs = nextReconnectDelay(reconnectDelayMs);
 }
 
 function connect(): void {

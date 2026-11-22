@@ -1,198 +1,134 @@
-//! Integration-style tests for the on-disk config JSON contract (§10.1).
+//! Integration tests for the on-disk config JSON contract (§10.1).
 //!
-//! `screenlayout` is a binary crate with no `src/lib.rs`, so a `tests/*.rs`
-//! file cannot `use screenlayout::config::...`. Instead these tests validate
-//! the serialized JSON *contract* directly with `serde` / `serde_json`, using
-//! a small local mirror of the schema defined in `src/config.rs`. See
+//! These tests import the REAL `screenlayout::config` types through the library
+//! target (`src/lib.rs`). Unlike the old hand-written mirror, every persisted
+//! field is asserted explicitly, so dropping a field from the real schema (or
+//! changing its serde name/default) fails here instead of being silently
+//! ignored by serde's "unknown fields are skipped" behaviour. See
 //! `tests/README.md` for the rationale.
 
-use serde::{Deserialize, Serialize};
+use screenlayout::config::{
+    AppConfig, CloseAction, LaunchMode, Profile, ResolutionPreset, Settings, TabBehavior, Zone,
+    SCHEMA_VERSION,
+};
 use std::collections::BTreeMap;
 
-/// Current on-disk schema version (mirrors `config::SCHEMA_VERSION`).
-const SCHEMA_VERSION: u32 = 1;
+/* ---- Field-by-field equality helpers (AppConfig has no PartialEq derive) ---- */
 
-/// Field-level default for `schema_version`: a missing value means "v0", which
-/// is how `migrate()` detects configs that need upgrading (mirrors `zero()`).
-fn zero() -> u32 {
-    0
+fn assert_resolution_eq(a: &ResolutionPreset, b: &ResolutionPreset) {
+    assert_eq!(a.label, b.label, "ResolutionPreset.label");
+    assert_eq!(a.width, b.width, "ResolutionPreset.width");
+    assert_eq!(a.work_height, b.work_height, "ResolutionPreset.work_height");
 }
 
-fn default_snap_points() -> Vec<f32> {
-    vec![25.0, 50.0, 75.0]
+fn assert_zone_eq(a: &Zone, b: &Zone) {
+    assert_eq!(a.id, b.id, "Zone.id");
+    assert_eq!(a.label, b.label, "Zone.label");
+    assert_eq!(a.exe, b.exe, "Zone.exe");
+    assert_eq!(a.path, b.path, "Zone.path");
+    assert_eq!(a.launch_mode, b.launch_mode, "Zone.launch_mode");
+    assert_eq!(a.title_match, b.title_match, "Zone.title_match");
+    assert_eq!(a.url, b.url, "Zone.url");
+    assert_eq!(a.tab_behavior, b.tab_behavior, "Zone.tab_behavior");
+    assert_eq!(a.macro_enabled, b.macro_enabled, "Zone.macro_enabled");
+    assert_eq!(a.trigger_title, b.trigger_title, "Zone.trigger_title");
+    assert_eq!(a.macro_text, b.macro_text, "Zone.macro_text");
+    assert_eq!(a.notes, b.notes, "Zone.notes");
+    assert_eq!(a.key_delay, b.key_delay, "Zone.key_delay");
+    assert_eq!(a.x, b.x, "Zone.x");
+    assert_eq!(a.y, b.y, "Zone.y");
+    assert_eq!(a.w, b.w, "Zone.w");
+    assert_eq!(a.h, b.h, "Zone.h");
 }
 
-fn default_app_list_cap() -> usize {
-    200
-}
-
-fn default_running_apps_ttl_secs() -> u64 {
-    2
-}
-
-fn default_taskbar_h() -> f32 {
-    16.0
-}
-
-fn default_stage_lower_h() -> f32 {
-    200.0
-}
-
-fn default_key_delay() -> u32 {
-    80
-}
-
-fn default_full_pct() -> f32 {
-    100.0
-}
-
-fn default_resolutions() -> Vec<ResolutionPreset> {
-    vec![
-        ResolutionPreset {
-            label: "3840 x 2160 - 4K".into(),
-            width: 3840,
-            work_height: 2112,
-        },
-        ResolutionPreset {
-            label: "2560 x 1440 - QHD".into(),
-            width: 2560,
-            work_height: 1392,
-        },
-        ResolutionPreset {
-            label: "1920 x 1080 - FHD".into(),
-            width: 1920,
-            work_height: 1032,
-        },
-    ]
-}
-
-/* ---- Local mirror of the config JSON schema ---- */
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-enum CloseAction {
-    #[default]
-    Ask,
-    Minimize,
-    Exit,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResolutionPreset {
-    pub label: String,
-    pub width: u32,
-    pub work_height: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-struct Zone {
-    id: i32,
-    label: String,
-    exe: String,
-    /// Newer field: absent in old configs, must default to empty.
-    notes: String,
-    macro_text: String,
-    #[serde(default = "default_key_delay")]
-    key_delay: u32,
-    x: f32,
-    y: f32,
-    #[serde(default = "default_full_pct")]
-    w: f32,
-    #[serde(default = "default_full_pct")]
-    h: f32,
-}
-
-impl Default for Zone {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            label: String::new(),
-            exe: String::new(),
-            notes: String::new(),
-            macro_text: String::new(),
-            key_delay: 80,
-            x: 0.0,
-            y: 0.0,
-            w: 100.0,
-            h: 100.0,
-        }
+fn assert_profile_eq(a: &Profile, b: &Profile) {
+    assert_eq!(a.name, b.name, "Profile.name");
+    assert_eq!(a.hotkey, b.hotkey, "Profile.hotkey");
+    assert_eq!(a.zones.len(), b.zones.len(), "Profile.zones length");
+    for (za, zb) in a.zones.iter().zip(b.zones.iter()) {
+        assert_zone_eq(za, zb);
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
-struct Profile {
-    name: String,
-    hotkey: String,
-    zones: Vec<Zone>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-struct Settings {
-    #[serde(default = "default_snap_points")]
-    snap_points: Vec<f32>,
-    grid_cols: u32,
-    grid_rows: u32,
-    /// Newer tunables: absent in old configs, must fall back to these values.
-    #[serde(default = "default_app_list_cap")]
-    app_list_cap: usize,
-    #[serde(default = "default_running_apps_ttl_secs")]
-    running_apps_ttl_secs: u64,
-    #[serde(default = "default_taskbar_h")]
-    taskbar_h: f32,
-    #[serde(default = "default_stage_lower_h")]
-    stage_lower_h: f32,
-    auto_launch_on_startup: bool,
-    #[serde(default = "default_resolutions")]
-    resolutions: Vec<ResolutionPreset>,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            snap_points: default_snap_points(),
-            grid_cols: 12,
-            grid_rows: 8,
-            app_list_cap: default_app_list_cap(),
-            running_apps_ttl_secs: default_running_apps_ttl_secs(),
-            taskbar_h: default_taskbar_h(),
-            stage_lower_h: default_stage_lower_h(),
-            auto_launch_on_startup: false,
-            resolutions: default_resolutions(),
-        }
+fn assert_settings_eq(a: &Settings, b: &Settings) {
+    assert_eq!(a.snap_points, b.snap_points, "Settings.snap_points");
+    assert_eq!(a.grid_cols, b.grid_cols, "Settings.grid_cols");
+    assert_eq!(a.grid_rows, b.grid_rows, "Settings.grid_rows");
+    assert_eq!(a.min_zone_pct, b.min_zone_pct, "Settings.min_zone_pct");
+    assert_eq!(
+        a.resize_step_pct, b.resize_step_pct,
+        "Settings.resize_step_pct"
+    );
+    assert_eq!(
+        a.boundary_tolerance_pct, b.boundary_tolerance_pct,
+        "Settings.boundary_tolerance_pct"
+    );
+    assert_eq!(a.undo_depth, b.undo_depth, "Settings.undo_depth");
+    assert_eq!(
+        a.display_debounce_ms, b.display_debounce_ms,
+        "Settings.display_debounce_ms"
+    );
+    assert_eq!(
+        a.overlay_inactive_alpha, b.overlay_inactive_alpha,
+        "Settings.overlay_inactive_alpha"
+    );
+    assert_eq!(
+        a.overlay_active_alpha, b.overlay_active_alpha,
+        "Settings.overlay_active_alpha"
+    );
+    assert_eq!(
+        a.dwm_snap_retries, b.dwm_snap_retries,
+        "Settings.dwm_snap_retries"
+    );
+    assert_eq!(a.min_window_px, b.min_window_px, "Settings.min_window_px");
+    assert_eq!(a.zone_tints, b.zone_tints, "Settings.zone_tints");
+    assert_eq!(
+        a.auto_launch_on_startup, b.auto_launch_on_startup,
+        "Settings.auto_launch_on_startup"
+    );
+    assert_eq!(
+        a.resolutions.len(),
+        b.resolutions.len(),
+        "Settings.resolutions length"
+    );
+    for (ra, rb) in a.resolutions.iter().zip(b.resolutions.iter()) {
+        assert_resolution_eq(ra, rb);
     }
+    assert_eq!(a.app_list_cap, b.app_list_cap, "Settings.app_list_cap");
+    assert_eq!(
+        a.running_apps_ttl_secs, b.running_apps_ttl_secs,
+        "Settings.running_apps_ttl_secs"
+    );
+    assert_eq!(a.taskbar_h, b.taskbar_h, "Settings.taskbar_h");
+    assert_eq!(a.stage_lower_h, b.stage_lower_h, "Settings.stage_lower_h");
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-struct AppConfig {
-    /// Missing in v0 configs — defaults to 0 so migration can detect them.
-    #[serde(default = "zero")]
-    schema_version: u32,
-    profiles: BTreeMap<String, Profile>,
-    active_profile: String,
-    gap: i32,
-    close_action: CloseAction,
-    auto_start: bool,
-    hotkeys: BTreeMap<String, String>,
-    settings: Settings,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            profiles: BTreeMap::new(),
-            active_profile: String::new(),
-            gap: 8,
-            close_action: CloseAction::default(),
-            auto_start: false,
-            hotkeys: BTreeMap::new(),
-            settings: Settings::default(),
-        }
+fn assert_config_eq(a: &AppConfig, b: &AppConfig) {
+    assert_eq!(
+        a.schema_version, b.schema_version,
+        "AppConfig.schema_version"
+    );
+    assert_eq!(
+        a.profiles.len(),
+        b.profiles.len(),
+        "AppConfig.profiles length"
+    );
+    for (key, pa) in &a.profiles {
+        let pb = b
+            .profiles
+            .get(key)
+            .unwrap_or_else(|| panic!("AppConfig.profiles missing key {key:?}"));
+        assert_profile_eq(pa, pb);
     }
+    assert_eq!(
+        a.active_profile, b.active_profile,
+        "AppConfig.active_profile"
+    );
+    assert_eq!(a.gap, b.gap, "AppConfig.gap");
+    assert_eq!(a.close_action, b.close_action, "AppConfig.close_action");
+    assert_eq!(a.auto_start, b.auto_start, "AppConfig.auto_start");
+    assert_eq!(a.hotkeys, b.hotkeys, "AppConfig.hotkeys");
+    assert_settings_eq(&a.settings, &b.settings);
 }
 
 /* ---- Tests ---- */
@@ -200,7 +136,8 @@ impl Default for AppConfig {
 #[test]
 fn v0_config_missing_new_fields_uses_defaults() {
     // A minimal v0-style config: no `schema_version`, no `settings`, and no
-    // newer tunables. Built with `json!` to exercise the raw JSON contract.
+    // newer tunables. Built with `json!` to exercise the raw JSON contract
+    // against the real deserializer.
     let raw = serde_json::json!({
         "profiles": {},
         "active_profile": "",
@@ -210,7 +147,7 @@ fn v0_config_missing_new_fields_uses_defaults() {
     let cfg: AppConfig = serde_json::from_value(raw).expect("v0 config must deserialize");
 
     // Missing schema_version is detected as v0 (field-level default = 0),
-    // while the struct-level default would have produced 1.
+    // while the struct-level default would have produced SCHEMA_VERSION.
     assert_eq!(cfg.schema_version, 0);
     assert_eq!(cfg.gap, 5);
 
@@ -249,52 +186,100 @@ fn v0_zone_missing_notes_defaults_to_empty() {
 }
 
 #[test]
-fn v1_config_round_trips() {
-    // Build a fully populated v1 config, including the newer fields.
-    let mut cfg = AppConfig {
-        schema_version: SCHEMA_VERSION,
-        gap: 12,
-        close_action: CloseAction::Minimize,
-        auto_start: true,
-        ..AppConfig::default()
+fn v1_config_round_trips_every_persisted_field() {
+    // Build a fully populated v1 config with NON-DEFAULT values in every
+    // persisted field. If any field were dropped from the real schema, either
+    // this test would not compile or the field-by-field assertion would fail.
+    // `AppConfig` has a private `fallback` field, so it cannot be built with a
+    // struct literal from this external crate. Start from the public default
+    // and overwrite every persisted field with a non-default value.
+    let mut cfg = AppConfig::default();
+    cfg.schema_version = SCHEMA_VERSION;
+    cfg.profiles = BTreeMap::new();
+    cfg.active_profile = "Coding".into();
+    cfg.gap = 12;
+    cfg.close_action = CloseAction::Minimize;
+    cfg.auto_start = true;
+    cfg.hotkeys = BTreeMap::from([
+        ("reload".to_string(), "Ctrl+Alt+R".to_string()),
+        ("profile_1".to_string(), "Alt+1".to_string()),
+    ]);
+    cfg.settings = Settings {
+        snap_points: vec![10.0, 33.3, 90.0],
+        grid_cols: 9,
+        grid_rows: 6,
+        min_zone_pct: 12.5,
+        resize_step_pct: 2.5,
+        boundary_tolerance_pct: 2.0,
+        undo_depth: 42,
+        display_debounce_ms: 150,
+        overlay_inactive_alpha: 180,
+        overlay_active_alpha: 240,
+        dwm_snap_retries: 3,
+        min_window_px: 120,
+        zone_tints: vec!["#123456".into(), "#ABCDEF".into()],
+        auto_launch_on_startup: true,
+        resolutions: vec![ResolutionPreset {
+            label: "Custom".into(),
+            width: 1234,
+            work_height: 567,
+        }],
+        app_list_cap: 250,
+        running_apps_ttl_secs: 5,
+        taskbar_h: 32.0,
+        stage_lower_h: 180.0,
     };
 
-    let mut zone = Zone {
+    let zone = Zone {
         id: 7,
         label: "Terminal".into(),
         exe: "wt.exe".into(),
+        path: r"C:\Windows\System32\wt.exe".into(),
+        launch_mode: LaunchMode::Attach,
+        title_match: "Windows Terminal".into(),
+        url: "https://example.com".into(),
+        tab_behavior: TabBehavior::ReuseBlank,
+        macro_enabled: true,
+        trigger_title: "Main".into(),
+        macro_text: "^t".into(),
         notes: "merged app: old [old.exe]".into(),
-        x: 0.0,
-        y: 0.0,
+        key_delay: 120,
+        x: 1.0,
+        y: 2.0,
         w: 50.0,
-        h: 100.0,
-        ..Zone::default()
+        h: 75.0,
     };
-    zone.key_delay = 120;
 
-    let profile = Profile {
-        name: "Coding".into(),
-        hotkey: "Ctrl+Shift+2".into(),
-        zones: vec![zone],
-    };
-    cfg.profiles.insert("Coding".into(), profile);
-    cfg.active_profile = "Coding".into();
-    cfg.hotkeys.insert("reload".into(), "Ctrl+Alt+R".into());
-    cfg.settings.auto_launch_on_startup = true;
-    cfg.settings.app_list_cap = 250;
+    cfg.profiles.insert(
+        "Coding".into(),
+        Profile {
+            name: "Coding".into(),
+            hotkey: "Ctrl+Shift+2".into(),
+            zones: vec![zone],
+        },
+    );
 
-    // Serialize → deserialize must reproduce the exact same value.
+    // Serialize → deserialize must reproduce the exact same value, field by field.
     let json = serde_json::to_string_pretty(&cfg).expect("v1 config must serialize");
     let back: AppConfig = serde_json::from_str(&json).expect("v1 config must deserialize");
-    assert_eq!(back, cfg);
+    assert_config_eq(&back, &cfg);
 
     // The serialized document must carry the version and the newer fields —
     // i.e. the on-disk contract is stable and self-describing.
     let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(doc["schema_version"], SCHEMA_VERSION);
     assert_eq!(doc["settings"]["auto_launch_on_startup"], true);
+    assert_eq!(doc["settings"]["app_list_cap"], 250);
     assert_eq!(
         doc["profiles"]["Coding"]["zones"][0]["notes"],
         "merged app: old [old.exe]"
+    );
+    assert_eq!(
+        doc["profiles"]["Coding"]["zones"][0]["launch_mode"],
+        "attach"
+    );
+    assert_eq!(
+        doc["profiles"]["Coding"]["zones"][0]["tab_behavior"],
+        "reuse_blank"
     );
 }
