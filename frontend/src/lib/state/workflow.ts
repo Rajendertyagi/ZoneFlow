@@ -61,6 +61,9 @@ export function hasNonDefaultRules(zone: ZoneDto): boolean {
     zone.trigger_title.trim() !== '' ||
     zone.macro_text.trim() !== '' ||
     zone.notes.trim() !== '' ||
+    // A launcher is an application-specific rule too: reassigning resets it.
+    zone.launcher_path.trim() !== '' ||
+    !zone.launcher_show_console ||
     // `Zone::default().key_delay` is 80 on the backend — treat that as the
     // default so a freshly-created zone never triggers a false D3 prompt.
     zone.key_delay !== 80

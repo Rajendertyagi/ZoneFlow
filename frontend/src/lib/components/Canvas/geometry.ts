@@ -392,6 +392,8 @@ export function blankZone(rect: RectPct, label = 'New zone'): ZoneDto {
     label,
     exe: '',
     path: '',
+    launcher_path: '',
+    launcher_show_console: true,
     launch_mode: 'launch',
     title_match: '',
     url: '',

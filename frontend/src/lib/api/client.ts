@@ -28,7 +28,13 @@ export interface ZoneDto {
   id: number;
   label: string;
   exe: string;
+  /** Full path used for strict window matching. With a launcher this is only
+   * an identification override — it is never launched instead of the script. */
   path: string;
+  /** Optional .bat/.cmd script executed instead of the executable. */
+  launcher_path: string;
+  /** Whether the script's console is visible (default true). */
+  launcher_show_console: boolean;
   launch_mode: LaunchMode;
   title_match: string;
   url: string;
@@ -175,7 +181,12 @@ export interface MergeDto {
 export interface AssignDto {
   label: string;
   exe: string;
+  /** Optional window-identification override (never launched with a launcher). */
   path: string;
+  /** Optional .bat/.cmd script executed instead of the executable. */
+  launcher_path: string;
+  /** Whether the script's console is visible (default true). */
+  launcher_show_console: boolean;
 }
 
 export interface PreviewDto {
@@ -194,9 +205,11 @@ export type ZoneOutcomeStatus =
   | 'unassigned'
   | 'unresolved'
   | 'ambiguous_path'
+  | 'ambiguous_window'
   | 'not_running'
   | 'no_eligible_window'
   | 'launch_failed'
+  | 'launcher_failed'
   | 'error';
 
 export interface ZoneOutcomeDto {
@@ -383,6 +396,8 @@ export const api = {
   listApps: (source: 'installed' | 'running' = 'installed') =>
     apiFetch<AppEntryDto[]>(`/api/apps?source=${source}`),
   browseApps: () => apiFetch<AppEntryDto[]>('/api/apps/browse', { method: 'POST' }),
+  /** Native picker restricted to *.bat;*.cmd — returns the full script path. */
+  browseScripts: () => apiFetch<AppEntryDto[]>('/api/apps/browse-script', { method: 'POST' }),
 
   save: () => apiFetch<OkResult>('/api/save', { method: 'POST' }),
   apply: () => apiFetch<ApplyResultDto | InactiveResult>('/api/apply', { method: 'POST' }),

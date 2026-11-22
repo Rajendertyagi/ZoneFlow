@@ -374,12 +374,214 @@ pub fn keys_to_events(keys: &str) -> Vec<KeyEvent> {
 
 /// Choose the executable to launch: the stored full path when present,
 /// otherwise the exe name (resolved via PATH). AHK parity (§2c).
+///
+/// Only called for zones WITHOUT a launcher script. When `launcher_path` is set,
+/// the script is always executed and this function is never consulted — the EXE
+/// is used solely for strict window matching. See `engine::execute_launcher_zone`.
 pub fn launch_target(zone: &Zone) -> &str {
     if zone.path.trim().is_empty() {
         &zone.exe
     } else {
         &zone.path
     }
+}
+
+/// What a zone actually launches. The launcher script ALWAYS wins: there is no
+/// code path that substitutes `Zone.exe`/`Zone.path` when `launcher_path` is
+/// set. Kept pure so the core guarantee is pinned down by a test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchSpec<'a> {
+    /// Execute this `.bat`/`.cmd` via `cmd.exe /c` in a Job Object.
+    Script(&'a str),
+    /// Legacy behavior: launch the configured EXE (path or exe name).
+    Exe(&'a str),
+}
+
+/// Choose the launch target with the launcher-first precedence.
+pub fn launch_spec(zone: &Zone) -> LaunchSpec<'_> {
+    let launcher = zone.launcher_path.trim();
+    if !launcher.is_empty() {
+        LaunchSpec::Script(launcher)
+    } else {
+        LaunchSpec::Exe(launch_target(zone))
+    }
+}
+
+/* ===================== BAT/CMD launcher (pure helpers) ===================== */
+
+/// CMD metacharacters that must never appear in a launcher path. We reject them
+/// instead of trying to escape them: quoting a path containing these would let
+/// the script name alter the command line's meaning.
+pub const CMD_METACHARACTERS: [char; 7] = ['%', '!', '&', '|', '^', '<', '>'];
+
+/// Why a launcher script path was rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptPathError {
+    Empty,
+    BadExtension,
+    Metacharacter(char),
+    /// A double quote (breaks `cmd.exe /c "<script>"` quoting) or a control
+    /// character (can inject/terminate the command line).
+    UnsafeCharacter(char),
+}
+
+impl ScriptPathError {
+    /// Human-readable reason, safe to show in an outcome message.
+    pub fn message(self) -> String {
+        match self {
+            Self::Empty => "path is empty".to_string(),
+            Self::BadExtension => "path must end in .bat or .cmd".to_string(),
+            Self::Metacharacter(c) => format!("path contains CMD metacharacter '{c}'"),
+            // Never embed a raw control character in a UI message.
+            Self::UnsafeCharacter('"') => "path contains a double quote".to_string(),
+            Self::UnsafeCharacter(c) => {
+                format!("path contains control character U+{:04X}", c as u32)
+            }
+        }
+    }
+}
+
+/// Whether a character is unsafe in a quoted `cmd.exe /c "<script>"` argument.
+/// The original CMD metacharacter list is kept intact; `"` would close the
+/// quote early and control characters can terminate or inject a command line.
+fn is_unsafe_path_char(c: char) -> bool {
+    CMD_METACHARACTERS.contains(&c) || c == '"' || c.is_control()
+}
+
+/// Validate a launcher script path without touching the filesystem:
+/// non-empty, `.bat`/`.cmd` extension, and no CMD metacharacters, quotes or
+/// control characters.
+pub fn validate_script_path(path: &str) -> Result<(), ScriptPathError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(ScriptPathError::Empty);
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.ends_with(".bat") && !lower.ends_with(".cmd") {
+        return Err(ScriptPathError::BadExtension);
+    }
+    if let Some(c) = trimmed.chars().find(|&c| is_unsafe_path_char(c)) {
+        if CMD_METACHARACTERS.contains(&c) {
+            return Err(ScriptPathError::Metacharacter(c));
+        }
+        return Err(ScriptPathError::UnsafeCharacter(c));
+    }
+    Ok(())
+}
+
+/// Whether a resolved `ComSpec` value names the command interpreter. Only the
+/// basename is compared (case-insensitively); existence is checked by the Win32
+/// layer. An arbitrary env var value is never trusted blindly.
+pub fn is_cmd_executable(path: &str) -> bool {
+    let name = path.rsplit(['\\', '/']).next().unwrap_or("");
+    name.eq_ignore_ascii_case("cmd.exe")
+}
+
+/// Whether a window class is the console window class. Console windows are
+/// never eligible for arrangement — the visible cmd.exe console is a new
+/// top-level window and must be excluded from job attribution.
+pub fn is_console_class(class: &str) -> bool {
+    class.eq_ignore_ascii_case("ConsoleWindowClass")
+}
+
+/// Whether a process image path is `conhost.exe` (the console host). Its window
+/// is excluded alongside the console class and the spawned cmd.exe PID.
+pub fn is_conhost_path(path: &str) -> bool {
+    let name = path.rsplit(['\\', '/']).next().unwrap_or("");
+    name.eq_ignore_ascii_case("conhost.exe")
+}
+
+/// A top-level window candidate for launcher attribution. `hwnd` is the raw
+/// Win32 handle value kept as an opaque integer so this type stays testable
+/// without Win32. `pid`, `class`, `process_path` and `title` are the facts used
+/// to decide whether the window belongs to the script's process tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CandidateWindow {
+    pub hwnd: isize,
+    pub pid: u32,
+    pub class: String,
+    pub process_path: String,
+    pub title: String,
+}
+
+/// Filter enumerated windows down to the authoritative job process tree.
+///
+/// `job_pids` is the set returned by `QueryInformationJobObject(
+/// JobObjectBasicProcessIdList)` — the complete process tree, not a name/title/
+/// parent-PID guess. The spawned `cmd_pid`, `conhost.exe` and console-class
+/// windows are excluded because they are the launcher's own UI, not the app.
+///
+/// This is pure so the attribution rule can be tested with an injected
+/// PID→windows map without spawning a real process.
+pub fn filter_job_windows(
+    windows: &[CandidateWindow],
+    job_pids: &[u32],
+    cmd_pid: u32,
+) -> Vec<CandidateWindow> {
+    windows
+        .iter()
+        .filter(|w| {
+            job_pids.contains(&w.pid)
+                && w.pid != cmd_pid
+                && !is_console_class(&w.class)
+                && !is_conhost_path(&w.process_path)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Outcome of job-window attribution. Kept pure so the "one / many / none"
+/// decision is testable without Win32.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttributionDecision {
+    /// Exactly one app window — arrange it.
+    Single(CandidateWindow),
+    /// More than one app window — report details, never guess.
+    Ambiguous(Vec<CandidateWindow>),
+    /// No app window — fall back to an explicit EXE override or report failure.
+    None,
+}
+
+/// Decide from the filtered window set. Deduplicates by HWND so a window seen
+/// twice in one enumeration cannot create a false ambiguity.
+pub fn decide_attribution(windows: Vec<CandidateWindow>) -> AttributionDecision {
+    let mut unique: Vec<CandidateWindow> = Vec::new();
+    for w in windows {
+        if !unique.iter().any(|u| u.hwnd == w.hwnd) {
+            unique.push(w);
+        }
+    }
+    match unique.len() {
+        0 => AttributionDecision::None,
+        1 => AttributionDecision::Single(unique.into_iter().next().expect("len == 1")),
+        _ => AttributionDecision::Ambiguous(unique),
+    }
+}
+
+/// Human-readable details for an ambiguous attribution, included in the
+/// outcome message so the user can see which windows were found.
+pub fn describe_windows(windows: &[CandidateWindow]) -> String {
+    windows
+        .iter()
+        .map(|w| {
+            format!(
+                "{} (pid {}, class {}, path {})",
+                if w.title.is_empty() {
+                    "<untitled>"
+                } else {
+                    &w.title
+                },
+                w.pid,
+                w.class,
+                if w.process_path.is_empty() {
+                    "<unknown>"
+                } else {
+                    &w.process_path
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Return groups of zone ids in `profile` with ambiguous duplicate assignments.
@@ -776,6 +978,196 @@ mod tests {
         assert_eq!(launch_target(&z), r"C:\Program Files\Vendor\app.exe");
         z.path = "   ".into(); // whitespace-only treated as empty
         assert_eq!(launch_target(&z), "app.exe");
+    }
+
+    // --- BAT/CMD launcher pure helpers ---
+
+    #[test]
+    fn launch_spec_always_prefers_the_script_over_the_exe() {
+        let mut z = Zone::new(1, "App", "app.exe", 0.0, 0.0, 50.0, 100.0);
+        z.path = r"C:\App\app.exe".into();
+        // No launcher: legacy EXE behavior (full path wins).
+        assert_eq!(launch_spec(&z), LaunchSpec::Exe(r"C:\App\app.exe"));
+
+        // With a launcher: the script is the launch target even though both
+        // exe and path are set. The EXE can never be substituted for it.
+        z.launcher_path = r"C:\Scripts\run.bat".into();
+        assert_eq!(launch_spec(&z), LaunchSpec::Script(r"C:\Scripts\run.bat"));
+
+        // Whitespace-only launcher is treated as absent (legacy behavior).
+        z.launcher_path = "   ".into();
+        assert_eq!(launch_spec(&z), LaunchSpec::Exe(r"C:\App\app.exe"));
+    }
+
+    fn candidate(hwnd: isize, pid: u32, class: &str, path: &str) -> CandidateWindow {
+        CandidateWindow {
+            hwnd,
+            pid,
+            class: class.into(),
+            process_path: path.into(),
+            title: format!("window-{hwnd}"),
+        }
+    }
+
+    #[test]
+    fn validate_script_path_accepts_bat_and_cmd_case_insensitively() {
+        assert!(validate_script_path(r"C:\Scripts\run.bat").is_ok());
+        assert!(validate_script_path(r"C:\Scripts\RUN.CMD").is_ok());
+        assert!(validate_script_path("  C:\\Scripts\\run.cmd  ").is_ok());
+    }
+
+    #[test]
+    fn validate_script_path_rejects_empty_bad_extension_and_metacharacters() {
+        assert_eq!(validate_script_path("   "), Err(ScriptPathError::Empty));
+        assert_eq!(
+            validate_script_path(r"C:\Scripts\run.exe"),
+            Err(ScriptPathError::BadExtension)
+        );
+        for c in CMD_METACHARACTERS {
+            let path = format!(r"C:\Scripts\run{c}me.bat");
+            assert_eq!(
+                validate_script_path(&path),
+                Err(ScriptPathError::Metacharacter(c)),
+                "metacharacter {c} must be rejected"
+            );
+        }
+        // Every rejection carries a clear, non-empty message.
+        assert!(!ScriptPathError::BadExtension.message().is_empty());
+        assert!(ScriptPathError::Metacharacter('&').message().contains('&'));
+    }
+
+    #[test]
+    fn validate_script_path_rejects_quotes_and_control_characters() {
+        // A double quote would close the `cmd.exe /c "<script>"` quoting.
+        let quoted = "C:\\Scripts\\run\"me.bat";
+        assert_eq!(
+            validate_script_path(quoted),
+            Err(ScriptPathError::UnsafeCharacter('"'))
+        );
+        assert_eq!(
+            ScriptPathError::UnsafeCharacter('"').message(),
+            "path contains a double quote"
+        );
+
+        // Control characters can terminate or inject a command line. Test a
+        // newline and a NUL; the message must not embed the raw control char.
+        for c in ['\n', '\r', '\0', '\u{1b}'] {
+            let path = format!("C:\\Scripts\\run{c}me.bat");
+            assert_eq!(
+                validate_script_path(&path),
+                Err(ScriptPathError::UnsafeCharacter(c)),
+                "control character U+{:04X} must be rejected",
+                c as u32
+            );
+            let message = ScriptPathError::UnsafeCharacter(c).message();
+            assert!(message.contains("control character"));
+            assert!(
+                !message.contains(c),
+                "message must not embed a raw control char"
+            );
+        }
+    }
+
+    #[test]
+    fn is_cmd_executable_checks_basename_only() {
+        assert!(is_cmd_executable(r"C:\Windows\System32\cmd.exe"));
+        assert!(is_cmd_executable(r"C:\Windows\System32\CMD.EXE"));
+        assert!(is_cmd_executable("/usr/bin/cmd.exe"));
+        assert!(!is_cmd_executable(r"C:\Windows\System32\cmd.exe.bak"));
+        assert!(!is_cmd_executable(r"C:\Tools\notcmd.exe"));
+        assert!(!is_cmd_executable(""));
+    }
+
+    #[test]
+    fn console_and_conhost_are_recognized_case_insensitively() {
+        assert!(is_console_class("ConsoleWindowClass"));
+        assert!(is_console_class("consolewindowclass"));
+        assert!(!is_console_class("Chrome_WidgetWin_1"));
+        assert!(is_conhost_path(r"C:\Windows\System32\conhost.exe"));
+        assert!(is_conhost_path(r"C:\Windows\System32\CONHOST.EXE"));
+        assert!(!is_conhost_path(r"C:\Windows\System32\cmd.exe"));
+    }
+
+    #[test]
+    fn filter_job_windows_keeps_only_job_pids_and_excludes_console() {
+        let cmd_pid = 100;
+        let windows = vec![
+            candidate(1, 100, "ConsoleWindowClass", r"C:\Windows\System32\cmd.exe"), // cmd console
+            candidate(
+                2,
+                101,
+                "ConsoleWindowClass",
+                r"C:\Windows\System32\conhost.exe",
+            ), // conhost
+            candidate(
+                3,
+                200,
+                "Chrome_WidgetWin_1",
+                r"C:\Program Files\App\app.exe",
+            ), // app
+            candidate(4, 999, "Chrome_WidgetWin_1", r"C:\Other\unrelated.exe"),      // unrelated
+            candidate(
+                5,
+                201,
+                "ConsoleWindowClass",
+                r"C:\Program Files\App\app.exe",
+            ), // app's console class
+        ];
+        let job_pids = [100, 101, 200, 201];
+        let filtered = filter_job_windows(&windows, &job_pids, cmd_pid);
+        // Only the real app window (hwnd 3) survives: cmd PID, conhost class,
+        // unrelated PID and console-class windows are all excluded.
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].hwnd, 3);
+        assert_eq!(filtered[0].pid, 200);
+    }
+
+    #[test]
+    fn filter_job_windows_excludes_conhost_by_path_even_without_console_class() {
+        let windows = vec![
+            candidate(1, 101, "SomeOtherClass", r"C:\Windows\System32\conhost.exe"),
+            candidate(2, 200, "AppClass", r"C:\App\app.exe"),
+        ];
+        let filtered = filter_job_windows(&windows, &[101, 200], 100);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].hwnd, 2);
+    }
+
+    #[test]
+    fn decide_attribution_handles_one_many_none_and_dedups() {
+        let a = candidate(1, 200, "AppClass", r"C:\App\a.exe");
+        let b = candidate(2, 201, "AppClass", r"C:\App\b.exe");
+        assert_eq!(decide_attribution(vec![]), AttributionDecision::None);
+        assert_eq!(
+            decide_attribution(vec![a.clone()]),
+            AttributionDecision::Single(a.clone())
+        );
+        // A duplicate HWND must not create a false ambiguity.
+        assert_eq!(
+            decide_attribution(vec![a.clone(), a.clone()]),
+            AttributionDecision::Single(a.clone())
+        );
+        assert_eq!(
+            decide_attribution(vec![a.clone(), b.clone()]),
+            AttributionDecision::Ambiguous(vec![a, b])
+        );
+    }
+
+    #[test]
+    fn describe_windows_includes_pid_class_path_and_title() {
+        let w = candidate(7, 200, "AppClass", r"C:\App\app.exe");
+        let text = describe_windows(&[w]);
+        assert!(text.contains("window-7"));
+        assert!(text.contains("pid 200"));
+        assert!(text.contains("AppClass"));
+        assert!(text.contains(r"C:\App\app.exe"));
+        let untitled = CandidateWindow {
+            title: String::new(),
+            ..candidate(8, 201, "C", "")
+        };
+        let text = describe_windows(&[untitled]);
+        assert!(text.contains("<untitled>"));
+        assert!(text.contains("<unknown>"));
     }
 
     #[test]

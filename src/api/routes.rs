@@ -318,6 +318,13 @@ async fn browse_apps(State(state): State<AppState>) -> Response {
     }
 }
 
+async fn browse_scripts(State(state): State<AppState>) -> Response {
+    match call(&state, CommandPayload::AppsBrowseScript).await {
+        Ok(v) => json_response(v),
+        Err(e) => e.into_response(),
+    }
+}
+
 // --------------------------------- actions ---------------------------------
 
 async fn save(State(state): State<AppState>) -> Response {
@@ -481,6 +488,7 @@ pub fn build(state: AppState) -> Router {
         .route("/redo", post(redo))
         .route("/apps", get(list_apps))
         .route("/apps/browse", post(browse_apps))
+        .route("/apps/browse-script", post(browse_scripts))
         .route("/save", post(save))
         .route("/apply", post(apply))
         .route("/launch-arrange", post(launch_arrange))

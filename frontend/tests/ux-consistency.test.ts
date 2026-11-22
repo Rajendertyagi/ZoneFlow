@@ -16,6 +16,8 @@ function zone(id: number, exe: string): ZoneDto {
     label: `Zone ${id}`,
     exe,
     path: '',
+    launcher_path: '',
+    launcher_show_console: true,
     launch_mode: 'launch',
     title_match: '',
     url: '',

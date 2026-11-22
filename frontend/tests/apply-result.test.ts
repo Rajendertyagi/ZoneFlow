@@ -126,9 +126,11 @@ describe('formatOutcome', () => {
     expect(formatOutcome('unassigned')).toBe('Unassigned');
     expect(formatOutcome('unresolved')).toBe('Unresolved');
     expect(formatOutcome('ambiguous_path')).toBe('Ambiguous path');
+    expect(formatOutcome('ambiguous_window')).toBe('Ambiguous window');
     expect(formatOutcome('not_running')).toBe('Not running');
     expect(formatOutcome('no_eligible_window')).toBe('No eligible window');
     expect(formatOutcome('launch_failed')).toBe('Launch failed');
+    expect(formatOutcome('launcher_failed')).toBe('Launcher failed');
     expect(formatOutcome('error')).toBe('Error');
   });
 

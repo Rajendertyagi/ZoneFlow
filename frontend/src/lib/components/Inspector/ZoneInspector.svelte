@@ -6,6 +6,11 @@
   import { store } from '$lib/state/app.svelte';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage, stripAppIdentity } from '$lib/state/workflow';
+  import {
+    canCommitLauncherPath,
+    scriptPathErrorMessage,
+    validateScriptPath,
+  } from '$lib/state/launcher';
   import Badge from '$lib/components/ui/badge.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Input from '$lib/components/ui/input.svelte';
@@ -24,6 +29,31 @@
   let busy = $state(false);
 
   const logs = $derived(store.snapshot?.logs ?? []);
+
+  // An invalid edit is held locally so the error can be shown WITHOUT writing
+  // it to the zone. The last valid persisted value stays authoritative. The
+  // draft is keyed to the zone id so switching zones never leaks stale text.
+  let launcherDraft = $state<{ zoneId: number; text: string } | null>(null);
+  const launcherValue = $derived(
+    launcherDraft !== null && launcherDraft.zoneId === zone?.id
+      ? launcherDraft.text
+      : (zone?.launcher_path ?? ''),
+  );
+  const launcherError = $derived(
+    launcherValue.trim() ? validateScriptPath(launcherValue) : null,
+  );
+
+  function onLauncherChange(event: Event): void {
+    if (!zone) return;
+    const next = textValue(event);
+    if (!canCommitLauncherPath(next)) {
+      // Keep the previous valid value; show the error from the local draft.
+      launcherDraft = { zoneId: zone.id, text: next };
+      return;
+    }
+    launcherDraft = null;
+    void commit({ launcher_path: next });
+  }
 
   async function commit(patch: Partial<ZoneDto>): Promise<void> {
     if (!zone || busy) return;
@@ -120,6 +150,36 @@
               <p class="text-[0.65rem] leading-relaxed text-zf-faint">
                 App identity is read-only here. Use <span class="text-zf-muted">Assign app…</span> to change it — reassigning resets this zone's rules after confirmation.
               </p>
+
+              <!-- Launcher script: when set, it runs instead of the EXE above. -->
+              <div class="flex flex-col gap-1.5 rounded-md border border-zf-border bg-zf-bg p-3">
+                <span class="text-xs font-medium text-zf-text">Launcher script (.bat/.cmd)</span>
+                <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+                  When set, this script is executed instead of the executable. The full path above
+                  becomes an optional window-identification override only — it is never launched.
+                </p>
+                <Input
+                  id="insp-launcher"
+                  value={launcherValue}
+                  placeholder="C:\Scripts\launch.bat (empty = launch the EXE)"
+                  class="font-mono text-xs"
+                  onchange={onLauncherChange}
+                />
+                {#if launcherError}
+                  <p class="text-[0.65rem] text-zf-error">
+                    Invalid launcher: {scriptPathErrorMessage(launcherError)}
+                  </p>
+                {/if}
+                <div class="flex items-center justify-between pt-1">
+                  <span class="text-xs text-zf-muted">Show console when running script</span>
+                  <Switch
+                    checked={zone.launcher_show_console}
+                    label="Show console when running script"
+                    onchange={(v) => void commit({ launcher_show_console: v })}
+                  />
+                </div>
+              </div>
+
               <div class="flex flex-col gap-1.5">
                 <Label for="insp-mode">Launch mode</Label>
                 <Select

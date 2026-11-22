@@ -35,6 +35,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_System_Threading",
+    # Job Objects give authoritative process-tree attribution for BAT/CMD
+    # launchers (QueryInformationJobObject / JobObjectBasicProcessIdList).
+    "Win32_System_JobObjects",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_SystemInformation",

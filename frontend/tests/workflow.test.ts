@@ -16,7 +16,18 @@ import {
   switchDecision,
   switchVerb,
 } from '../src/lib/state/workflow';
-import type { ZoneDto } from '../src/lib/api/client';
+import type { AssignDto, ZoneDto } from '../src/lib/api/client';
+
+function assign(overrides: Partial<AssignDto> = {}): AssignDto {
+  return {
+    label: 'App',
+    exe: 'app.exe',
+    path: '',
+    launcher_path: '',
+    launcher_show_console: true,
+    ...overrides,
+  };
+}
 
 function zone(overrides: Partial<ZoneDto> = {}): ZoneDto {
   return {
@@ -24,6 +35,8 @@ function zone(overrides: Partial<ZoneDto> = {}): ZoneDto {
     label: 'Zone',
     exe: 'chrome.exe',
     path: '',
+    launcher_path: '',
+    launcher_show_console: true,
     launch_mode: 'launch',
     title_match: '',
     url: '',
@@ -86,7 +99,7 @@ describe('D2 dirty switch', () => {
 describe('D3 replacement rules', () => {
   test('default rules need no confirmation', () => {
     expect(hasNonDefaultRules(zone())).toBe(false);
-    expect(needsReplaceConfirmation(zone(), { label: 'X', exe: 'code.exe', path: '' })).toBe(false);
+    expect(needsReplaceConfirmation(zone(), assign({ label: 'X', exe: 'code.exe' }))).toBe(false);
   });
 
   test('each non-default rule is detected', () => {
@@ -98,27 +111,29 @@ describe('D3 replacement rules', () => {
     expect(hasNonDefaultRules(zone({ trigger_title: 'Main' }))).toBe(true);
     expect(hasNonDefaultRules(zone({ macro_text: '^t' }))).toBe(true);
     expect(hasNonDefaultRules(zone({ notes: 'x' }))).toBe(true);
+    expect(hasNonDefaultRules(zone({ launcher_path: 'C:\\run.bat' }))).toBe(true);
+    expect(hasNonDefaultRules(zone({ launcher_show_console: false }))).toBe(true);
     expect(hasNonDefaultRules(zone({ key_delay: 10 }))).toBe(true);
   });
 
   test('same-exe re-assignment WITH custom rules prompts (rules are reset)', () => {
     const z = zone({ url: 'https://x' });
-    expect(needsReplaceConfirmation(z, { label: 'Chrome', exe: 'chrome.exe', path: 'C:\\new\\chrome.exe' })).toBe(true);
+    expect(needsReplaceConfirmation(z, assign({ label: 'Chrome', exe: 'chrome.exe', path: 'C:\\new\\chrome.exe' }))).toBe(true);
   });
 
   test('same-exe re-assignment with default rules does not prompt', () => {
     const z = zone();
-    expect(needsReplaceConfirmation(z, { label: 'Chrome', exe: 'chrome.exe', path: 'C:\\new\\chrome.exe' })).toBe(false);
+    expect(needsReplaceConfirmation(z, assign({ label: 'Chrome', exe: 'chrome.exe', path: 'C:\\new\\chrome.exe' }))).toBe(false);
   });
 
   test('different app with custom rules prompts', () => {
     const z = zone({ url: 'https://x' });
-    expect(needsReplaceConfirmation(z, { label: 'Code', exe: 'Code.exe', path: '' })).toBe(true);
+    expect(needsReplaceConfirmation(z, assign({ label: 'Code', exe: 'Code.exe' }))).toBe(true);
   });
 
   test('empty zone with custom rules still prompts (assignment resets those rules)', () => {
     const z = zone({ exe: '', url: 'https://x' });
-    expect(needsReplaceConfirmation(z, { label: 'Code', exe: 'Code.exe', path: '' })).toBe(true);
+    expect(needsReplaceConfirmation(z, assign({ label: 'Code', exe: 'Code.exe' }))).toBe(true);
   });
 });
 

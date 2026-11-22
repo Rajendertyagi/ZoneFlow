@@ -21,6 +21,7 @@ pub mod clipboard;
 pub mod config;
 pub mod engine;
 pub mod engine_core;
+pub mod launcher;
 pub mod native_loop;
 pub mod system;
 pub mod web;

@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{KEYEVENTF_KEYUP, KEYEVENTF_UNICODE};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetAncestor, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+    EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, SetWindowPos,
     ShowWindow, SystemParametersInfoW, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, SET_WINDOW_POS_FLAGS,
     SPI_GETWORKAREA, SW_MAXIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW,
@@ -22,8 +22,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 // Pure geometry lives in `engine_core`. Re-exporting keeps the exact `engine::*`
 // API that the API layer and native loop call.
 use crate::engine_core::{
-    border_offsets, compensate_rect, duplicate_app_assignments, keys_to_events, launch_target,
-    text_to_events, KeyEvent,
+    border_offsets, compensate_rect, decide_attribution, describe_windows,
+    duplicate_app_assignments, filter_job_windows, keys_to_events, launch_spec, launch_target,
+    text_to_events, validate_script_path, AttributionDecision, CandidateWindow, KeyEvent,
+    LaunchSpec,
 };
 pub use crate::engine_core::{compute_zones, zone_by_id, Rect};
 
@@ -319,6 +321,66 @@ pub fn find_window_by_paths_min(candidates: &[String], min_px: i32) -> Option<HW
     ctx.found
 }
 
+/// Context for `EnumWindows` when collecting every eligible top-level window
+/// for launcher attribution. No job filtering happens in the callback — the
+/// pure [`filter_job_windows`] applies the authoritative PID set afterwards so
+/// that rule is unit-testable with an injected PID→windows map.
+struct JobWindowCtx {
+    min_px: i32,
+    windows: Vec<CandidateWindow>,
+}
+
+// SAFETY: this callback is only handed to `EnumWindows` by
+// `enumerate_real_windows`, which passes the address of a live `JobWindowCtx`
+// as `lparam`. The pointer is dereferenced only while the synchronous callback
+// runs, before the caller drops the context. Returning `BOOL(1)` continues
+// enumeration.
+unsafe extern "system" fn enum_job_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let ctx = &mut *(lparam.0 as *mut JobWindowCtx);
+    if !is_real_window_min(hwnd, ctx.min_px) {
+        return BOOL(1);
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+
+    let mut class_buf = [0u16; 256];
+    let n = GetClassNameW(hwnd, &mut class_buf);
+    let class = String::from_utf16_lossy(&class_buf[..(n as usize).min(class_buf.len())]);
+    let process_path = process_path(pid).unwrap_or_default();
+
+    ctx.windows.push(CandidateWindow {
+        hwnd: hwnd.0 as isize,
+        pid,
+        class,
+        process_path,
+        title: window_title(hwnd),
+    });
+    BOOL(1)
+}
+
+/// Enumerate every eligible top-level window with the facts needed for job
+/// attribution (PID, class, process path, title). Filtering by the job's PID
+/// set is deliberately left to the pure [`filter_job_windows`] helper.
+pub fn enumerate_real_windows(min_px: i32) -> Vec<CandidateWindow> {
+    let mut ctx = JobWindowCtx {
+        min_px,
+        windows: Vec::new(),
+    };
+    // SAFETY: `ctx` is a live stack local for the whole call. Its address is
+    // passed as `LPARAM` to `EnumWindows`, whose callback casts it back to
+    // `&mut JobWindowCtx`. `EnumWindows` is synchronous, so the pointer is valid
+    // for every callback invocation and `ctx` is not dropped until it returns.
+    unsafe {
+        if let Err(e) = EnumWindows(
+            Some(enum_job_window_proc),
+            LPARAM(&mut ctx as *mut _ as isize),
+        ) {
+            tracing::warn!(error = %e, "EnumWindows failed during launcher attribution");
+        }
+    }
+    ctx.windows
+}
+
 /// Where a resolved candidate path came from. Recorded for diagnostics and
 /// tests; it never affects window matching.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -354,9 +416,13 @@ pub enum ZoneFailure {
     Unresolved,
     /// A pathless legacy assignment resolved to multiple distinct installations.
     AmbiguousPath,
+    /// A launcher script produced more than one eligible application window.
+    AmbiguousWindow,
     NotRunning,
     NoEligibleWindow,
     LaunchFailed,
+    /// Invalid launcher script path / command interpreter / job setup.
+    LauncherFailed,
 }
 
 /// Outcome of executing one zone. `launched` is true only when this call
@@ -392,6 +458,16 @@ impl ZoneExecution {
     pub fn launched(&self) -> bool {
         match self {
             Self::Snapped { launched, .. } | Self::Failed { launched, .. } => *launched,
+        }
+    }
+
+    /// Test-only accessor so outcome assertions can name the failure variant
+    /// without destructuring the whole enum in every test.
+    #[cfg(test)]
+    pub fn failure_for_test(&self) -> Option<ZoneFailure> {
+        match self {
+            Self::Failed { failure, .. } => Some(*failure),
+            Self::Snapped { .. } => None,
         }
     }
 }
@@ -593,6 +669,151 @@ pub fn execute_zone_with_mutable_context(
     )
 }
 
+/// How long to poll for a launcher's application window (matches the existing
+/// post-launch window poll).
+const LAUNCH_WINDOW_POLL_SECS: u64 = 8;
+const POLL_INTERVAL_MS: u64 = 100;
+/// Once the first app window appears, keep collecting for this long so a script
+/// that opens several apps is reported as ambiguous instead of snapping the
+/// first one prematurely.
+const AMBIGUITY_SETTLE_MS: u64 = 400;
+
+/// Execute a zone that has a `.bat`/`.cmd` launcher configured.
+///
+/// The script is executed via `cmd.exe /c` inside a Job Object; the job's PID
+/// list is the authoritative process tree used for window attribution. There is
+/// no HWND snapshot, name/title matching or parent-PID heuristic. An explicit
+/// `Zone.path` is only a strict window-matching fallback when the job produced
+/// no eligible window — it is never launched instead of the script.
+fn execute_launcher_zone(
+    zone: &Zone,
+    rect: Rect,
+    retries: u32,
+    min_px: i32,
+    launch: bool,
+) -> ZoneExecution {
+    let launcher = zone.launcher_path.trim();
+    let display_name = launcher.rsplit(['\\', '/']).next().unwrap_or(launcher);
+
+    // Validate before any process is created. Rejecting CMD metacharacters here
+    // (rather than trying to escape them) keeps the quoted argv element safe.
+    if let Err(e) = validate_script_path(launcher) {
+        return ZoneExecution::Failed {
+            failure: ZoneFailure::LauncherFailed,
+            message: format!("invalid launcher script '{launcher}': {}", e.message()),
+            launched: false,
+        };
+    }
+
+    // D1/D3: Apply and Attach mode never launch. With a launcher configured
+    // that means we can only arrange via the explicit EXE override below.
+    let may_launch = launch && !matches!(zone.launch_mode, crate::config::LaunchMode::Attach);
+
+    let spawn = if may_launch {
+        match crate::launcher::spawn_script(launcher, zone.launcher_show_console) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                return ZoneExecution::Failed {
+                    failure: ZoneFailure::LauncherFailed,
+                    message: format!("failed to launch script '{launcher}': {e}"),
+                    launched: false,
+                };
+            }
+        }
+    } else {
+        None
+    };
+    let launched = spawn.is_some();
+
+    // Attribute windows from the job's authoritative PID set. We keep every
+    // distinct HWND seen during the poll (plus a short settle window) so a
+    // multi-app script is reported as ambiguous rather than guessed.
+    let mut seen: Vec<CandidateWindow> = Vec::new();
+    if let Some(ref s) = spawn {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(LAUNCH_WINDOW_POLL_SECS);
+        let mut first_seen: Option<std::time::Instant> = None;
+        while std::time::Instant::now() < deadline {
+            let pids = match crate::launcher::query_job_pids(s.job_handle()) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(error = %e, "job PID query failed during launcher attribution");
+                    Vec::new()
+                }
+            };
+            let matched = filter_job_windows(&enumerate_real_windows(min_px), &pids, s.cmd_pid);
+            for w in matched {
+                if !seen.iter().any(|u| u.hwnd == w.hwnd) {
+                    seen.push(w);
+                }
+            }
+            if !seen.is_empty() {
+                let now = std::time::Instant::now();
+                match first_seen {
+                    None => first_seen = Some(now),
+                    Some(t)
+                        if now.duration_since(t)
+                            >= std::time::Duration::from_millis(AMBIGUITY_SETTLE_MS) =>
+                    {
+                        break
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+        }
+    }
+
+    let hwnd = match decide_attribution(seen.clone()) {
+        AttributionDecision::Single(w) => HWND(w.hwnd as *mut _),
+        AttributionDecision::Ambiguous(windows) => {
+            return ZoneExecution::Failed {
+                failure: ZoneFailure::AmbiguousWindow,
+                message: format!(
+                    "launcher '{display_name}' produced {} eligible windows; set an EXE override to disambiguate: {}",
+                    windows.len(),
+                    describe_windows(&windows)
+                ),
+                launched,
+            };
+        }
+        AttributionDecision::None => {
+            // Optional EXE override: strict full-path window matching only.
+            // It is NEVER launched in place of the script.
+            if zone.path.trim().is_empty() {
+                let message = if may_launch {
+                    format!("launcher '{display_name}' produced no eligible window")
+                } else {
+                    format!(
+                        "launcher '{display_name}' was not run (Apply/Attach) and no EXE override is configured to identify its window"
+                    )
+                };
+                return ZoneExecution::Failed {
+                    failure: ZoneFailure::NoEligibleWindow,
+                    message,
+                    launched,
+                };
+            }
+            let candidates = vec![zone.path.trim().to_string()];
+            match find_window_by_paths_min(&candidates, min_px) {
+                Some(h) => h,
+                None => {
+                    return ZoneExecution::Failed {
+                        failure: ZoneFailure::NoEligibleWindow,
+                        message: format!(
+                            "launcher '{display_name}' produced no eligible window and EXE override '{}' has no arrangeable window",
+                            zone.path.trim()
+                        ),
+                        launched,
+                    };
+                }
+            }
+        }
+    };
+
+    arrange_and_apply(zone, hwnd, rect, retries, launched, display_name)
+}
+
 fn execute_zone_inner(
     zone: &Zone,
     rect: Rect,
@@ -601,6 +822,14 @@ fn execute_zone_inner(
     launch: bool,
     running_paths: &mut Vec<String>,
 ) -> ZoneExecution {
+    // Launch precedence: a configured launcher script is ALWAYS the thing we
+    // execute. `Zone.exe` / `Zone.path` are never substituted for it — `path`
+    // is used only as a strict window-identification override. Zones without a
+    // launcher keep the legacy EXE behavior below, unchanged.
+    if matches!(launch_spec(zone), LaunchSpec::Script(_)) {
+        return execute_launcher_zone(zone, rect, retries, min_px, launch);
+    }
+
     let mut resolution = resolve_zone_paths(zone, running_paths);
     let mut launched = false;
 
@@ -735,11 +964,27 @@ fn execute_zone_inner(
         return no_window_execution(failure, message, launched);
     };
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    move_window_with_retries(h, rect, retries);
-    focus_window(h);
+    arrange_and_apply(zone, h, rect, retries, launched, &zone.exe)
+}
 
-    let title = window_title(h);
+/// Move `hwnd` into `rect`, focus it, then apply the zone's URL/tab and macro
+/// rules. Shared by the EXE and launcher paths so both report the same honest
+/// `Snapped` outcome. `display_name` is only used in the message (the launcher
+/// basename for script zones, `zone.exe` otherwise); it is never an identity
+/// signal.
+fn arrange_and_apply(
+    zone: &Zone,
+    hwnd: HWND,
+    rect: Rect,
+    retries: u32,
+    launched: bool,
+    display_name: &str,
+) -> ZoneExecution {
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    move_window_with_retries(hwnd, rect, retries);
+    focus_window(hwnd);
+
+    let title = window_title(hwnd);
     // URL / tab rule (unchanged — `title_match` is never used for identity)
     if !zone.url.is_empty() && !matches!(zone.tab_behavior, TabBehavior::Ignore) {
         let need_tab = !zone.title_match.is_empty() && !title.contains(&zone.title_match);
@@ -765,7 +1010,7 @@ fn execute_zone_inner(
     ZoneExecution::Snapped {
         message: format!(
             "snapped {} to {},{} {}x{}",
-            zone.exe, rect.x, rect.y, rect.w, rect.h
+            display_name, rect.x, rect.y, rect.w, rect.h
         ),
         launched,
     }
@@ -1371,6 +1616,123 @@ mod tests {
                 launched: false,
             }
         );
+    }
+
+    /* ---------------- BAT/CMD launcher execution outcomes ---------------- */
+
+    fn launcher_zone(script: &str) -> Zone {
+        let mut z = Zone::new(1, "Script app", "app.exe", 0.0, 0.0, 50.0, 100.0);
+        z.path = r"C:\App\app.exe".into();
+        z.launcher_path = script.into();
+        z
+    }
+
+    #[test]
+    fn launcher_zone_with_metacharacter_reports_launcher_failed_and_never_launches() {
+        // A metacharacter in the script path is rejected BEFORE any process is
+        // created. The configured EXE must not be launched as a substitute.
+        let zone = launcher_zone(r"C:\Scripts\run&evil.bat");
+        let cfg = crate::config::AppConfig::default();
+        let execution = execute_zone_with_context(
+            &zone,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            &cfg,
+            true, // Launch & Arrange — would launch if the EXE were substituted
+            &[],
+        );
+        assert_eq!(
+            execution,
+            ZoneExecution::Failed {
+                failure: ZoneFailure::LauncherFailed,
+                message: format!(
+                    "invalid launcher script '{}': path contains CMD metacharacter '&'",
+                    r"C:\Scripts\run&evil.bat"
+                ),
+                launched: false,
+            }
+        );
+    }
+
+    #[test]
+    fn launcher_zone_with_bad_extension_reports_launcher_failed() {
+        let zone = launcher_zone(r"C:\Scripts\run.exe");
+        let cfg = crate::config::AppConfig::default();
+        let execution = execute_zone_with_context(
+            &zone,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            &cfg,
+            true,
+            &[],
+        );
+        assert_eq!(
+            execution.failure_for_test(),
+            Some(ZoneFailure::LauncherFailed)
+        );
+        assert!(!execution.launched());
+        assert!(execution.message().contains(".bat or .cmd"));
+    }
+
+    #[test]
+    fn launcher_zone_in_apply_mode_never_runs_the_script() {
+        // D1: Apply arranges running windows only. With no EXE override the
+        // launcher cannot be attributed, so we report that honestly instead of
+        // running the script or launching the EXE.
+        let mut zone = launcher_zone(r"C:\Scripts\run.bat");
+        zone.path.clear();
+        let cfg = crate::config::AppConfig::default();
+        let execution = execute_zone_with_context(
+            &zone,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            &cfg,
+            false, // Apply
+            &[],
+        );
+        assert_eq!(
+            execution.failure_for_test(),
+            Some(ZoneFailure::NoEligibleWindow)
+        );
+        assert!(!execution.launched());
+        assert!(execution.message().contains("was not run (Apply/Attach)"));
+    }
+
+    #[test]
+    fn launcher_zone_in_attach_mode_never_runs_the_script() {
+        let mut zone = launcher_zone(r"C:\Scripts\run.bat");
+        zone.path.clear();
+        zone.launch_mode = crate::config::LaunchMode::Attach;
+        let cfg = crate::config::AppConfig::default();
+        let execution = execute_zone_with_context(
+            &zone,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 100,
+            },
+            &cfg,
+            true, // Launch & Arrange, but Attach mode forbids launching
+            &[],
+        );
+        assert_eq!(
+            execution.failure_for_test(),
+            Some(ZoneFailure::NoEligibleWindow)
+        );
+        assert!(!execution.launched());
     }
 
     #[test]

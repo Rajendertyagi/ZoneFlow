@@ -53,6 +53,12 @@ fn default_stage_lower_h() -> f32 {
     200.0
 }
 
+/// Launcher consoles are visible by default so the user can see the BAT run.
+/// Old configs without the field get `true` via serde's default attribute.
+pub(crate) fn default_launcher_show_console() -> bool {
+    true
+}
+
 /* ============================ Enums ============================ */
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,7 +96,17 @@ pub struct Zone {
     pub label: String,
     pub exe: String,
     /// Full path to the executable (for matchType: path parity with the AHK script).
+    /// When `launcher_path` is set this is ONLY a window-identification override —
+    /// it is never launched instead of the script.
     pub path: String,
+    /// Optional `.bat`/`.cmd` script executed via `cmd.exe /c` instead of the
+    /// executable. Empty means the legacy EXE launch behavior is unchanged.
+    #[serde(default)]
+    pub launcher_path: String,
+    /// Whether the console stays visible while the launcher script runs.
+    /// Defaults to `true`; has no effect on EXE launches.
+    #[serde(default = "default_launcher_show_console")]
+    pub launcher_show_console: bool,
     pub launch_mode: LaunchMode,
     pub title_match: String,
     pub url: String,
@@ -118,6 +134,8 @@ impl Default for Zone {
             label: String::new(),
             exe: String::new(),
             path: String::new(),
+            launcher_path: String::new(),
+            launcher_show_console: default_launcher_show_console(),
             launch_mode: LaunchMode::default(),
             title_match: String::new(),
             url: String::new(),
@@ -622,6 +640,40 @@ mod tests {
         let back: Zone = serde_json::from_str(&json).unwrap();
         assert_eq!(back.notes, "merged app: C [c.exe]");
         assert_eq!(back.macro_text, "");
+    }
+
+    #[test]
+    fn launcher_fields_default_and_round_trip() {
+        // Old zones have no launcher fields — they must load unchanged with an
+        // empty path and a visible console (no schema version bump).
+        let old = r#"{"id":1,"label":"A","exe":"a.exe","path":"C:\\A\\a.exe"}"#;
+        let z: Zone = serde_json::from_str(old).unwrap();
+        assert_eq!(z.launcher_path, "");
+        assert!(z.launcher_show_console);
+        assert_eq!(z.exe, "a.exe");
+        assert_eq!(z.path, r"C:\A\a.exe");
+
+        // New fields survive a serialize/deserialize round trip.
+        let mut z = Zone::new(2, "B", "b.exe", 0.0, 0.0, 50.0, 100.0);
+        z.launcher_path = r"C:\Scripts\run.bat".into();
+        z.launcher_show_console = false;
+        let json = serde_json::to_string(&z).unwrap();
+        let back: Zone = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.launcher_path, r"C:\Scripts\run.bat");
+        assert!(!back.launcher_show_console);
+    }
+
+    #[test]
+    fn old_config_without_launcher_fields_loads_unchanged() {
+        // A full v1 config predating launchers must deserialize with the
+        // documented defaults and keep every existing value.
+        let json = r#"{"schema_version":1,"profiles":{"P":{"name":"P","zones":[{"id":3,"label":"App","exe":"app.exe","path":"C:\\App\\app.exe"}]}},"active_profile":"P"}"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        let z = &cfg.active().zones[0];
+        assert_eq!(z.launcher_path, "");
+        assert!(z.launcher_show_console);
+        assert_eq!(z.exe, "app.exe");
+        assert_eq!(z.path, r"C:\App\app.exe");
     }
 
     #[test]

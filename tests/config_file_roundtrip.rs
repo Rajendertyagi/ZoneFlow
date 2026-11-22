@@ -26,6 +26,11 @@ fn assert_zone_eq(a: &Zone, b: &Zone) {
     assert_eq!(a.label, b.label, "Zone.label");
     assert_eq!(a.exe, b.exe, "Zone.exe");
     assert_eq!(a.path, b.path, "Zone.path");
+    assert_eq!(a.launcher_path, b.launcher_path, "Zone.launcher_path");
+    assert_eq!(
+        a.launcher_show_console, b.launcher_show_console,
+        "Zone.launcher_show_console"
+    );
     assert_eq!(a.launch_mode, b.launch_mode, "Zone.launch_mode");
     assert_eq!(a.title_match, b.title_match, "Zone.title_match");
     assert_eq!(a.url, b.url, "Zone.url");
@@ -179,6 +184,8 @@ fn v0_zone_missing_notes_defaults_to_empty() {
 
     let zone: Zone = serde_json::from_value(raw).expect("old zone must deserialize");
     assert_eq!(zone.notes, "");
+    assert_eq!(zone.launcher_path, "");
+    assert!(zone.launcher_show_console);
     assert_eq!(zone.macro_text, "{LEFT}");
     assert_eq!(zone.key_delay, 80);
     assert_eq!(zone.w, 100.0);
@@ -235,6 +242,8 @@ fn v1_config_round_trips_every_persisted_field() {
         label: "Terminal".into(),
         exe: "wt.exe".into(),
         path: r"C:\Windows\System32\wt.exe".into(),
+        launcher_path: r"C:\Scripts\launch-wt.cmd".into(),
+        launcher_show_console: false,
         launch_mode: LaunchMode::Attach,
         title_match: "Windows Terminal".into(),
         url: "https://example.com".into(),
@@ -273,6 +282,14 @@ fn v1_config_round_trips_every_persisted_field() {
     assert_eq!(
         doc["profiles"]["Coding"]["zones"][0]["notes"],
         "merged app: old [old.exe]"
+    );
+    assert_eq!(
+        doc["profiles"]["Coding"]["zones"][0]["launcher_path"],
+        r"C:\Scripts\launch-wt.cmd"
+    );
+    assert_eq!(
+        doc["profiles"]["Coding"]["zones"][0]["launcher_show_console"],
+        false
     );
     assert_eq!(
         doc["profiles"]["Coding"]["zones"][0]["launch_mode"],

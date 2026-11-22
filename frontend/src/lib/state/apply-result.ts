@@ -30,9 +30,11 @@ const OUTCOME_LABELS: Record<ZoneOutcomeStatus, string> = {
   unassigned: 'Unassigned',
   unresolved: 'Unresolved',
   ambiguous_path: 'Ambiguous path',
+  ambiguous_window: 'Ambiguous window',
   not_running: 'Not running',
   no_eligible_window: 'No eligible window',
   launch_failed: 'Launch failed',
+  launcher_failed: 'Launcher failed',
   error: 'Error',
 };
 

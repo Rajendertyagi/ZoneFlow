@@ -41,7 +41,15 @@ pub struct ZoneDto {
     pub id: i32,
     pub label: String,
     pub exe: String,
+    /// Full path used for strict window matching. With a launcher set this is
+    /// only an identification override — never a launch target.
     pub path: String,
+    /// Optional `.bat`/`.cmd` script executed instead of the executable.
+    #[serde(default)]
+    pub launcher_path: String,
+    /// Whether the script's console is visible (default true).
+    #[serde(default = "crate::config::default_launcher_show_console")]
+    pub launcher_show_console: bool,
     pub launch_mode: LaunchMode,
     pub title_match: String,
     pub url: String,
@@ -70,6 +78,8 @@ impl From<&Zone> for ZoneDto {
             label: z.label.clone(),
             exe: z.exe.clone(),
             path: z.path.clone(),
+            launcher_path: z.launcher_path.clone(),
+            launcher_show_console: z.launcher_show_console,
             launch_mode: z.launch_mode,
             title_match: z.title_match.clone(),
             url: z.url.clone(),
@@ -94,6 +104,8 @@ impl From<ZoneDto> for Zone {
             label: d.label,
             exe: d.exe,
             path: d.path,
+            launcher_path: d.launcher_path,
+            launcher_show_console: d.launcher_show_console,
             launch_mode: d.launch_mode,
             title_match: d.title_match,
             url: d.url,
@@ -345,7 +357,15 @@ pub struct MergeDto {
 pub struct AssignDto {
     pub label: String,
     pub exe: String,
+    /// Optional window-identification override (never launched when a launcher is set).
+    #[serde(default)]
     pub path: String,
+    /// Optional `.bat`/`.cmd` script executed instead of the executable.
+    #[serde(default)]
+    pub launcher_path: String,
+    /// Whether the script's console is visible (default true).
+    #[serde(default = "crate::config::default_launcher_show_console")]
+    pub launcher_show_console: bool,
 }
 
 /// Result of `POST /api/preview` (D5 — inspect steps, never execute).
@@ -377,9 +397,15 @@ pub enum ZoneOutcomeStatus {
     /// A pathless legacy assignment matched multiple distinct installations.
     /// Always a failure — no arbitrary installation is selected.
     AmbiguousPath,
+    /// A launcher script produced more than one eligible application window.
+    /// No window is guessed; the user can add an EXE override to disambiguate.
+    AmbiguousWindow,
     NotRunning,
     NoEligibleWindow,
     LaunchFailed,
+    /// The launcher script path, command interpreter or job setup was invalid.
+    /// Distinct from `LaunchFailed` (a spawn was attempted and failed).
+    LauncherFailed,
     Error,
 }
 
@@ -403,9 +429,11 @@ impl ZoneOutcomeStatus {
             Self::Unassigned => "unassigned",
             Self::Unresolved => "unresolved",
             Self::AmbiguousPath => "ambiguous path",
+            Self::AmbiguousWindow => "ambiguous window",
             Self::NotRunning => "not running",
             Self::NoEligibleWindow => "no eligible window",
             Self::LaunchFailed => "launch failed",
+            Self::LauncherFailed => "launcher failed",
             Self::Error => "error",
         }
     }
@@ -515,6 +543,8 @@ mod tests {
     fn zone_dto_round_trips_every_field() {
         let mut z = Zone::new(7, "Editor", "code.exe", 10.0, 20.0, 30.0, 40.0);
         z.path = r"C:\Tools\code.exe".into();
+        z.launcher_path = r"C:\Tools\run.cmd".into();
+        z.launcher_show_console = false;
         z.launch_mode = LaunchMode::Attach;
         z.title_match = "Visual Studio".into();
         z.url = "https://example.com".into();
@@ -531,6 +561,8 @@ mod tests {
         assert_eq!(back.label, "Editor");
         assert_eq!(back.exe, "code.exe");
         assert_eq!(back.path, r"C:\Tools\code.exe");
+        assert_eq!(back.launcher_path, r"C:\Tools\run.cmd");
+        assert!(!back.launcher_show_console);
         assert_eq!(back.launch_mode, LaunchMode::Attach);
         assert_eq!(back.title_match, "Visual Studio");
         assert_eq!(back.url, "https://example.com");
@@ -541,6 +573,38 @@ mod tests {
         assert_eq!(back.notes, "merged");
         assert_eq!(back.key_delay, 123);
         assert_eq!((back.x, back.y, back.w, back.h), (10.0, 20.0, 30.0, 40.0));
+    }
+
+    #[test]
+    fn assign_dto_launcher_fields_default_for_old_clients() {
+        // An old client sends only label/exe/path. The launcher fields must
+        // default so the legacy EXE behavior is preserved.
+        let json = r#"{"label":"App","exe":"app.exe","path":"C:\\App\\app.exe"}"#;
+        let dto: AssignDto = serde_json::from_str(json).unwrap();
+        assert_eq!(dto.launcher_path, "");
+        assert!(dto.launcher_show_console);
+        assert_eq!(dto.path, r"C:\App\app.exe");
+    }
+
+    #[test]
+    fn launcher_statuses_are_failures_and_summarized() {
+        for status in [
+            ZoneOutcomeStatus::LauncherFailed,
+            ZoneOutcomeStatus::AmbiguousWindow,
+        ] {
+            assert!(status.is_failure());
+            assert!(!status.is_success());
+        }
+        let result = ApplyResultDto::new(
+            "P".into(),
+            ApplyIntent::LaunchArrange,
+            vec![
+                outcome(1, ZoneOutcomeStatus::LauncherFailed),
+                outcome(2, ZoneOutcomeStatus::AmbiguousWindow),
+            ],
+        );
+        assert_eq!((result.succeeded, result.failed, result.skipped), (0, 2, 0));
+        assert_eq!(result.message, "1 launcher failed, 1 ambiguous window");
     }
 
     #[test]

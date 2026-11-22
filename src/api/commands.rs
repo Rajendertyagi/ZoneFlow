@@ -95,6 +95,8 @@ pub enum CommandPayload {
         source: String,
     },
     AppsBrowse,
+    /// Native file picker restricted to `.bat`/`.cmd` launcher scripts.
+    AppsBrowseScript,
 
     // --- actions (D1–D5) ---
     Save,
@@ -164,6 +166,7 @@ impl CommandPayload {
             | CommandPayload::ZonesList
             | CommandPayload::AppsList { .. }
             | CommandPayload::AppsBrowse
+            | CommandPayload::AppsBrowseScript
             | CommandPayload::Preview
             | CommandPayload::SettingsGet
             | CommandPayload::HotkeysGet
@@ -286,9 +289,11 @@ fn outcome_status(failure: crate::engine::ZoneFailure) -> ZoneOutcomeStatus {
         ZoneFailure::Unassigned => ZoneOutcomeStatus::Unassigned,
         ZoneFailure::Unresolved => ZoneOutcomeStatus::Unresolved,
         ZoneFailure::AmbiguousPath => ZoneOutcomeStatus::AmbiguousPath,
+        ZoneFailure::AmbiguousWindow => ZoneOutcomeStatus::AmbiguousWindow,
         ZoneFailure::NotRunning => ZoneOutcomeStatus::NotRunning,
         ZoneFailure::NoEligibleWindow => ZoneOutcomeStatus::NoEligibleWindow,
         ZoneFailure::LaunchFailed => ZoneOutcomeStatus::LaunchFailed,
+        ZoneFailure::LauncherFailed => ZoneOutcomeStatus::LauncherFailed,
     }
 }
 
@@ -802,6 +807,8 @@ pub fn handle(
             z.label = spec.label;
             z.exe = spec.exe;
             z.path = spec.path;
+            z.launcher_path = spec.launcher_path;
+            z.launcher_show_console = spec.launcher_show_console;
             z.launch_mode = crate::config::LaunchMode::default();
             z.url.clear();
             z.title_match.clear();
@@ -877,6 +884,11 @@ pub fn handle(
             let dtos = Inner::app_dtos(&picked);
             Ok(serde_json::to_value(dtos).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
+        CommandPayload::AppsBrowseScript => {
+            let picked = apps::browse_script();
+            let dtos = Inner::app_dtos(&picked);
+            Ok(serde_json::to_value(dtos).map_err(|e| ApiError::Internal(e.to_string()))?)
+        }
 
         // ----------------------------- actions -----------------------------
         CommandPayload::Save => {
@@ -921,7 +933,14 @@ pub fn handle(
                     let r = crate::engine_core::zone_by_id(&zones, z.id)
                         .map(|r| format!("{},{} {}x{}", r.x, r.y, r.w, r.h))
                         .unwrap_or_else(|| "?".into());
-                    format!("launch/attach {} -> {r}", z.exe)
+                    // D5: describe what would actually run. A launcher script
+                    // replaces the EXE — never claim the EXE will be launched.
+                    let what = if z.launcher_path.trim().is_empty() {
+                        format!("launch/attach {}", z.exe)
+                    } else {
+                        format!("run script {} (arrange its window)", z.launcher_path.trim())
+                    };
+                    format!("{what} -> {r}")
                 })
                 .collect();
             let dto = PreviewDto {
@@ -1311,6 +1330,8 @@ mod tests {
                     label: "L".into(),
                     exe: "e.exe".into(),
                     path: String::new(),
+                    launcher_path: String::new(),
+                    launcher_show_console: true,
                 },
             },
             CommandPayload::ZoneUnassign { id: 1 },
@@ -1588,6 +1609,8 @@ mod tests {
                     label: "New".into(),
                     exe: "new.exe".into(),
                     path: String::new(),
+                    launcher_path: String::new(),
+                    launcher_show_console: true,
                 },
             },
             &mut inner,
@@ -1607,6 +1630,37 @@ mod tests {
     }
 
     #[test]
+    fn zone_assign_stores_launcher_fields() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner
+            .draft
+            .active_mut()
+            .zones
+            .push(Zone::new(1, "Old", "old.exe", 0.0, 0.0, 50.0, 100.0));
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        handle(
+            CommandPayload::ZoneAssign {
+                id: 1,
+                spec: AssignDto {
+                    label: "Script app".into(),
+                    exe: "app.exe".into(),
+                    path: r"C:\App\app.exe".into(),
+                    launcher_path: r"C:\Scripts\run.bat".into(),
+                    launcher_show_console: false,
+                },
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        let z = &inner.draft.active().zones[0];
+        assert_eq!(z.launcher_path, r"C:\Scripts\run.bat");
+        assert!(!z.launcher_show_console);
+        // The EXE override is stored for window identification only.
+        assert_eq!(z.path, r"C:\App\app.exe");
+    }
+
+    #[test]
     fn d5_preview_never_executes() {
         let (mut inner, queue, shutdown, mut cache) = setup();
         inner
@@ -1619,6 +1673,24 @@ mod tests {
         let dto: PreviewDto = serde_json::from_value(v).unwrap();
         assert!(!dto.executed);
         assert_eq!(dto.steps.len(), 1);
+    }
+
+    #[test]
+    fn d5_preview_names_the_launcher_not_the_exe() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut zone = Zone::new(1, "A", "a.exe", 0.0, 0.0, 50.0, 100.0);
+        zone.launcher_path = r"C:\Scripts\run.bat".into();
+        inner.draft.active_mut().zones.push(zone);
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let v = handle(CommandPayload::Preview, &mut inner, &mut ctx).unwrap();
+        let dto: PreviewDto = serde_json::from_value(v).unwrap();
+        assert!(!dto.executed);
+        assert_eq!(dto.steps.len(), 1);
+        assert!(dto.steps[0].contains(r"C:\Scripts\run.bat"));
+        assert!(
+            !dto.steps[0].contains("launch/attach a.exe"),
+            "preview must not claim the EXE will be launched"
+        );
     }
 
     #[test]
@@ -2534,6 +2606,10 @@ mod tests {
             ZoneOutcomeStatus::AmbiguousPath
         );
         assert_eq!(
+            outcome_status(ZoneFailure::AmbiguousWindow),
+            ZoneOutcomeStatus::AmbiguousWindow
+        );
+        assert_eq!(
             outcome_status(ZoneFailure::NotRunning),
             ZoneOutcomeStatus::NotRunning
         );
@@ -2544,6 +2620,10 @@ mod tests {
         assert_eq!(
             outcome_status(ZoneFailure::LaunchFailed),
             ZoneOutcomeStatus::LaunchFailed
+        );
+        assert_eq!(
+            outcome_status(ZoneFailure::LauncherFailed),
+            ZoneOutcomeStatus::LauncherFailed
         );
     }
 

@@ -71,7 +71,16 @@
   }
 
   function onDragStart(event: DragEvent, app: AppEntryDto): void {
-    const payload = JSON.stringify({ label: app.label, exe: app.exe, path: app.path });
+    // A complete AssignDto: no launcher, console default on. The backend also
+    // defaults these fields, but sending them explicitly keeps the wire shape
+    // consistent with the picker.
+    const payload = JSON.stringify({
+      label: app.label,
+      exe: app.exe,
+      path: app.path,
+      launcher_path: '',
+      launcher_show_console: true,
+    });
     event.dataTransfer?.setData('application/x-zoneflow-app', payload);
     event.dataTransfer?.setData('text/plain', payload);
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';

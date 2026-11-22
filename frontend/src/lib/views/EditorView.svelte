@@ -19,7 +19,7 @@
     Trash,
     Undo2,
   } from '@lucide/svelte';
-  import { api } from '$lib/api/client';
+  import { api, type AssignDto } from '$lib/api/client';
   import {
     assignAppGuarded,
     doApply,
@@ -77,7 +77,7 @@
     noticeTimer = window.setTimeout(() => (notice = ''), 3200);
   }
 
-  async function onCanvasAssign(zoneId: number, spec: { label: string; exe: string; path: string }): Promise<void> {
+  async function onCanvasAssign(zoneId: number, spec: AssignDto): Promise<void> {
     const zone = zones.find((z) => z.id === zoneId);
     if (!zone) return;
     await assignAppGuarded(zone, spec);

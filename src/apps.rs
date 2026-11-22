@@ -781,6 +781,36 @@ pub fn browse() -> Vec<AppEntry> {
     }]
 }
 
+/// Rust-side native file picker for launcher scripts. Restricts the dialog to
+/// `*.bat;*.cmd` and returns the picked file's full path so the engine can
+/// execute it. The web frontend cannot do this with `<input type="file">`
+/// because browsers never expose full filesystem paths.
+pub fn browse_script() -> Vec<AppEntry> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Batch scripts", &["bat", "cmd"])
+        .pick_file()
+    else {
+        return Vec::new();
+    };
+    let label = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Launcher")
+        .to_string();
+    let exe = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("launcher.bat")
+        .to_string();
+    let path = path.to_string_lossy().into_owned();
+    vec![AppEntry {
+        id: identity_key(&exe, &path),
+        label: clean_label(&label),
+        exe,
+        path,
+    }]
+}
+
 /* --------------------------------- tests --------------------------------- */
 
 #[cfg(test)]
