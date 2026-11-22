@@ -18,7 +18,7 @@ Your original AHK files are untouched at `E:\Apps\Hotkeys\ScreenLayout.ahk` (and
 - **Drag-to-snap overlay** — `Ctrl`+drag any window title bar to show translucent zone overlays; release to snap into a zone. The overlay is a native layered window owned by the main thread.
 - **Global hotkeys** — 17 keyboard bindings plus the `Ctrl`+drag mouse gesture (see table below). All bindings are stored in config and editable in the Hotkeys view.
 - **Undo/redo** — `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) over zone and profile edits, with a configurable undo depth.
-- **Tray menu** — dynamic profile list with applied/selected markers, Disable/Enable, Open editor, Settings, Re-tile, Reload and Exit.
+- **Tray menu** — dynamic profile list with applied/selected markers, Disable/Enable, Open editor, Copy editor URL, Settings, Re-tile, Reload and Exit.
 - **Autostart** — optional launch at Windows login, plus optional auto-launch-and-snap of bound apps on startup.
 - **Config persistence** — versioned JSON config (schema v1) with empty-by-default starter profiles and automatic migration of older configs.
 
@@ -52,9 +52,9 @@ cd frontend; bun run check; bun test; bun run build
 
 ## Run
 
-Double-click `target\release\screenlayout.exe`. **No window opens** — the app lives in the system tray. Right-click the tray icon to **Open editor…** (launches the browser editor), open Settings, Re-tile, Reload config, Disable/Enable layout, or Exit. Closing the browser editor does not stop Rust; use the tray Exit or `POST /api/shutdown` to quit.
+Double-click `target\release\screenlayout.exe`. **No window opens** — the app lives in the system tray. Right-click the tray icon to **Open editor…** (launches the browser editor), **Copy editor URL** (copies the fixed URL to the clipboard), open Settings, Re-tile, Reload config, Disable/Enable layout, or Exit. Closing the browser editor does not stop Rust; use the tray Exit or `POST /api/shutdown` to quit.
 
-The editor URL carries a per-launch 256-bit token in its fragment; the SPA exchanges it for an `HttpOnly; SameSite=Strict` session cookie and then clears the fragment. The HTTP server binds only `127.0.0.1` on an ephemeral port.
+The editor is always at **`http://127.0.0.1:4000/`** — a fixed loopback address with no token, login or session cookie. The SPA loads directly: it fetches state and opens the SSE stream on startup. The HTTP server binds only `127.0.0.1:4000`; if that port is occupied, startup logs a clear error and exits rather than falling back to a random port. The `/api` endpoints are open (no authentication or Host validation) — loopback binding is the only boundary.
 
 ## Config & logs
 
@@ -93,7 +93,7 @@ The crate is a binary (`src/main.rs`, no `src/lib.rs`). It runs **three long-liv
 
 1. **Main / native** — owns the tray, global hotkeys, the hidden message-only window and the layered drag overlay; runs the `MsgWaitForMultipleObjectsEx` message loop (150 ms idle gesture poll → 16 ms active tracking).
 2. **Command worker** — authoritative state, history and synchronous engine calls; receives commands over an mpsc channel and broadcasts SSE events.
-3. **Tokio (current_thread)** — Axum HTTP API (`/api/*`, SSE `/api/events`) and embedded static assets on `127.0.0.1:0`.
+3. **Tokio (current_thread)** — Axum HTTP API (`/api/*`, SSE `/api/events`) and embedded static assets on the fixed `127.0.0.1:4000`.
 
 Modules:
 
@@ -102,9 +102,10 @@ Modules:
 - **`src/engine.rs`** — Win32 window enumeration, snapping, DWM, execute/retile/restore.
 - **`src/system.rs`** — dynamic tray menu, global hotkeys, actions and the D2 native confirmation dialog.
 - **`src/native_loop.rs`** — native message loop, payload queue, safety timer, manual-reset shutdown event, ordered shutdown sequence and the layered drag overlay.
-- **`src/api/`** — HTTP router, middleware (token/session/Host guard), DTOs, SSE events, authoritative state and the command worker.
+- **`src/api/`** — HTTP router (open `/api/*`), DTOs, SSE events, authoritative state and the command worker.
 - **`src/web/`** — `rust-embed` static asset handler with SPA fallback.
-- **`src/session.rs`** — per-launch token, session registry, reaper and browser launch.
+- **`src/browser.rs`** — fixed editor URL/port constants and the browser-opening helper.
+- **`src/clipboard.rs`** — Win32 `CF_UNICODETEXT` clipboard helper for the tray "Copy editor URL" action.
 - **`src/apps.rs`** — pure-Rust runtime app discovery for `/api/apps` and `/api/apps/browse`.
 - **`src/autostart.rs`** — login autostart.
 - **`frontend/`** — Svelte 5 SPA (Vite 8, Tailwind 4, shadcn-svelte, Bits UI, Paneforge, Lucide icons). Built to `frontend/dist/` at build time and embedded into the `.exe`; no separate server and no Node/Bun at runtime.
@@ -113,7 +114,7 @@ All tunables live in the `Settings` struct in `src/config.rs` — never as liter
 
 ## Testing
 
-**128 Rust tests pass** — 125 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, session, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale. The **frontend adds 36 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
+**120 Rust tests pass** — 117 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale. The **frontend adds 36 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
 
 ```powershell
 cargo test

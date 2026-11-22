@@ -42,9 +42,10 @@ is **not** the memory consumption of the complete application.
 | **Final implementation (Phase 6, egui removed)** | **12.0 / 2.0 MiB** | **11.9 / 2.0 MiB** | **11.9 / 2.0 MiB** | **0.00–0.10%** | **3,827,200 B (3.65 MiB)** |
 
 The spike contains the real backend modules (`config`, `engine_core`, `engine`,
-`system`, `autostart`), tray, global hotkeys, an axum server on an ephemeral
-loopback port, and a 50 ms poll loop. It was verified live: tray/hotkeys
-initialised without error and HTTP responded. It has **no GUI toolkit**.
+`system`, `autostart`), tray, global hotkeys, an axum server on loopback (the
+historical spike used an ephemeral port; the shipped build uses the fixed port
+4000), and a 50 ms poll loop. It was verified live: tray/hotkeys initialised
+without error and HTTP responded. It has **no GUI toolkit**.
 
 The **final implementation** row is the actual Phase 6 measurement of the shipped
 binary (`target\release\screenlayout.exe`, SHA-256
@@ -65,10 +66,9 @@ application with the browser editor open (Workload 2, not measured).
 **NOT MEASURED (Phase 6).** The Svelte frontend and the `-Mode EditorOpen` harness
 both exist, but a faithful measurement was not feasible in this environment:
 
-1. The per-launch session token is **not written to the log** (only the bound
-   port is), so the tokenised editor URL cannot be reconstructed from
-   `zoneflow.log`. The URL is held only in process memory and passed to the
-   command worker.
+1. The editor URL is now fixed and public (`http://127.0.0.1:4000/`), so URL
+   discovery is no longer a blocker. (Historically the per-launch token was
+   not logged, which prevented reconstructing the URL.)
 2. The tray **"Open editor…"** action could not be driven reliably from the
    benchmark harness: the native `muda` popup menu is not exposed through UI
    Automation, and synthetic keystroke navigation did not fire the action.
@@ -78,16 +78,16 @@ both exist, but a faithful measurement was not feasible in this environment:
    browser WS/private/CPU would be reported as 0 — a misleading figure. Closing
    those sessions to get clean attribution is out of scope for this task.
 
-No numbers are claimed for this workload. To measure it later: log the editor
-URL (or expose it via a dev-only hook), close all browser windows first, then run
-`benchmark.ps1 -Mode EditorOpen -Url <tokenised-url>` ≥3 times and record the Rust
-process and browser process tree **separately**.
+No numbers are claimed for this workload. To measure it later: close all browser
+windows first, then run
+`benchmark.ps1 -Mode EditorOpen -Url http://127.0.0.1:4000/` ≥3 times and record
+the Rust process and browser process tree **separately**.
 
 ### Workload 3 — Pointer activity (not editing)
 
-**NOT MEASURED (Phase 6).** Same blockers as Workload 2: no way to obtain the
-tokenised URL, no reliable automated tray action, and 33 pre-existing Edge
-processes that defeat the harness's new-PID-only browser attribution. The harness
+**NOT MEASURED (Phase 6).** Same blockers as Workload 2: no reliable automated
+tray action and 33 pre-existing Edge processes that defeat the harness's
+new-PID-only browser attribution. The fixed editor URL is known. The harness
 mode (`-Mode PointerActivity`) moves the cursor randomly for 20 s and reports
 `Pointer*` fields sampled **after** the movement; it does **not** drag or resize
 a zone, so it would measure cursor-driven repaint cost only. The historical egui

@@ -23,7 +23,7 @@ use std::time::Instant;
 /// native-side `Action` / `MoveWindow` inputs and shutdown.
 #[derive(Debug)]
 pub enum CommandPayload {
-    // --- session / state ---
+    // --- state / status ---
     StateGet,
     StatusGet,
     Shutdown,
@@ -840,15 +840,21 @@ fn handle_action(
             ok()
         }
         Action::ShowSettings => {
-            // Open the same session on the Settings view. The SPA reads the
-            // `view` fragment parameter before bootstrap clears the hash.
-            let url = format!("{}&view=settings", ctx.editor_url);
-            crate::session::open_editor_url(&url);
+            // Open the editor directly on the Settings view. The SPA reads the
+            // `#view=settings` fragment on startup; there is no token.
+            let url = crate::browser::settings_url(&ctx.editor_url);
+            crate::browser::open_editor_url(&url);
             ok()
         }
         Action::OpenEditor => {
             let url = ctx.editor_url.to_string();
-            crate::session::open_editor_url(&url);
+            crate::browser::open_editor_url(&url);
+            ok()
+        }
+        Action::CopyEditorUrl => {
+            // Handled on the native/main thread (clipboard access belongs
+            // there). If it ever reaches the worker, do nothing — never open
+            // a browser or change authoritative state.
             ok()
         }
         Action::ToggleEnabled => {
@@ -981,7 +987,7 @@ mod tests {
         CommandContext {
             notifier: Arc::new(notifier),
             shutdown: shutdown.clone(),
-            editor_url: Arc::new("http://127.0.0.1:1/#token=x".into()),
+            editor_url: Arc::new(crate::browser::EDITOR_URL.to_string()),
             running_cache: cache,
         }
     }

@@ -73,7 +73,7 @@ The crate is a binary (`src/main.rs`, no `src/lib.rs`). The backend is already t
 │  │ Axum HTTP API · /api/* · /api/events (SSE) · embedded dist/        │  │
 │  └───────┬────────────────────────────────────────────────────────────┘  │
 └──────────┼───────────────────────────────────────────────────────────────┘
-           │ loopback HTTP, per-launch token
+           │ loopback HTTP on fixed port 4000
     ┌──────▼───────┐
     │ Browser      │  opened on demand; closing it does not stop Rust
     │ Svelte 5 SPA │  SVG canvas · shadcn-svelte · Tailwind 4
@@ -94,9 +94,9 @@ There are exactly **three threads**. The main thread **is** the native thread; t
 
 ### 3.2 Startup ordering and readiness
 
-1. `main` loads config, generates the 256-bit token, creates channels: `cmd_tx/cmd_rx` (worker), `native_tx/native_rx` (payload queue sender + receiver), `shutdown_tx/rx` (oneshot for Axum).
-2. `main` spawns **thread 2** (command worker), initializing `Inner` from config.
-3. `main` spawns **thread 3** (Tokio `current_thread` runtime): bind `127.0.0.1:0`, read `local_addr().port()`, build the router, then `axum::serve(...).with_graceful_shutdown(...)`. It sends `Bound { port, token }` back to main over a oneshot **before** awaiting `serve`.
+1. `main` loads config and creates channels: `cmd_tx/cmd_rx` (worker), `native_tx/native_rx` (payload queue sender + receiver), `shutdown_tx/rx` (oneshot for Axum) and a bind-result oneshot.
+2. `main` spawns **thread 2** (command worker) only after the fixed port binds successfully, initializing `Inner` from config.
+3. `main` spawns **thread 3** (Tokio `current_thread` runtime): bind the fixed `127.0.0.1:4000`, build the router, then `axum::serve(...).with_graceful_shutdown(...)`. It reports bind success (or a clear error) back to main over a oneshot **before** awaiting `serve`. A bind failure is fatal — there is no random-port fallback.
 4. `main` blocks on that oneshot (bounded timeout), then creates the tray, hotkeys, hidden window and overlay window **on main**, starts the safety timer (ID 1), publishes the `HwndSend` handle to producers, and enters the `MsgWaitForMultipleObjectsEx` message loop (§3.7).
 5. No producer may post to the hidden window before step 4 publishes the handle — the oneshot gate enforces this.
 
@@ -184,6 +184,7 @@ Profiles              ▸  Website ✓   (checkmark = applied)
 ────────────────────────────
 Disable layout           (toggles to Enable layout)
 Open editor…
+Copy editor URL
 Settings…
 Exit
 ```
@@ -192,13 +193,13 @@ Exit
 - **D6:** tray click applies when enabled, selects only when disabled. Home `select` and rail `load` remain distinct API operations (§5.2).
 - **D2:** a dirty-draft switch returns `409 dirty_state` with no state change; the native thread shows a native `MessageBoxW` Discard/Cancel dialog and retries with `discard_dirty=true` on Discard (§5.2).
 - **D4:** Disable/Enable suspends all automation; runtime-only; label toggles.
-- Open editor / Settings open the browser editor; Exit triggers §3.3 shutdown.
+- Open editor / Settings open the browser editor at the fixed URL (`#view=settings` selects the Settings view); Copy editor URL puts that same URL on the clipboard from the native thread; Exit triggers §3.3 shutdown.
 
 ---
 
 ## 5. API contracts
 
-All responses are JSON. All `/api/*` requests require the session (§8). Errors are `{ "error": { "code": string, "message": string } }`.
+All responses are JSON. All `/api/*` requests are open — no credentials are required (§8). Errors are `{ "error": { "code": string, "message": string } }`.
 
 ### 5.1 DTOs and transport
 
@@ -207,7 +208,7 @@ All responses are JSON. All `/api/*` requests require the session (§8). Errors 
 - `GET /api/events` → SSE `{type, payload}` events: `state-changed`, `log`, `status`, `hotkey-action`, `apply-result`. Each handler selects on a `watch` shutdown receiver via `take_until` so shutdown can end the stream (§3.6 step 2).
 - `GET /api/status` → lightweight fallback poll.
 - `POST /api/shutdown` → triggers the §3.6 sequence (returns 200 before the server stops).
-- **Transport:** SSE for backend→UI events, `fetch()` for commands. Native `EventSource` cannot set a bearer header, so it uses the session cookie (§8). WebSocket and polling are unnecessary. One `EventSource` per client (HTTP/1 limits ~6 connections per origin).
+- **Transport:** SSE for backend→UI events, `fetch()` for commands. Both are plain same-origin requests with no credentials. WebSocket and polling are unnecessary. One `EventSource` per client (HTTP/1 limits ~6 connections per origin).
 
 ### 5.2 Profiles (D6)
 
@@ -262,7 +263,9 @@ The frontend component tree, Svelte 5 patterns and layout are defined **once** i
 
 ## 8. Security (proportionate to a local utility)
 
-Loopback-only bind `127.0.0.1:0` (never `0.0.0.0`/`::`); use literal `http://127.0.0.1:<port>`. Per-launch 256-bit token in the URL **fragment** → `POST /api/session` with bearer → `HttpOnly; SameSite=Strict` cookie → `history.replaceState()` clears the fragment → fetch and `EventSource` use the cookie. Guard covers **only `/api/*`**; static assets are public. Validate `Host` exactly (DNS-rebinding mitigation); no CORS headers, never `*`; `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. Open the browser with `open::that_detached` (no `insecure` feature). Reap stale SSE sessions after 60 s. Failure behavior (missing/invalid token, failed exchange, expired session, reconnect) is in the companion plan §1.1. Localhost alone is not complete security; no further hardening is warranted for this utility.
+The only boundary is a **fixed loopback-only bind**: `127.0.0.1:4000` (never `0.0.0.0`/`::`). The editor URL is the literal `http://127.0.0.1:4000/`. If that port is occupied, startup logs a clear error and exits — it never falls back to a random port.
+
+There is **no authentication layer**. No token generation, no `POST /api/session`, no `zf_session` cookie, no bearer validation, no exact `Host` validation and no session middleware. The `/api` sub-router is open; static assets are public. No Origin/Sec-Fetch-Site/CSRF/CORS or other replacement security is added. The SPA loads directly (fetch state + SSE on startup) with no login/bootstrap phase; `#view=settings` is the only fragment parameter. The browser is opened with `open::that_detached` (no `insecure` feature). Localhost binding alone is not complete security; this is an accepted trade-off for a local utility.
 
 ---
 
@@ -271,7 +274,7 @@ Loopback-only bind `127.0.0.1:0` (never `0.0.0.0`/`::`); use literal `http://127
 Three workloads, measured and reported separately (`docs/performance/results.md`, `benchmark.ps1`):
 
 1. **Background** — Rust backend, tray, hotkeys, HTTP server; browser closed. Final implementation (Phase 6, egui removed): **11.9–12.0 MiB WS / 2.0 MiB private, 0.00–0.10% CPU, 3.65 MiB exe** (3 runs). For comparison: ~2.0–2.1 MiB private / ~10.9–12.5 MiB WS for the earlier spike vs ~59–62 MiB private / ~109–112 MiB WS / 14.21 MiB exe for egui.
-2. **Editor open** — Rust + browser with full Svelte UI. **NOT MEASURED (Phase 6)** — token not logged, tray automation unreliable, and pre-existing browser processes defeat the harness's new-PID attribution. See `docs/performance/results.md`.
+2. **Editor open** — Rust + browser with full Svelte UI. **NOT MEASURED (Phase 6)** — tray automation unreliable and pre-existing browser processes defeat the harness's new-PID attribution. The editor URL is now fixed and public (`http://127.0.0.1:4000/`), so URL discovery is no longer a blocker. See `docs/performance/results.md`.
 3. **Pointer activity** — editor open + 20 s synthetic cursor movement. **NOT MEASURED (Phase 6)** — same blockers. This is **not** editing; real SVG drag verification is a separate dev-only functional test.
 
 Metrics: working set, private bytes, CPU (Rust and browser separately, including browser CPU for Editor open), cold startup, exe size. ≥3 runs, report ranges. **Never present the headless backend's RAM as the complete application's memory.**
@@ -280,7 +283,7 @@ Metrics: working set, private bytes, CPU (Rust and browser separately, including
 
 ## 10. Dependency decisions
 
-Full table with versions, features, links, existing/new status and rationale is in the companion plan §5. Summary: **add** `axum 0.8.9`, `tokio 1.54.1` (`rt, macros, net, sync, time` — `current_thread`, no `rt-multi-thread`/`full`), `rust-embed 8.14.0`, `open 5.4.5`, `getrandom 0.3.4`, `tokio-stream 0.1.19` (`sync`); **reuse** `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `global-hotkey 0.10`, `tray-icon 0.26`, `windows 0.62` (add `Win32_System_LibraryLoader` for `GetModuleHandleW`); **removed in Phase 6** `eframe`, `egui`, `shadcn-egui`; **retained** `rfd` (Rust-side `/api/apps/browse` picker). Frontend: Svelte 5.59.1, Vite 8.3.8, plugin 7.3.1, Tailwind 4.3.5, shadcn-svelte 1.8.1, Bits UI 2.22.0, Paneforge 1.0.2 (wrapped), `@lucide/svelte` 1.77.0, **TypeScript pinned `~6.0.3`** (TS 7 is outside `svelte-check`'s peer range).
+Full table with versions, features, links, existing/new status and rationale is in the companion plan §5. Summary: **add** `axum 0.8.9`, `tokio 1.54.1` (`rt, macros, net, sync, time` — `current_thread`, no `rt-multi-thread`/`full`), `rust-embed 8.14.0`, `open 5.4.5`, `tokio-stream 0.1.19` (`sync`); **reuse** `serde`, `serde_json`, `tracing`, `tracing-subscriber`, `global-hotkey 0.10`, `tray-icon 0.26`, `windows 0.62` (features include `Win32_System_LibraryLoader` for `GetModuleHandleW`, plus `Win32_System_DataExchange`, `Win32_System_Memory` and `Win32_System_Ole` for the clipboard helper); **removed** `getrandom` (no token generation) and, in Phase 6, `eframe`, `egui`, `shadcn-egui`; **retained** `rfd` (Rust-side `/api/apps/browse` picker). Frontend: Svelte 5.59.1, Vite 8.3.8, plugin 7.3.1, Tailwind 4.3.5, shadcn-svelte 1.8.1, Bits UI 2.22.0, Paneforge 1.0.2 (wrapped), `@lucide/svelte` 1.77.0, **TypeScript pinned `~6.0.3`** (TS 7 is outside `svelte-check`'s peer range).
 
 ---
 
@@ -305,11 +308,11 @@ egui dependencies were **removed in Phase 6**; the app stayed buildable througho
 | Phase | Scope | Gate | Status |
 |---|---|---|---|
 | 0 — Foundation | Headless spike measured; benchmark harness + results | Background RAM reduction verified; architecture approved | ✅ DONE |
-| 1 — Backend API | Add Axum/Tokio/rust-embed; `api/`, `web/`, `session`; all §5 endpoints; native thread + command worker + message window; egui still runs | fmt/clippy/test/release clean; API + native-loop tests pass; egui UI still works | ✅ DONE |
+| 1 — Backend API | Add Axum/Tokio/rust-embed; `api/`, `web/`; all §5 endpoints; native thread + command worker + message window; egui still runs | fmt/clippy/test/release clean; API + native-loop tests pass; egui UI still works | ✅ DONE |
 | 2 — Frontend scaffold | Svelte/Vite/Tailwind/shadcn project; build `dist/`; embed; serve; browser on demand | Browser loads from embedded assets with no separate server; closing browser leaves Rust running | ✅ DONE |
 | 3 — SVG canvas | Zones, move/resize/split/merge, snap guides, draw, DnD, context menu, undo/redo | All canvas journeys pass; geometry matches `engine_core`; real drag functional test passes | ✅ DONE |
 | 4 — Panels/dialogs | Left rail, inspector, wizard, picker, confirmations, close dialog, Hotkeys/Settings | Full journey; D1–D6 verified; no data loss | ✅ DONE |
-| 5 — Lifecycle/native | Dynamic tray, D2 dialog, reverse updates, overlay, session, graceful shutdown | Tray-only works; menu syncs; dirty switch confirms; overlay works; all threads join | ✅ DONE |
+| 5 — Lifecycle/native | Dynamic tray, D2 dialog, reverse updates, overlay, graceful shutdown | Tray-only works; menu syncs; dirty switch confirms; overlay works; all threads join | ✅ DONE |
 | 6 — Verification/removal | Measure three workloads; remove egui deps; sync docs | All checks clean; performance recorded; docs match binary | ✅ DONE (Background measured; Editor open / Pointer activity NOT MEASURED — see results.md) |
 | 7 — Release hardening | Installer/signing, CI artifacts | Release produced; all verification items checked | ⬜ PENDING |
 
@@ -338,6 +341,6 @@ A failing gate blocks the next phase.
 - windows-rs 0.62 canonical docs: `MsgWaitForMultipleObjectsEx` (4-arg Rust signature with `dwflags`, `nCount` from slice), `HANDLE` `!Send`/`!Sync` and maintainer-endorsed `Send`/`Sync` wrapper (issue #3169), `VIRTUAL_KEY` newtype, `WAIT_EVENT` constants.
 - windows-rs 0.62 docs/source: window/message APIs, `WNDCLASSW`, `WNDPROC`, `HWND` `!Send`/`!Sync`, required Cargo features.
 - `tray-icon` 0.26 / `global-hotkey` 0.10 / muda 0.21 docs + published source: thread requirements, `set_menu`, `CheckMenuItem::set_checked`, `with_id`, `set_event_handler` OnceCell behavior, `register_all` fail-fast, `Send`/`Sync`, `Drop` behavior.
-- crates.io/docs.rs: axum 0.8.9, tokio 1.54.1, rust-embed 8.14.0, open 5.4.5, getrandom 0.3.4, tokio-stream 0.1.19, tower 0.5.3, http-body-util 0.1.5.
+- crates.io/docs.rs: axum 0.8.9, tokio 1.54.1, rust-embed 8.14.0, open 5.4.5, tokio-stream 0.1.19, tower 0.5.3, http-body-util 0.1.5.
 - npm registry + official docs: Svelte 5.59.1, Vite 8.3.8, plugin 7.3.1, Tailwind 4.3.5, shadcn-svelte 1.8.1, Bits UI 2.22.0, Paneforge 1.0.2, `@lucide/svelte` 1.77.0, svelte-check 4.7.8, TypeScript 6.0.3 pin.
 - MDN: Same-Origin Policy, CORS, SSE, `EventSource` credentials and connection limits.

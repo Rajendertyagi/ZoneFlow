@@ -103,7 +103,7 @@ mod tests {
             sse_tx,
             notifier,
             shutdown,
-            Arc::new("http://127.0.0.1:1/#token=x".into()),
+            Arc::new(crate::browser::EDITOR_URL.to_string()),
         );
 
         let (reply_tx, reply_rx) = oneshot::channel();

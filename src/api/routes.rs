@@ -5,11 +5,9 @@ use super::dto::{
     AppOptionsDto, AssignDto, MergeDto, SettingsDto, SplitDto, ZoneDto, ZoneGeometryUpdateDto,
 };
 use super::worker::Command;
-use super::{events, middleware, ApiError, AppState};
+use super::{events, ApiError, AppState};
 use crate::api::commands::CommandPayload;
 use axum::extract::{Path, Query, State};
-use axum::http::header::SET_COOKIE;
-use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -58,25 +56,6 @@ struct LogsQuery {
 }
 
 /* -------------------------------- handlers ------------------------------- */
-
-/// `POST /api/session` — exchange the bearer token for an HttpOnly cookie.
-async fn session(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let bearer = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("")
-        .trim();
-    if bearer != state.token.as_str() {
-        return ApiError::Forbidden.into_response();
-    }
-    let id = state.sessions.create();
-    let mut response = (StatusCode::OK, Json(json!({ "ok": true }))).into_response();
-    response
-        .headers_mut()
-        .insert(SET_COOKIE, middleware::session_cookie(&id));
-    response
-}
 
 async fn get_state(State(state): State<AppState>) -> Response {
     match call(&state, CommandPayload::StateGet).await {
@@ -434,11 +413,11 @@ async fn get_logs(State(state): State<AppState>, Query(q): Query<LogsQuery>) -> 
 
 /* --------------------------------- router --------------------------------- */
 
-/// Build the full router. The auth guard is a `route_layer` on the `/api`
-/// sub-router only; static assets are public via the fallback.
+/// Build the full router. The `/api` sub-router is open: no auth guard, no
+/// bearer/cookie validation and no exact-Host check. Static assets are public
+/// via the fallback. The only boundary is the loopback bind in `main`.
 pub fn build(state: AppState) -> Router {
     let api = Router::new()
-        .route("/session", post(session))
         .route("/state", get(get_state))
         .route("/events", get(events::events))
         .route("/status", get(get_status))
@@ -474,11 +453,7 @@ pub fn build(state: AppState) -> Router {
         .route("/app-options", put(set_app_options))
         .route("/hotkeys", get(get_hotkeys).put(set_hotkeys))
         .route("/logs", get(get_logs))
-        .fallback(|| async { ApiError::NotFound("endpoint".to_string()).into_response() })
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            middleware::auth_guard,
-        ));
+        .fallback(|| async { ApiError::NotFound("endpoint".to_string()).into_response() });
 
     Router::new()
         .nest("/api", api)
@@ -493,8 +468,8 @@ mod tests {
     use super::*;
     use crate::api::worker::Command as WorkerCommand;
     use crate::native_loop::{HwndSend, NativeQueue, SharedEvent, ShutdownHandle};
-    use crate::session::SessionRegistry;
     use axum::body::Body;
+    use axum::http::StatusCode;
     use std::sync::{mpsc, Arc};
     use tokio::sync::{broadcast, watch};
     use tower::ServiceExt;
@@ -503,7 +478,6 @@ mod tests {
         router: Router,
         #[allow(dead_code)] // kept alive for the duration of the test
         worker: std::thread::JoinHandle<()>,
-        token: String,
     }
 
     fn harness() -> Harness {
@@ -526,31 +500,26 @@ mod tests {
             sse_tx.clone(),
             notifier,
             shutdown.clone(),
-            Arc::new("http://127.0.0.1:1/#token=x".into()),
+            Arc::new(crate::browser::EDITOR_URL.to_string()),
         );
-        let token = "test-token".to_string();
         let state = AppState {
             cmd_tx,
             sse_tx,
             stop_rx,
-            token: Arc::new(token.clone()),
-            port: 12345,
-            sessions: Arc::new(SessionRegistry::new()),
             shutdown,
         };
         Harness {
             router: build(state),
             worker,
-            token,
         }
     }
 
-    fn authed(uri: &str, token: &str, method: &str, body: Body) -> axum::http::Request<Body> {
+    /// Build a request with no authorization header, no cookie and no Host
+    /// header — the API must work with nothing but the method, path and body.
+    fn req(uri: &str, method: &str, body: Body) -> axum::http::Request<Body> {
         axum::http::Request::builder()
             .method(method)
             .uri(uri)
-            .header("host", "127.0.0.1:12345")
-            .header("authorization", format!("Bearer {token}"))
             .header("content-type", "application/json")
             .body(body)
             .unwrap()
@@ -564,12 +533,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_and_state_endpoints_work() {
+    async fn status_and_state_endpoints_work_without_credentials() {
         let h = harness();
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/status", &h.token, "GET", Body::empty()))
+            .oneshot(req("/api/status", "GET", Body::empty()))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -579,7 +548,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/state", &h.token, "GET", Body::empty()))
+            .oneshot(req("/api/state", "GET", Body::empty()))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -589,14 +558,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_ignores_host_authorization_and_cookie_headers() {
+        let h = harness();
+        // A bogus Host, bearer token and cookie must all be ignored: there is
+        // no Host validation and no credential check of any kind.
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/api/status")
+            .header("host", "evil.example:9999")
+            .header("authorization", "Bearer definitely-not-a-token")
+            .header("cookie", "zf_session=bogus")
+            .body(Body::empty())
+            .unwrap();
+        let res = h.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn session_route_is_removed() {
+        let h = harness();
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/session", "POST", Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn profile_crud_endpoints_work() {
         let h = harness();
         let res = h
             .router
             .clone()
-            .oneshot(authed(
+            .oneshot(req(
                 "/api/profiles",
-                &h.token,
                 "POST",
                 Body::from(r#"{"name":"Gaming"}"#),
             ))
@@ -607,7 +604,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/profiles", &h.token, "GET", Body::empty()))
+            .oneshot(req("/api/profiles", "GET", Body::empty()))
             .await
             .unwrap();
         let json = body_json(res).await;
@@ -625,9 +622,8 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed(
+            .oneshot(req(
                 "/api/zones",
-                &h.token,
                 "POST",
                 Body::from(
                     r#"{"id":0,"label":"A","exe":"a.exe","path":"","x":0,"y":0,"w":50,"h":100}"#,
@@ -640,7 +636,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/apply", &h.token, "POST", Body::empty()))
+            .oneshot(req("/api/apply", "POST", Body::empty()))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::CONFLICT);
@@ -654,33 +650,18 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/disable", &h.token, "POST", Body::empty()))
+            .oneshot(req("/api/disable", "POST", Body::empty()))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/apply", &h.token, "POST", Body::empty()))
+            .oneshot(req("/api/apply", "POST", Body::empty()))
             .await
             .unwrap();
         let json = body_json(res).await;
         assert_eq!(json["inactive"], true);
-    }
-
-    #[tokio::test]
-    async fn session_sets_cookie() {
-        let h = harness();
-        let res = h
-            .router
-            .clone()
-            .oneshot(authed("/api/session", &h.token, "POST", Body::empty()))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let cookie = res.headers()[SET_COOKIE].to_str().unwrap();
-        assert!(cookie.contains("HttpOnly"));
-        assert!(cookie.contains("SameSite=Strict"));
     }
 
     #[tokio::test]
@@ -689,9 +670,8 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed(
+            .oneshot(req(
                 "/api/app-options",
-                &h.token,
                 "PUT",
                 Body::from(r#"{"auto_start":false,"close_action":"exit","gap":12}"#),
             ))
@@ -704,7 +684,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/state", &h.token, "GET", Body::empty()))
+            .oneshot(req("/api/state", "GET", Body::empty()))
             .await
             .unwrap();
         let json = body_json(res).await;
@@ -720,12 +700,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed(
-                "/api/zones/merge",
-                &h.token,
-                "POST",
-                Body::from("{}"),
-            ))
+            .oneshot(req("/api/zones/merge", "POST", Body::from("{}")))
             .await
             .unwrap();
         assert_ne!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
@@ -740,9 +715,8 @@ mod tests {
             let res = h
                 .router
                 .clone()
-                .oneshot(authed(
+                .oneshot(req(
                     "/api/zones",
-                    &h.token,
                     "POST",
                     Body::from(format!(
                         r#"{{"id":0,"label":"{label}","exe":"z.exe","path":"","x":{x},"y":0,"w":50,"h":100}}"#
@@ -758,9 +732,8 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed(
+            .oneshot(req(
                 "/api/zones/batch",
-                &h.token,
                 "PUT",
                 Body::from(
                     r#"[{"id":1,"x":0,"y":0,"w":30,"h":100},{"id":2,"x":30,"y":0,"w":70,"h":100}]"#,
@@ -776,7 +749,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/undo", &h.token, "POST", Body::empty()))
+            .oneshot(req("/api/undo", "POST", Body::empty()))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -784,7 +757,7 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed("/api/state", &h.token, "GET", Body::empty()))
+            .oneshot(req("/api/state", "GET", Body::empty()))
             .await
             .unwrap();
         let json = body_json(res).await;
@@ -801,19 +774,14 @@ mod tests {
         let res = h
             .router
             .clone()
-            .oneshot(authed(
-                "/api/does-not-exist",
-                &h.token,
-                "GET",
-                Body::empty(),
-            ))
+            .oneshot(req("/api/does-not-exist", "GET", Body::empty()))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn static_fallback_is_public() {
+    async fn static_fallback_is_public_without_token() {
         let h = harness();
         let req = axum::http::Request::builder()
             .uri("/")
@@ -821,5 +789,10 @@ mod tests {
             .unwrap();
         let res = h.router.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers()["content-type"], "text/html; charset=utf-8");
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("ZoneFlow"));
     }
 }

@@ -2,10 +2,8 @@
  * Typed client for the ZoneFlow loopback API.
  *
  * Wire types mirror `src/api/dto.rs` and `src/config.rs` exactly — field names
- * are snake_case because that is what serde emits. The bootstrap exchanges the
- * one-time token from `location.hash` for an HttpOnly `zf_session` cookie; every
- * later request is same-origin and relies on that cookie (EventSource cannot
- * set a bearer header).
+ * are snake_case because that is what serde emits. The API is open: requests
+ * are plain same-origin fetches with no token, cookie or bootstrap phase.
  */
 
 /* ------------------------------- wire types ------------------------------- */
@@ -229,133 +227,16 @@ export class ApiError extends Error {
   }
 }
 
-/* ------------------------------- bootstrap -------------------------------- */
-
-export type BootstrapState =
-  | 'idle'
-  | 'exchanging'
-  | 'ready'
-  | 'missing-token'
-  | 'rejected'
-  | 'failed';
-
-let bootstrapState: BootstrapState = 'idle';
-let bootstrapMessage = '';
-let exchangeAttempts = 0;
-
-export function getBootstrapState(): BootstrapState {
-  return bootstrapState;
-}
-
-export function getBootstrapMessage(): string {
-  return bootstrapMessage;
-}
-
-/** A retry is offered only after the first failed exchange (plan §1.1). */
-export function canRetryBootstrap(): boolean {
-  return bootstrapState === 'failed' && exchangeAttempts < 2;
-}
-
-function readTokenFromHash(): string | null {
-  const hash = window.location.hash.replace(/^#/, '');
-  if (!hash) return null;
-  return new URLSearchParams(hash).get('token');
-}
+/* ------------------------------ initial view ------------------------------ */
 
 /**
  * Read the requested initial view from the URL fragment. The tray's
- * "Settings…" item opens `#token=…&view=settings`; callers must read this
- * BEFORE bootstrap() clears the fragment on success.
+ * "Settings…" item opens `#view=settings`; the app reads this on startup.
  */
 export function readViewFromHash(): string | null {
   const hash = window.location.hash.replace(/^#/, '');
   if (!hash) return null;
   return new URLSearchParams(hash).get('view');
-}
-
-/**
- * Exchange the fragment token for the session cookie. The fragment is cleared
- * only on success so a retry can re-read it. Returns true when ready.
- */
-export async function bootstrap(): Promise<boolean> {
-  const token = readTokenFromHash();
-  if (!token) {
-    // No fragment token: this is either a page reload after a successful
-    // bootstrap (fragment was cleared by replaceState) or a bare URL. The
-    // session cookie survives a reload, so check it before declaring failure.
-    // A 200 means the session is still valid — proceed without a token.
-    try {
-      const probe = await fetch('/api/status', {
-        method: 'GET',
-        credentials: 'same-origin',
-      });
-      if (probe.ok) {
-        bootstrapState = 'ready';
-        bootstrapMessage = '';
-        return true;
-      }
-    } catch {
-      // Network error — fall through to the missing-token message below.
-    }
-    bootstrapState = 'missing-token';
-    bootstrapMessage = 'Open the editor from the ZoneFlow tray menu.';
-    return false;
-  }
-
-  exchangeAttempts += 1;
-  bootstrapState = 'exchanging';
-  bootstrapMessage = '';
-
-  try {
-    const response = await fetch('/api/session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    if (response.status === 403) {
-      bootstrapState = 'rejected';
-      bootstrapMessage = 'Session rejected — reopen from the tray.';
-      return false;
-    }
-    if (!response.ok) {
-      bootstrapState = 'failed';
-      bootstrapMessage =
-        exchangeAttempts < 2
-          ? 'Could not open a session. Retry, or reopen from the tray.'
-          : 'Could not open a session. Reopen the editor from the ZoneFlow tray menu.';
-      return false;
-    }
-
-    // Success: drop the token from the address bar/fragment.
-    window.history.replaceState(null, '', window.location.pathname);
-    bootstrapState = 'ready';
-    bootstrapMessage = '';
-    return true;
-  } catch (error) {
-    bootstrapState = 'failed';
-    const detail = error instanceof Error ? error.message : String(error);
-    bootstrapMessage =
-      exchangeAttempts < 2
-        ? `Session exchange failed (${detail}). Retry, or reopen from the tray.`
-        : `Session exchange failed (${detail}). Reopen the editor from the ZoneFlow tray menu.`;
-    return false;
-  }
-}
-
-/** Retry the exchange once, then instruct the user to reopen from the tray. */
-export async function retryBootstrap(): Promise<boolean> {
-  if (!canRetryBootstrap()) return false;
-  return bootstrap();
-}
-
-/* ------------------------------ session expiry ---------------------------- */
-
-let sessionExpiredHandler: (() => void) | null = null;
-
-/** Register the store callback invoked on any 401 after bootstrap. */
-export function setSessionExpiredHandler(handler: () => void): void {
-  sessionExpiredHandler = handler;
 }
 
 /* ------------------------------ fetch wrapper ----------------------------- */
@@ -364,7 +245,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const hasBody = init.body !== undefined && init.body !== null;
   const response = await fetch(path, {
     ...init,
-    credentials: 'same-origin',
     headers: {
       ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...(init.headers ?? {}),
@@ -383,12 +263,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     }
     const code = detail?.code ?? 'http_error';
     const message = detail?.message ?? `Request failed (${response.status})`;
-
-    // 401 after bootstrap means the process restarted (per-launch token).
-    // Keep local state/draft; surface a banner rather than clearing anything.
-    if (response.status === 401) {
-      sessionExpiredHandler?.();
-    }
 
     throw new ApiError(response.status, code, message);
   }

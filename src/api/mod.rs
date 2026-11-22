@@ -1,10 +1,12 @@
-//! HTTP API layer: router, DTOs, authoritative state, command worker, SSE and
-//! the loopback-only auth guard.
+//! HTTP API layer: router, DTOs, authoritative state, command worker and SSE.
+//!
+//! The `/api` sub-router is intentionally open: the server binds only the
+//! loopback interface and there is no token, cookie, bearer header or Host
+//! validation. Static assets are public via the fallback.
 
 pub mod commands;
 pub mod dto;
 pub mod events;
-pub mod middleware;
 pub mod routes;
 pub mod state;
 pub mod worker;
@@ -13,11 +15,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use axum::Router;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use tokio::sync::{broadcast, watch};
 
 use crate::native_loop::ShutdownHandle;
-use crate::session::SessionRegistry;
 
 /// State shared by every handler (cloned per request, so all fields are
 /// cheaply cloneable handles).
@@ -26,11 +27,8 @@ pub struct AppState {
     pub cmd_tx: mpsc::Sender<worker::Command>,
     pub sse_tx: broadcast::Sender<String>,
     pub stop_rx: watch::Receiver<bool>,
-    pub token: Arc<String>,
-    pub port: u16,
-    pub sessions: Arc<SessionRegistry>,
-    /// Reserved for direct shutdown signaling in Phase 5; Phase 1 routes
-    /// shutdown through the command worker so all triggers converge.
+    /// Reserved for direct shutdown signaling; Phase 1 routes shutdown through
+    /// the command worker so all triggers converge.
     #[allow(dead_code)]
     pub shutdown: ShutdownHandle,
 }
@@ -41,10 +39,6 @@ pub struct AppState {
 pub enum ApiError {
     /// 409 — D2 dirty draft; save or discard first.
     DirtyState,
-    /// 401 — no credentials supplied.
-    Unauthorized,
-    /// 403 — invalid token, invalid Host, or unknown session.
-    Forbidden,
     /// 400 — malformed or rejected input.
     BadRequest(String),
     /// 404 — named resource missing.
@@ -61,16 +55,6 @@ impl IntoResponse for ApiError {
                 "dirty_state",
                 "save or discard changes first".to_string(),
             ),
-            Self::Unauthorized => (
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "missing token".to_string(),
-            ),
-            Self::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "invalid token or host".to_string(),
-            ),
             Self::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m),
             Self::NotFound(w) => (StatusCode::NOT_FOUND, "not_found", format!("{w} not found")),
             Self::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, "internal", m),
@@ -80,8 +64,8 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Build the full router: `/api/*` sub-router with the auth guard, plus a
-/// fallback that serves embedded static assets (SPA).
+/// Build the full router: an open `/api/*` sub-router plus a fallback that
+/// serves embedded static assets (SPA).
 pub fn build_router(state: AppState) -> Router {
     routes::build(state)
 }
@@ -94,12 +78,6 @@ mod tests {
     fn api_error_status_and_envelope() {
         let cases = [
             (ApiError::DirtyState, StatusCode::CONFLICT, "dirty_state"),
-            (
-                ApiError::Unauthorized,
-                StatusCode::UNAUTHORIZED,
-                "unauthorized",
-            ),
-            (ApiError::Forbidden, StatusCode::FORBIDDEN, "forbidden"),
             (
                 ApiError::BadRequest("x".into()),
                 StatusCode::BAD_REQUEST,

@@ -1,9 +1,9 @@
 /**
  * Server-Sent Events transport (backend → UI).
  *
- * One EventSource per client, authenticated by the `zf_session` cookie. The
- * backend emits `{ "type": ..., "payload": ... }` frames; `state-changed` has an
- * empty payload and is a signal to re-fetch the full snapshot (state is a full
+ * One EventSource per client, with no credentials of any kind. The backend
+ * emits `{ "type": ..., "payload": ... }` frames; `state-changed` has an empty
+ * payload and is a signal to re-fetch the full snapshot (state is a full
  * refresh, so replaying deltas would be wrong).
  */
 
@@ -41,7 +41,7 @@ export function setSseEventHandler(handler: SseEventHandler | null): void {
   externalHandler = handler;
 }
 
-/** Re-fetch the authoritative snapshot. 401 is handled by the client hook. */
+/** Re-fetch the authoritative snapshot. */
 export async function refreshState(): Promise<void> {
   try {
     setSnapshot(await api.getState());
@@ -77,8 +77,7 @@ function onOpen(): void {
   noteSseOpen();
   // The backend only broadcasts on mutation and sends no replay on (re)connect,
   // so any change that happened while the stream was down would otherwise be
-  // missed. Re-fetch the authoritative snapshot on every open/reconnect; this
-  // also surfaces a session-expired 401 via the client's fetch hook.
+  // missed. Re-fetch the authoritative snapshot on every open/reconnect.
   void refreshState();
 }
 
@@ -102,13 +101,13 @@ function scheduleReconnect(): void {
 
 function connect(): void {
   if (stopped) return;
-  source = new EventSource('/api/events', { withCredentials: true });
+  source = new EventSource('/api/events');
   source.onopen = onOpen;
   source.onmessage = onMessage;
   source.onerror = onError;
 }
 
-/** Open the event stream. Call once after a successful bootstrap. */
+/** Open the event stream. Call once on startup. */
 export function startEvents(): void {
   stopped = false;
   setConnection('connecting');

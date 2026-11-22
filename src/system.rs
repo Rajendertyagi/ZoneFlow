@@ -27,6 +27,9 @@ pub enum Action {
     Exit,
     /// Tray "Open editor…" — launch the browser on the editor URL.
     OpenEditor,
+    /// Tray "Copy editor URL" — copy the fixed editor URL to the clipboard.
+    /// Handled on the main/native thread; never sent to the worker.
+    CopyEditorUrl,
     /// Tray "Disable layout" / "Enable layout" (D4 runtime toggle).
     ToggleEnabled,
     /// Tray profile click (D6): apply when enabled, select-only when disabled.
@@ -92,12 +95,19 @@ impl System {
         let i_toggle =
             MenuItem::with_id(MenuId::new("toggle_enabled"), "Disable layout", true, None);
         let i_open = MenuItem::with_id(MenuId::new("open_editor"), "Open editor…", true, None);
+        let i_copy = MenuItem::with_id(
+            MenuId::new("copy_editor_url"),
+            "Copy editor URL",
+            true,
+            None,
+        );
         let i_settings = MenuItem::with_id(MenuId::new("settings"), "Settings…", true, None);
         let i_retile = MenuItem::with_id(MenuId::new("retile"), "Re-tile now", true, None);
         let i_reload = MenuItem::with_id(MenuId::new("reload"), "Reload config", true, None);
         let i_exit = MenuItem::with_id(MenuId::new("exit"), "Exit", true, None);
         menu.append(&i_toggle)?;
         menu.append(&i_open)?;
+        menu.append(&i_copy)?;
         menu.append(&i_settings)?;
         menu.append(&i_retile)?;
         menu.append(&i_reload)?;
@@ -224,6 +234,7 @@ impl System {
             match id {
                 "toggle_enabled" => actions.push(Action::ToggleEnabled),
                 "open_editor" => actions.push(Action::OpenEditor),
+                "copy_editor_url" => actions.push(Action::CopyEditorUrl),
                 "settings" => actions.push(Action::ShowSettings),
                 "retile" => actions.push(Action::Retile),
                 "reload" => actions.push(Action::Reload),

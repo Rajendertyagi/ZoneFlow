@@ -7,7 +7,8 @@
 #   Background      - Rust backend only, browser closed. Run with the final
 #                     release exe. This is the always-on workload.
 #   EditorOpen      - Rust backend + browser with the editor loaded. Requires
-#                     -Url (the tokenised editor URL) and a running frontend.
+#                     -Url (the editor URL, e.g. http://127.0.0.1:4000/) and a
+#                     running frontend.
 #   PointerActivity - EditorOpen plus 20s of synthetic cursor movement. This is
 #                     NOT an editing workload: it does not drag or resize a zone.
 #                     Requires -Url and a running frontend.
@@ -39,7 +40,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($Mode -ne "Background" -and [string]::IsNullOrWhiteSpace($Url)) {
-    throw "-Url is required for $Mode (the tokenised editor URL)."
+    throw "-Url is required for $Mode (the editor URL, e.g. http://127.0.0.1:4000/)."
 }
 
 $exeFull = (Resolve-Path $Exe).Path

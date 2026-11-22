@@ -1,15 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { CircleCheck, CircleAlert, Info, TriangleAlert, X } from '@lucide/svelte';
-  import Button from '$lib/components/ui/button.svelte';
-  import {
-    bootstrap,
-    canRetryBootstrap,
-    getBootstrapMessage,
-    readViewFromHash,
-    retryBootstrap,
-    setSessionExpiredHandler,
-  } from '$lib/api/client';
+  import { readViewFromHash } from '$lib/api/client';
   import {
     refreshState,
     setSseEventHandler,
@@ -17,7 +9,7 @@
     stopEvents,
     type SseEvent,
   } from '$lib/api/events';
-  import { isDirty, markSessionExpired, store } from '$lib/state/app.svelte';
+  import { isDirty, store } from '$lib/state/app.svelte';
   import {
     dismissToast,
     navigate,
@@ -37,11 +29,6 @@
   import HotkeysView from '$lib/views/HotkeysView.svelte';
   import SettingsView from '$lib/views/SettingsView.svelte';
 
-  type Phase = 'loading' | 'ready' | 'error';
-
-  let phase = $state<Phase>('loading');
-  let bootstrapMessage = $state('');
-  let retryAvailable = $state(false);
   let wizardOpen = $state(false);
   let pickerOpen = $state(false);
   let pickerZoneId = $state<number | null>(null);
@@ -78,10 +65,9 @@
   }
 
   onMount(() => {
-    setSessionExpiredHandler(markSessionExpired);
     setSseEventHandler(onSseEvent);
     window.addEventListener('beforeunload', onBeforeUnload);
-    void initialize();
+    initialize();
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload);
       setSseEventHandler(null);
@@ -89,43 +75,18 @@
     };
   });
 
-  /** Apply a view requested via `#token=…&view=…` (tray "Settings…"). */
+  /** Apply a view requested via `#view=…` (tray "Settings…"). */
   function applyInitialView(view: string | null): void {
     if (view === 'home' || view === 'editor' || view === 'hotkeys' || view === 'settings') {
       navigate(view);
     }
   }
 
-  async function initialize(): Promise<void> {
-    // Read the requested view before bootstrap clears the fragment.
-    const requestedView = readViewFromHash();
-    if (!(await bootstrap())) {
-      showBootstrapError();
-      return;
-    }
-    applyInitialView(requestedView);
-    phase = 'ready';
-    await refreshState();
+  /** Load directly: no login, bootstrap or token exchange phase. */
+  function initialize(): void {
+    applyInitialView(readViewFromHash());
+    void refreshState();
     startEvents();
-  }
-
-  async function retry(): Promise<void> {
-    phase = 'loading';
-    const requestedView = readViewFromHash();
-    if (!(await retryBootstrap())) {
-      showBootstrapError();
-      return;
-    }
-    applyInitialView(requestedView);
-    phase = 'ready';
-    await refreshState();
-    startEvents();
-  }
-
-  function showBootstrapError(): void {
-    phase = 'error';
-    bootstrapMessage = getBootstrapMessage();
-    retryAvailable = canRetryBootstrap();
   }
 
   function openPicker(zoneId: number | null): void {
@@ -144,33 +105,13 @@
 </svelte:head>
 
 <div class="flex h-screen min-h-[560px] flex-col overflow-hidden bg-zf-bg text-zf-text">
-  {#if phase === 'error'}
-    <div class="p-6">
-      <div role="alert" class="max-w-xl rounded-md border border-zf-error/40 bg-zf-error/10 p-4 text-sm text-zf-error">
-        <p class="font-medium">Session unavailable</p>
-        <p class="mt-1 text-zf-text/80">{bootstrapMessage}</p>
-        {#if retryAvailable}
-          <div class="mt-3"><Button size="sm" onclick={() => void retry()}>Retry</Button></div>
-        {/if}
-      </div>
-    </div>
-  {:else if phase === 'loading'}
-    <div class="flex flex-1 items-center justify-center">
-      <div class="rounded-md border border-zf-border bg-zf-panel px-6 py-4 text-sm text-zf-muted">Opening session…</div>
-    </div>
-  {:else}
-    <TopBar onclose={() => (closeOpen = true)} />
+  <TopBar onclose={() => (closeOpen = true)} />
 
-    {#if store.authError}
-      <div role="alert" class="mx-5 mt-3 rounded-md border border-zf-error/40 bg-zf-error/10 px-4 py-2 text-sm text-zf-error">
-        {store.authError}
-      </div>
-    {/if}
-    {#if store.connection === 'lost'}
-      <div role="alert" class="mx-5 mt-3 rounded-md border border-zf-warn/40 bg-zf-warn/10 px-4 py-2 text-sm text-zf-warn">
-        Connection lost — showing the last known state.
-      </div>
-    {/if}
+  {#if store.connection === 'lost'}
+    <div role="alert" class="mx-5 mt-3 rounded-md border border-zf-warn/40 bg-zf-warn/10 px-4 py-2 text-sm text-zf-warn">
+      Connection lost — showing the last known state.
+    </div>
+  {/if}
 
     <div class="min-h-0 flex-1">
       {#if ui.view === 'home'}
@@ -222,5 +163,4 @@
         </div>
       {/each}
     </div>
-  {/if}
 </div>

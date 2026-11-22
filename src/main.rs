@@ -1,11 +1,12 @@
 mod api;
 mod apps;
 mod autostart;
+mod browser;
+mod clipboard;
 mod config;
 mod engine;
 mod engine_core;
 mod native_loop;
-mod session;
 mod system;
 mod web;
 
@@ -18,12 +19,6 @@ use std::sync::{mpsc, Arc, OnceLock};
 use tokio::sync::{broadcast, oneshot, watch};
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::Threading::CreateEventW;
-
-/// Sent by the Tokio thread to main once the listener is bound.
-struct Bound {
-    port: u16,
-    token: String,
-}
 
 fn init_logging() {
     // Logging to a file next to the exe; level via RUST_LOG, default "info".
@@ -65,11 +60,12 @@ fn main() {
     init_logging();
 
     let cfg = config::load_config();
-    let token = session::generate_token();
 
     // --- channels (architecture §3.2 step 1) ---
     let (cmd_tx, cmd_rx) = mpsc::channel::<api::worker::Command>();
-    let (bound_tx, bound_rx) = oneshot::channel::<Bound>();
+    // The HTTP thread reports `Ok(())` once the fixed port is bound, or an
+    // `Err(message)` describing why it could not bind. There is no fallback.
+    let (bind_tx, bind_rx) = oneshot::channel::<Result<(), String>>();
     let (axum_shutdown_tx, axum_shutdown_rx) = oneshot::channel::<()>();
     let (sse_tx, _sse_rx) = broadcast::channel::<String>(256);
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -87,62 +83,79 @@ fn main() {
     );
 
     // --- thread 3: Tokio current_thread runtime (§3.2 step 3) ---
-    let server_token = token.clone();
     let server_cmd_tx = cmd_tx.clone();
     let server_sse_tx = sse_tx.clone();
     let server_shutdown = shutdown.clone();
-    let server = std::thread::Builder::new()
-        .name("zoneflow-http".into())
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build current_thread Tokio runtime");
-            runtime.block_on(async move {
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                    .await
-                    .expect("failed to bind 127.0.0.1:0");
-                let port = listener.local_addr().expect("local_addr failed").port();
-                // Publish the bound port + token before awaiting serve.
-                let _ = bound_tx.send(Bound {
-                    port,
-                    token: server_token.clone(),
+    let server =
+        std::thread::Builder::new()
+            .name("zoneflow-http".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build current_thread Tokio runtime");
+                runtime.block_on(async move {
+                    let listener =
+                        match tokio::net::TcpListener::bind(("127.0.0.1", browser::EDITOR_PORT))
+                            .await
+                        {
+                            Ok(listener) => listener,
+                            Err(e) => {
+                                let message =
+                                    format!("cannot bind 127.0.0.1:{}: {e}", browser::EDITOR_PORT);
+                                let _ = bind_tx.send(Err(message));
+                                return;
+                            }
+                        };
+                    // Publish readiness before awaiting serve. The port is fixed,
+                    // so no address needs to be sent back to main.
+                    let _ = bind_tx.send(Ok(()));
+
+                    let state = AppState {
+                        cmd_tx: server_cmd_tx,
+                        sse_tx: server_sse_tx,
+                        stop_rx,
+                        shutdown: server_shutdown,
+                    };
+                    let app = api::build_router(state);
+                    if let Err(e) = axum::serve(listener, app)
+                        .with_graceful_shutdown(async move {
+                            let _ = axum_shutdown_rx.await;
+                        })
+                        .await
+                    {
+                        tracing::warn!(error = %e, "axum server stopped with an error");
+                    }
                 });
+            })
+            .expect("failed to spawn HTTP thread");
 
-                let sessions = Arc::new(session::SessionRegistry::new());
-                session::spawn_reaper(sessions.clone());
-                let state = AppState {
-                    cmd_tx: server_cmd_tx,
-                    sse_tx: server_sse_tx,
-                    stop_rx,
-                    token: Arc::new(server_token),
-                    port,
-                    sessions,
-                    shutdown: server_shutdown,
-                };
-                let app = api::build_router(state);
-                if let Err(e) = axum::serve(listener, app)
-                    .with_graceful_shutdown(async move {
-                        let _ = axum_shutdown_rx.await;
-                    })
-                    .await
-                {
-                    tracing::warn!(error = %e, "axum server stopped with an error");
-                }
-            });
-        })
-        .expect("failed to spawn HTTP thread");
+    // Main blocks until the fixed port is bound (or binding fails). A failure
+    // is fatal: never start an inaccessible instance on a random port.
+    match bind_rx.blocking_recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(message)) => {
+            tracing::error!("ZoneFlow startup failed: {message}");
+            tracing::error!(
+                "Port {} is required; refusing to fall back to a random port.",
+                browser::EDITOR_PORT
+            );
+            let _ = server.join();
+            std::process::exit(1);
+        }
+        Err(_) => {
+            tracing::error!("HTTP thread did not report its bind result");
+            let _ = server.join();
+            std::process::exit(1);
+        }
+    }
+    tracing::info!(
+        port = browser::EDITOR_PORT,
+        "HTTP server bound on fixed port"
+    );
 
-    // Main blocks on the bound oneshot (bounded by the thread's own startup).
-    let bound = bound_rx.blocking_recv().expect("HTTP thread did not bind");
-    let editor_url = Arc::new(format!(
-        "http://127.0.0.1:{}/#token={}",
-        bound.port, bound.token
-    ));
-    tracing::info!(port = bound.port, "HTTP server bound");
-
-    // --- thread 2: command worker (§3.2 step 2, spawned after bind so it can
-    // receive the editor URL) ---
+    // --- thread 2: command worker (spawned after the bind succeeds) ---
+    let editor_url = Arc::new(browser::EDITOR_URL.to_string());
     let worker = api::worker::spawn_worker(
         cmd_rx,
         cfg.clone(),

@@ -117,6 +117,8 @@ mod tests {
             }),
         );
 
+        // Test-only ephemeral listener. The application itself always binds
+        // the fixed port defined in `browser::EDITOR_PORT` (4000).
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {

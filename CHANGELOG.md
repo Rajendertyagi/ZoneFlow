@@ -6,11 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security model simplification (2026-11-22)
+
+- **Removed** all authentication and session machinery: the per-launch 256-bit token, `POST /api/session`, `zf_session` cookies, bearer-token validation, exact `Host` validation, the `/api` auth middleware, `src/session.rs`, the `getrandom` dependency, and the frontend bootstrap/retry/session-expired screens. The `/api` sub-router is now open; loopback binding is the only boundary. No Origin/CSRF/CORS or other replacement security was added.
+- **Changed** the HTTP server to the fixed port `127.0.0.1:4000`. If the port is occupied, startup logs a clear error and exits with code 1 — there is no random-port fallback. The tray "Open editor…" action and the new "Copy editor URL" action both use `http://127.0.0.1:4000/`.
+- **Changed** the SPA to load directly: it fetches state and starts SSE on startup with no login/bootstrap phase. `#view=settings` is preserved for the tray Settings action.
+
 ### Implementation — headless Rust + Axum + Svelte (Phases 1–6, 2026-11-22)
 
 The architecture first recorded as a decision in `docs/plans/zoneflow-rust-axum-svelte-architecture.md` is now the shipped implementation. Phases 1–6 are complete; Phase 7 (release hardening) is pending.
 
-- **Added** a headless Rust background process: Axum 0.8.9 HTTP API on `127.0.0.1:0`, Tokio `current_thread` runtime, SSE events, per-launch 256-bit session token with `HttpOnly; SameSite=Strict` cookie, Host validation and hardening headers. Three long-lived threads: main/native (tray, hotkeys, message loop, layered overlay), command worker (authoritative state, history, engine calls) and Tokio (HTTP + embedded assets).
+- **Added** a headless Rust background process: Axum 0.8.9 HTTP API on loopback, Tokio `current_thread` runtime and SSE events. Three long-lived threads: main/native (tray, hotkeys, message loop, layered overlay), command worker (authoritative state, history, engine calls) and Tokio (HTTP + embedded assets). The original token/cookie/Host guard was removed in the security-model simplification above.
 - **Added** a Svelte 5 SPA (Vite 8, Tailwind 4, shadcn-svelte, Bits UI, Paneforge, Lucide icons) with an SVG zone canvas, left rail, contextual inspector, wizard/picker/confirmation dialogs, Hotkeys and Settings views. Built to `frontend/dist/` at build time and embedded with `rust-embed`; no separate server and no Node/Bun at runtime.
 - **Added** a native message loop with a hidden message-only window, payload queue, 100 ms safety timer, manual-reset shutdown event, ordered shutdown sequence, dynamic tray menu with applied/selected markers, D2 native confirmation dialog, and a native layered drag overlay with `GetAsyncKeyState` gesture detection (150 ms idle → 16 ms active).
 - **Added** full API coverage of the frozen D1–D6 product decisions (dirty-state guards, real launch execution, distinct load/select/apply, disable/enable, preview) with 125 inline unit tests plus 3 config round-trip integration tests; 36 frontend tests.

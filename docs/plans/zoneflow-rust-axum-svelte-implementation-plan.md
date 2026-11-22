@@ -20,7 +20,6 @@ tokio-stream = { version = "0.1.19", features = ["sync"] }   # BroadcastStream
 futures-util = "0.3.34"                                      # only if used directly
 serde = { version = "1", features = ["derive"] }             # already present
 serde_json = "1"                                             # already present
-getrandom = "0.3.4"                                          # token (MSRV 1.63)
 rust-embed = "8.14.0"                                        # default features; no axum-ex
 open = "5.4.5"                                               # no insecure feature
 
@@ -37,13 +36,12 @@ http-body-util = "0.1.5"                                     # BodyExt::collect
 
 ```rust
 #[derive(Debug)]
-enum ApiError { DirtyState, Unauthorized, Forbidden, NotFound(String), Internal(String) }
+enum ApiError { DirtyState, BadRequest(String), NotFound(String), Internal(String) }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code, msg) = match self {
             ApiError::DirtyState  => (StatusCode::CONFLICT, "dirty_state", "save or discard changes first".into()),
-            ApiError::Unauthorized=> (StatusCode::UNAUTHORIZED, "unauthorized", "missing token".into()),
-            ApiError::Forbidden   => (StatusCode::FORBIDDEN, "forbidden", "invalid token or host".into()),
+            ApiError::BadRequest(m)=> (StatusCode::BAD_REQUEST, "bad_request", m),
             ApiError::NotFound(w) => (StatusCode::NOT_FOUND, "not_found", format!("{w} not found")),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, "internal", m),
         };
@@ -52,24 +50,19 @@ impl IntoResponse for ApiError {
 }
 ```
 
-**Auth/Host guard:** `middleware::from_fn_with_state` + `route_layer` on the `/api` sub-router only (added after routes). Accept bearer header (bootstrap/tests) **or** `zf_session` cookie (fetch/EventSource). Validate `Host` equals `127.0.0.1:<port>`. Static assets are public via `.fallback(static_file)`.
+**Open API:** there is no auth/Host guard. The `/api` sub-router has no `route_layer`; requests need no bearer header, cookie or specific `Host`. Static assets are public via `.fallback(static_handler)`. The only boundary is the fixed loopback bind in `main`.
 
-**Bootstrap sequence and failure behavior:**
+**Direct load (no bootstrap):**
 
-1. Rust generates 32 bytes with `getrandom::fill`, URL-safe encodes, opens `http://127.0.0.1:<port>/#token=<token>` (fragment, never query).
-2. SPA reads `location.hash`, calls `POST /api/session` with `Authorization: Bearer <token>`; server sets `HttpOnly; SameSite=Strict` cookie.
-3. On success SPA calls `history.replaceState(null, '', location.pathname)` to clear the fragment.
-4. fetch and `EventSource('/api/events', { withCredentials: true })` use the cookie.
+1. The editor URL is the fixed `http://127.0.0.1:4000/` — no token, no fragment secret.
+2. On startup the SPA reads only `#view=…` (used by the tray Settings action), calls `GET /api/state` and opens `EventSource('/api/events')` with no credentials.
+3. The app renders immediately; there is no login, bootstrap, retry or session-expired screen.
 
 | Condition | Behavior |
 |---|---|
-| No fragment / missing token | Error page: "Open the editor from the ZoneFlow tray menu." No `/api/session` call. |
-| Invalid token | 403; "Session rejected — reopen from the tray." No retry loop. |
-| Failed exchange (network/server) | Retry button re-reads hash and retries once; then instruct reopen. |
-| Expired/invalid session later | 401; session-expired banner with "Reopen from tray"; do not clear draft. |
-| SSE disconnect | `EventSource` reconnects; cookie authenticates each reconnect; after repeated failures show "connection lost", keep local state. |
-
-Token is per-launch; "expired" means the process restarted (old cookie no longer matches).
+| Fresh browser / reload | Loads the UI and API immediately; no token or cookie needed. |
+| SSE disconnect | `EventSource` reconnects automatically; after repeated failures show "connection lost", keep local state. |
+| Port 4000 occupied | Startup logs a clear error and exits with code 1; no random-port fallback. |
 
 **SSE:** `Sse::new(BroadcastStream::new(rx).filter_map(...)).keep_alive(KeepAlive::default())` (15 s default). One `EventSource` per client. `tokio-stream` needs feature `sync`. Each handler must end its stream on shutdown so graceful shutdown cannot hang:
 
@@ -95,9 +88,9 @@ use tokio::runtime::Builder;
 let server = std::thread::spawn(move || {
     let rt = Builder::new_current_thread().enable_all().build().unwrap(); // enable_all = enable_io + enable_time
     rt.block_on(async move {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();   // read BEFORE serve moves the listener
-        bound_tx.send(Bound { port, token }).unwrap();
+        // Fixed port; a bind failure is reported and exits — never a random port.
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 4000)).await.unwrap();
+        bound_tx.send(Ok(())).unwrap();
         axum::serve(listener, app)
             .with_graceful_shutdown(async { let _ = axum_shutdown_rx.await; })
             .await.unwrap();
@@ -187,7 +180,8 @@ Node ≥20.19 is build-time only; `dist/` is plain static HTML/JS/CSS. Svelte 5 
 - `api/state.rs`: `Inner { draft: AppConfig, last_saved_json: String, applied_profile: String, layout_enabled: bool, selected_zone: i32, history: Vec<Snapshot>, hindex: usize, logs: VecDeque<LogLine> }`.
 - `api/worker.rs`: `Command { payload: CommandPayload, reply: oneshot::Sender<Result<Value, ApiError>> }`; `CommandPayload` covers every §5 operation plus `Action` and `MoveWindow` from native.
 - `native_loop.rs`: `NativeMessage` enum (`RebuildMenu`, `SetChecked`, `SetToggleLabel`, `ReregisterHotkeys`, `ShowOverlay`, `HideOverlay`, `Shutdown`); `NativeUpdate` is the worker→native variant.
-- `session.rs`: token, `HashSet` of session ids, SSE subscriber registry, 60 s reaper.
+- `browser.rs`: fixed `EDITOR_PORT` / `EDITOR_URL` constants and `open_editor_url` (browser launch on a short-lived thread).
+- `clipboard.rs`: Win32 `CF_UNICODETEXT` helper for the tray "Copy editor URL" action (handled on the native thread).
 
 ---
 
@@ -197,8 +191,8 @@ Node ≥20.19 is build-time only; `dist/` is plain static HTML/JS/CSS. Svelte 5 
 frontend/src/
   App.svelte                     root shell + view switching
   lib/
-    api/client.ts                fetch wrapper; bootstrap; cookie session; typed DTOs
-    api/events.ts                EventSource(withCredentials) + reconnect
+    api/client.ts                fetch wrapper; typed DTOs; #view fragment reader
+    api/events.ts                EventSource (no credentials) + reconnect
     state/app.svelte.ts          exported $state object; $derived dirty; accessors
     components/
       TopBar.svelte  StatusBar.svelte
@@ -220,16 +214,16 @@ egui dependencies were removed in Phase 6 (the tasks below were executed while t
 | Task | Files | Responsibility | Verification |
 |---|---|---|---|
 | B1 | `api/state.rs`, `api/commands.rs`, `api/worker.rs`, `api/dto.rs` | Authoritative state, command worker, D1–D6 command logic, D2 dirty contract | Unit tests per command; dirty/clean × discard/cancel matrix; slow command does not block unrelated request |
-| B2 | `api/mod.rs`, `api/routes.rs` | Router, all §5 endpoints incl. `/api/shutdown`, ephemeral port, SSE-close watch + graceful shutdown | `oneshot` tests for every endpoint (status + JSON), 401/403/409; test that SSE stream ends on `send_replace(true)` so `serve` returns |
-| B3 | `api/middleware.rs` | Token generation, Host validation, session cookie, response headers | Missing token 401, bad token 403, bad Host 403, valid 200 |
-| B4 | `api/events.rs` | SSE broadcast, keep-alive, session reaper | Two subscribers receive one event; lagged subscriber skips |
+| B2 | `api/mod.rs`, `api/routes.rs` | Router, all §5 endpoints incl. `/api/shutdown`, fixed port 4000, SSE-close watch + graceful shutdown | `oneshot` tests for every endpoint (status + JSON) with no headers/cookies, 409; bogus Host/authorization/cookie ignored; `/api/session` 404; test that SSE stream ends on `send_replace(true)` so `serve` returns |
+| B3 | `browser.rs`, `clipboard.rs` | Fixed editor URL/port constants, browser launch, Win32 clipboard helper | URL matches port 4000; UTF-16 clipboard encoding; no auth middleware exists |
+| B4 | `api/events.rs` | SSE broadcast, keep-alive | Two subscribers receive one event; lagged subscriber skips |
 | B5 | `web/assets.rs` | rust-embed static handler, Content-Type, SPA fallback | `/` → index.html; `/assets/x.js` → JS type; missing asset 404 |
-| B6 | `session.rs` | Browser launch (`open::that_detached` via `spawn_blocking`), session lifecycle | Session created/reaped; browser close does not stop Rust (manual) |
+| B6 | `browser.rs` | Browser launch (`open::that_detached` on a short-lived thread) | Browser close does not stop Rust (manual) |
 | B7 | `native_loop.rs` (overlay part) | Overlay layered window on main, `UpdateLayeredWindow` per-zone alpha, `GetAsyncKeyState` gesture detection with variable `MsgWaitForMultipleObjectsEx` timeout (150 ms idle → 16 ms active) | Manual: start Ctrl+drag while idle over another app, overlay appears, tracks, releases; click-through, no taskbar entry; idle CPU negligible (not zero) |
 | B8 | `main.rs`, `native_loop.rs` | Main=native thread, message window, queue, safety timer ID 1, manual-reset shutdown event, startup/shutdown per architecture §3.6, reverse updates | Native-loop unit tests (wake-up, modal-dialog message, safety timer, shutdown ordering, event fallback when PostMessageW fails); manual tray/hotkey/shutdown with all threads joined |
-| B9 | `system.rs`, `native_loop.rs` | Dynamic tray menu, applied/selected markers, D2 native dialog, hotkey re-registration | Menu rebuild after CRUD; checkmark; D2 matrix; Disable/Enable; Open editor/Settings/Exit |
+| B9 | `system.rs`, `native_loop.rs` | Dynamic tray menu, applied/selected markers, D2 native dialog, hotkey re-registration, Copy editor URL | Menu rebuild after CRUD; checkmark; D2 matrix; Disable/Enable; Open editor/Copy editor URL/Settings/Exit |
 | F1 | `frontend/` scaffold | Vite/Svelte/Tailwind/shadcn config, scripts | `npm run check` clean; `npm run build` emits `dist/`; no Node needed to serve |
-| F2 | `api/client.ts`, `api/events.ts`, `state/app.svelte.ts` | Bootstrap, cookie session, SSE, mirrored state, dirty flag | Store reactivity; dirty flag; SSE reconnect; auth failure paths |
+| F2 | `api/client.ts`, `api/events.ts`, `state/app.svelte.ts` | Direct load, SSE, mirrored state, dirty flag | Store reactivity; dirty flag; SSE reconnect; no auth screens |
 | F3 | `App.svelte`, TopBar, StatusBar, LeftRail, Inspector | Three-pane shell, four status dimensions, contextual inspector | No clipping at 1280×720/1920×1080/maximized; rails collapsible |
 | F4 | Canvas components | SVG zone editor, pointer interactions, snap guides, DnD, context menu, undo/redo | All canvas journeys; geometry matches `engine_core`; real drag functional test |
 | F5 | dialogs, Inspector tabs | Wizard, picker, D2/D3 confirmations, close dialog, console | Full journey; D1–D6; no data loss |
@@ -245,7 +239,7 @@ egui dependencies were removed in Phase 6 (the tasks below were executed while t
 | tokio | 1.54.1 | Async runtime | `rt,macros,net,sync,time`; `current_thread` | No | **Add** (no `rt-multi-thread`/`full`) |
 | rust-embed | 8.14.0 | Embed `dist/` | defaults | No | **Add** (no `axum-ex`) |
 | open | 5.4.5 | Browser launch | none; no `insecure` | No | **Add** |
-| getrandom | 0.3.4 | Token | none on Windows | No | **Add** |
+| getrandom | 0.3.4 | Token (removed) | — | No | **Removed** — no token generation |
 | tokio-stream | 0.1.19 | `BroadcastStream` | `sync` | No | **Add** |
 | futures-util | 0.3.34 | StreamExt if used directly | defaults | Transitive via axum | Declare only if used |
 | tower | 0.5.3 | `oneshot` in tests | `util` | Transitive | Dev-dep only |
@@ -293,10 +287,10 @@ These test the **implemented architecture**: API endpoints and D1–D6 command m
 ### 6.2 Planned tests (status at Phase 6)
 
 - **Backend unit/integration — DONE:** every §5 endpoint via `oneshot`; D1–D6 error cases; command state transitions; D2 matrix; native-loop queue/shutdown/D2 tests; shutdown-sequence test (SSE ends → `serve` returns); shutdown-fallback test (`SetEvent` alone latches the wait without an HWND); static handler Content-Type tests. The "message during modal dialog" and "safety timer drains stranded payload" cases remain structural/manual rather than separately automated.
-- **Frontend — DONE:** `svelte-check` + `tsc` clean; 36 tests covering store reactivity, dirty flag, SSE reconnect and auth failure paths.
+- **Frontend — DONE:** `svelte-check` + `tsc` clean; 36 tests covering store reactivity, dirty flag, SSE reconnect and the unauthenticated API client.
 - **Real editing functional test (dev-only) — PENDING:** browser automation (e.g. Playwright, test-only dependency) performing a real SVG zone-boundary drag and asserting backend persistence. This is a functional test, not the `PointerActivity` benchmark.
 - **Manual Windows journeys — PARTIAL:** tray-only operation, hotkeys with browser closed, browser open/close lifecycle, overlay Ctrl+drag, full edit→save→apply→launch→tray→disable→enable, unsaved-change prompts and graceful shutdown are implemented; automated coverage is in place for the API/native logic, but the end-to-end GUI journeys are manual checks.
-- **Performance — PARTIAL:** Background measured (3 runs, 11.9–12.0 MiB WS / 2.0 MiB private / 3.65 MiB exe); Editor open and Pointer activity **NOT MEASURED** (token not logged, tray automation unreliable, pre-existing browser processes defeat new-PID attribution). See `docs/performance/results.md`. Tokio `current_thread` vs `rt-multi-thread` benchmarking and command-worker channel-overhead measurement were not performed.
+- **Performance — PARTIAL:** Background measured (3 runs, 11.9–12.0 MiB WS / 2.0 MiB private / 3.65 MiB exe); Editor open and Pointer activity **NOT MEASURED** (tray automation unreliable, pre-existing browser processes defeat new-PID attribution). The editor URL is now fixed and public (`http://127.0.0.1:4000/`). See `docs/performance/results.md`. Tokio `current_thread` vs `rt-multi-thread` benchmarking and command-worker channel-overhead measurement were not performed.
 
 No unmeasured value is reported as a result.
 

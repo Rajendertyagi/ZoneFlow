@@ -786,31 +786,47 @@ impl NativeLoop {
             // Apply payloads drained by WndProc (and the safety timer).
             self.apply_pending(&cmd_tx, shutdown);
 
-            // Native → worker: hotkeys and tray clicks.
+            // Native → worker: hotkeys and tray clicks. The clipboard action
+            // is handled here on the UI thread; everything else goes to the
+            // worker as before.
             for action in self.system.poll() {
-                if let Action::ProfileApply(name) = action {
-                    // D6/D2: route tray profile clicks through the guarded
-                    // ProfileApply command so a dirty draft yields 409 instead
-                    // of being silently overwritten.
-                    let (reply, rx) = oneshot::channel();
-                    if let Err(e) = cmd_tx.send(Command {
-                        payload: CommandPayload::ProfileApply {
-                            name: name.clone(),
-                            discard_dirty: false,
-                        },
-                        reply,
-                    }) {
-                        tracing::warn!(error = %e, "failed to forward tray profile apply");
-                    } else {
-                        pending_applies.push((name, rx));
+                match action {
+                    Action::CopyEditorUrl => {
+                        // Win32 clipboard access belongs on the thread that
+                        // owns the message loop. The URL is the fixed constant
+                        // used by the "Open editor…" action too.
+                        match crate::clipboard::copy_text(crate::browser::EDITOR_URL) {
+                            Ok(()) => tracing::info!("editor URL copied to clipboard"),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "failed to copy editor URL to clipboard")
+                            }
+                        }
                     }
-                } else {
-                    let (reply, _) = oneshot::channel();
-                    if let Err(e) = cmd_tx.send(Command {
-                        payload: CommandPayload::Action(action),
-                        reply,
-                    }) {
-                        tracing::warn!(error = %e, "failed to forward native action to worker");
+                    Action::ProfileApply(name) => {
+                        // D6/D2: route tray profile clicks through the guarded
+                        // ProfileApply command so a dirty draft yields 409
+                        // instead of being silently overwritten.
+                        let (reply, rx) = oneshot::channel();
+                        if let Err(e) = cmd_tx.send(Command {
+                            payload: CommandPayload::ProfileApply {
+                                name: name.clone(),
+                                discard_dirty: false,
+                            },
+                            reply,
+                        }) {
+                            tracing::warn!(error = %e, "failed to forward tray profile apply");
+                        } else {
+                            pending_applies.push((name, rx));
+                        }
+                    }
+                    other => {
+                        let (reply, _) = oneshot::channel();
+                        if let Err(e) = cmd_tx.send(Command {
+                            payload: CommandPayload::Action(other),
+                            reply,
+                        }) {
+                            tracing::warn!(error = %e, "failed to forward native action to worker");
+                        }
                     }
                 }
             }

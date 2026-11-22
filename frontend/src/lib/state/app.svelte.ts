@@ -20,10 +20,6 @@ interface StoreShape {
   /** Full snapshot from GET /api/state; null until the first fetch/SSE refresh. */
   snapshot: StateSnapshot | null;
   connection: ConnectionState;
-  /** Bootstrap or session error banner text; null when no banner is shown. */
-  authError: string | null;
-  /** True after a 401 — the process restarted and the cookie no longer matches. */
-  sessionExpired: boolean;
   lastEventAt: number | null;
   /** Consecutive SSE failures; used to decide when to show "connection lost". */
   sseFailures: number;
@@ -32,8 +28,6 @@ interface StoreShape {
 export const store = $state<StoreShape>({
   snapshot: null,
   connection: 'connecting',
-  authError: null,
-  sessionExpired: false,
   lastEventAt: null,
   sseFailures: 0,
 });
@@ -45,8 +39,6 @@ const dirtyFlag = $derived(store.snapshot?.dirty ?? false);
 
 export function setSnapshot(next: StateSnapshot): void {
   store.snapshot = next;
-  store.sessionExpired = false;
-  store.authError = null;
 }
 
 export function getSnapshot(): StateSnapshot | null {
@@ -131,16 +123,4 @@ export function noteSseFailure(): number {
   return store.sseFailures;
 }
 
-/** Called by the API client on any 401 after bootstrap. Keeps the draft. */
-export function markSessionExpired(): void {
-  store.sessionExpired = true;
-  store.authError = 'Session expired — reopen the editor from the tray.';
-}
 
-export function setAuthError(message: string): void {
-  store.authError = message;
-}
-
-export function clearAuthError(): void {
-  store.authError = null;
-}
