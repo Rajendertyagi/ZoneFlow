@@ -32,6 +32,7 @@ pub enum CommandPayload {
     ProfilesList,
     ProfileCreate {
         name: String,
+        discard_dirty: bool,
     },
     ProfileRename {
         name: String,
@@ -255,7 +256,14 @@ pub fn handle(
                 .collect();
             Ok(serde_json::to_value(rows).map_err(|e| ApiError::Internal(e.to_string()))?)
         }
-        CommandPayload::ProfileCreate { name } => {
+        CommandPayload::ProfileCreate {
+            name,
+            discard_dirty,
+        } => {
+            // D2: creating a profile switches the editor to it, so it is guarded
+            // like every other switch operation. Dirty + no discard → 409 with
+            // no state change; dirty + discard → revert, then create.
+            guard_dirty(inner, discard_dirty)?;
             let name = name.trim().to_string();
             if name.is_empty() {
                 return Err(bad_request("profile name is empty"));
@@ -271,6 +279,13 @@ pub fn handle(
                     zones: Vec::new(),
                 },
             );
+            // Switch to the brand-new profile in the same atomic command so the
+            // editor immediately shows its blank canvas. D6: only the draft's
+            // active profile and the Selected dimension change — the Applied
+            // profile is untouched (creating a profile never applies it).
+            inner.draft.active_profile = name.clone();
+            inner.selected_profile = name.clone();
+            inner.selected_zone = -1;
             inner.push_history();
             ctx.notifier.rebuild_menu(inner);
             inner.log("info", format!("Created profile {name}"));
@@ -1071,6 +1086,92 @@ mod tests {
                 "payload was not guarded"
             );
         }
+    }
+
+    #[test]
+    fn profile_create_switches_active_and_selected_to_empty_profile() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // Seed a zone in the current active profile so we can prove the new
+        // profile starts with a genuinely blank canvas.
+        inner
+            .draft
+            .active_mut()
+            .zones
+            .push(Zone::new(1, "Old", "old.exe", 0.0, 0.0, 100.0, 100.0));
+        // Keep the draft clean so the create guard passes; the seeded zone
+        // remains in the old profile while the new one starts empty.
+        inner.last_saved_json = serde_json::to_string(&inner.draft).unwrap();
+        handle(
+            CommandPayload::ProfileCreate {
+                name: "Gaming".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.draft.active_profile, "Gaming");
+        assert_eq!(inner.selected_profile, "Gaming");
+        assert_eq!(inner.selected_zone, -1);
+        // D6: creating a profile never changes the Applied dimension.
+        assert_eq!(inner.applied_profile, "Website");
+        assert!(
+            inner.draft.profiles.get("Gaming").unwrap().zones.is_empty(),
+            "a new profile must have zero zones"
+        );
+        assert!(inner.draft.active().zones.is_empty());
+        let snap = inner.state_snapshot(RectDto {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        });
+        assert!(snap.zones.is_empty());
+        assert_eq!(snap.selected, "Gaming");
+    }
+
+    #[test]
+    fn profile_create_dirty_without_discard_returns_409_unchanged() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner.draft.gap = 99; // make dirty
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        let err = handle(
+            CommandPayload::ProfileCreate {
+                name: "Gaming".into(),
+                discard_dirty: false,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ApiError::DirtyState));
+        assert!(!inner.draft.profiles.contains_key("Gaming"));
+        assert_eq!(inner.draft.active_profile, "Website");
+        assert_eq!(inner.selected_profile, "Website");
+        assert_eq!(inner.draft.gap, 99);
+        assert!(inner.is_dirty());
+    }
+
+    #[test]
+    fn profile_create_dirty_with_discard_reverts_then_switches() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner.draft.gap = 99; // make dirty
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        handle(
+            CommandPayload::ProfileCreate {
+                name: "Gaming".into(),
+                discard_dirty: true,
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.draft.gap, 8, "the dirty edit was discarded first");
+        assert_eq!(inner.draft.active_profile, "Gaming");
+        assert_eq!(inner.selected_profile, "Gaming");
+        assert_eq!(inner.applied_profile, "Website");
+        assert!(inner.draft.active().zones.is_empty());
     }
 
     #[test]

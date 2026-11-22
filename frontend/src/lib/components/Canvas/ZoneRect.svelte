@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ZoneDto } from '$lib/api/client';
-  import type { SharedBoundary } from './geometry';
+  import type { OuterResizeHandle, ResizeHandle, SharedBoundary } from './geometry';
 
   interface Props {
     zone: ZoneDto;
@@ -11,13 +11,15 @@
     mergeSource: boolean;
     /** Shared boundaries this zone participates in (for resize handles). */
     boundaries: SharedBoundary[];
+    /** Outer-edge handles for every zone; this component renders its own. */
+    outerHandles: OuterResizeHandle[];
     /** Boundary-detection tolerance from settings (percent). */
     tolerance: number;
     /** Visual inset applied to the body when the gap preview is on (user units). */
     inset: number;
     tint: string;
     onBodyPointerDown: (zone: ZoneDto, event: PointerEvent) => void;
-    onResizeStart: (boundary: SharedBoundary, event: PointerEvent) => void;
+    onResizeStart: (handle: ResizeHandle, event: PointerEvent) => void;
     onZoneContextMenu: (zone: ZoneDto, event: MouseEvent) => void;
     onZoneDragOver: (zone: ZoneDto, event: DragEvent) => void;
     onZoneDragLeave: (zone: ZoneDto, event: DragEvent) => void;
@@ -32,6 +34,7 @@
     dropTarget,
     mergeSource,
     boundaries,
+    outerHandles,
     tolerance,
     inset,
     tint,
@@ -57,29 +60,63 @@
   const barH = $derived(Math.max(3, workArea.h * 0.006));
   const handleSize = $derived(Math.max(9, workArea.w * 0.006));
 
-  /** Which of this zone's edges sit on a shared boundary. */
-  const handles = $derived.by(() => {
+  interface RenderHandle {
+    handle: ResizeHandle;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }
+
+  /**
+   * Shared dividers (amber, centred on the edge) plus this zone's outer edges
+   * (blue, inset so the whole grip stays inside the work area). Both feed the
+   * same pointer handler; ZoneCanvas dispatches on `handle.kind`.
+   */
+  const renderHandles = $derived.by((): RenderHandle[] => {
     const tol = tolerance;
-    const out: Array<{ boundary: SharedBoundary; x: number; y: number; w: number; h: number }> = [];
+    const out: RenderHandle[] = [];
+
     for (const b of boundaries) {
       if (b.axis === 'v') {
-        const by = (b.start / 100) * workArea.h;
-        const bh = ((b.end - b.start) / 100) * workArea.h;
-        if (Math.abs(zone.x - b.at) <= tol) {
-          out.push({ boundary: b, x: (b.at / 100) * workArea.w - handleSize / 2, y: by, w: handleSize, h: bh });
+        if (Math.abs(zone.x - b.at) <= tol || Math.abs(zone.x + zone.w - b.at) <= tol) {
+          out.push({
+            handle: { kind: 'shared', axis: 'v', at: b.at, start: b.start, end: b.end, boundary: b },
+            x: (b.at / 100) * workArea.w - handleSize / 2,
+            y: (b.start / 100) * workArea.h,
+            w: handleSize,
+            h: ((b.end - b.start) / 100) * workArea.h,
+          });
         }
-        if (Math.abs(zone.x + zone.w - b.at) <= tol) {
-          out.push({ boundary: b, x: (b.at / 100) * workArea.w - handleSize / 2, y: by, w: handleSize, h: bh });
-        }
+      } else if (Math.abs(zone.y - b.at) <= tol || Math.abs(zone.y + zone.h - b.at) <= tol) {
+        out.push({
+          handle: { kind: 'shared', axis: 'h', at: b.at, start: b.start, end: b.end, boundary: b },
+          x: (b.start / 100) * workArea.w,
+          y: (b.at / 100) * workArea.h - handleSize / 2,
+          w: ((b.end - b.start) / 100) * workArea.w,
+          h: handleSize,
+        });
+      }
+    }
+
+    for (const h of outerHandles) {
+      if (h.zoneId !== zone.id) continue;
+      if (h.axis === 'v') {
+        out.push({
+          handle: h,
+          x: h.edge === 'low' ? (h.at / 100) * workArea.w : (h.at / 100) * workArea.w - handleSize,
+          y: (h.start / 100) * workArea.h,
+          w: handleSize,
+          h: ((h.end - h.start) / 100) * workArea.h,
+        });
       } else {
-        const bx = (b.start / 100) * workArea.w;
-        const bw = ((b.end - b.start) / 100) * workArea.w;
-        if (Math.abs(zone.y - b.at) <= tol) {
-          out.push({ boundary: b, x: bx, y: (b.at / 100) * workArea.h - handleSize / 2, w: bw, h: handleSize });
-        }
-        if (Math.abs(zone.y + zone.h - b.at) <= tol) {
-          out.push({ boundary: b, x: bx, y: (b.at / 100) * workArea.h - handleSize / 2, w: bw, h: handleSize });
-        }
+        out.push({
+          handle: h,
+          x: (h.start / 100) * workArea.w,
+          y: h.edge === 'low' ? (h.at / 100) * workArea.h : (h.at / 100) * workArea.h - handleSize,
+          w: ((h.end - h.start) / 100) * workArea.w,
+          h: handleSize,
+        });
       }
     }
     return out;
@@ -147,23 +184,23 @@
     </g>
   {/if}
 
-  <!-- Resize handles on shared boundaries -->
-  {#each handles as handle, i (i)}
+  <!-- Resize handles: amber = shared divider, blue = outer zone edge -->
+  {#each renderHandles as rh, i (i)}
     <rect
-      x={handle.x}
-      y={handle.y}
-      width={handle.w}
-      height={handle.h}
-      fill="#f59e0b"
-      fill-opacity={0.18}
-      stroke="#f59e0b"
+      x={rh.x}
+      y={rh.y}
+      width={rh.w}
+      height={rh.h}
+      fill={rh.handle.kind === 'outer' ? '#6EA8FE' : '#f59e0b'}
+      fill-opacity={rh.handle.kind === 'outer' ? 0.16 : 0.18}
+      stroke={rh.handle.kind === 'outer' ? '#6EA8FE' : '#f59e0b'}
       stroke-opacity={0.55}
       stroke-width={1}
-      style:cursor={handle.boundary.axis === 'v' ? 'col-resize' : 'row-resize'}
+      style:cursor={rh.handle.axis === 'v' ? 'col-resize' : 'row-resize'}
       role="presentation"
       onpointerdown={(event) => {
         event.stopPropagation();
-        onResizeStart(handle.boundary, event);
+        onResizeStart(rh.handle, event);
       }}
     />
   {/each}

@@ -26,9 +26,12 @@
     moveZone,
     rectFromPoints,
     resizeBoundary,
+    resizeZoneEdge,
     snapPercent,
     snapRectToGrid,
+    zoneEdgeHandles,
     type RectPct,
+    type ResizeHandle,
     type SharedBoundary,
   } from './geometry';
 
@@ -72,6 +75,13 @@
   type Interaction =
     | { kind: 'move'; pointerId: number; origZone: ZoneDto; start: { x: number; y: number } }
     | { kind: 'resize'; pointerId: number; boundary: SharedBoundary; origZones: ZoneDto[] }
+    | {
+        kind: 'edge-resize';
+        pointerId: number;
+        zone: ZoneDto;
+        axis: 'v' | 'h';
+        edge: 'low' | 'high';
+      }
     | { kind: 'draw'; pointerId: number; start: { x: number; y: number } };
 
   let svgEl: SVGSVGElement;
@@ -88,7 +98,20 @@
   const settings = $derived<CanvasSettings>(snapshot?.settings ?? FALLBACK);
   const workArea = $derived(snapshot?.status.work_area ?? { x: 0, y: 0, w: 1920, h: 1080 });
   const boundaries = $derived(findSharedBoundaries(zones, settings.boundary_tolerance_pct));
+  const outerHandles = $derived(zoneEdgeHandles(zones, boundaries, settings.boundary_tolerance_pct));
   const gapWidth = $derived(Math.max(2, snapshot?.draft.gap ?? 8));
+
+  // A profile switch (create/load) must drop any stale local selection so the
+  // blank canvas never reports a zone from the previous profile. Key off the
+  // active profile name, NOT zones.length: a newly created zone is selected
+  // before its authoritative refresh lands, and zones would still be empty in
+  // that window — clearing on length would lose the fresh selection.
+  let lastProfile: string | null = null;
+  $effect(() => {
+    const active = snapshot?.draft.active_profile ?? null;
+    if (lastProfile !== null && active !== lastProfile) selectedId = null;
+    lastProfile = active;
+  });
 
   /* --------------------------- coordinate conversion ----------------------- */
 
@@ -135,18 +158,30 @@
     event.preventDefault();
   }
 
-  function onResizeStart(boundary: SharedBoundary, event: PointerEvent): void {
+  function onResizeStart(handle: ResizeHandle, event: PointerEvent): void {
     if (mode === 'draw') {
       onBackgroundPointerDown(event);
       return;
     }
     if (interaction) return;
-    interaction = {
-      kind: 'resize',
-      pointerId: event.pointerId,
-      boundary,
-      origZones: zones.map((z) => ({ ...z })),
-    };
+    if (handle.kind === 'shared') {
+      interaction = {
+        kind: 'resize',
+        pointerId: event.pointerId,
+        boundary: handle.boundary,
+        origZones: zones.map((z) => ({ ...z })),
+      };
+    } else {
+      const zone = zones.find((z) => z.id === handle.zoneId);
+      if (!zone) return;
+      interaction = {
+        kind: 'edge-resize',
+        pointerId: event.pointerId,
+        zone: { ...zone },
+        axis: handle.axis,
+        edge: handle.edge,
+      };
+    }
     svgEl.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
@@ -203,6 +238,40 @@
       return;
     }
 
+    if (interaction.kind === 'edge-resize') {
+      const rawAt = interaction.axis === 'v' ? point.x : point.y;
+      const geometry = resizeZoneEdge(
+        interaction.zone,
+        interaction.axis,
+        interaction.edge,
+        rawAt,
+        settings.min_zone_pct,
+        settings.snap_points,
+        settings.boundary_tolerance_pct,
+      );
+      if (geometry) {
+        const at =
+          interaction.axis === 'v'
+            ? interaction.edge === 'low'
+              ? geometry.x
+              : geometry.x + geometry.w
+            : interaction.edge === 'low'
+              ? geometry.y
+              : geometry.y + geometry.h;
+        const snapped = snapPercent(rawAt, settings.snap_points, settings.boundary_tolerance_pct);
+        preview = {
+          zones: { [interaction.zone.id]: geometry },
+          draw: null,
+          snap: {
+            axis: interaction.axis,
+            at,
+            snapped: at === snapped && snapped !== rawAt ? snapped : null,
+          },
+        };
+      }
+      return;
+    }
+
     // draw
     const rect = rectFromPoints(interaction.start, point);
     preview = {
@@ -252,6 +321,21 @@
           for (const u of updates) {
             patchZoneLocal(u.id, { x: u.x, y: u.y, w: u.w, h: u.h });
           }
+          await refreshState();
+        }
+      } else if (current.kind === 'edge-resize' && result?.zones[current.zone.id]) {
+        // Only this zone moved. A single updateZone gives one undo point; no
+        // batch is needed (and no neighbour should be dragged along).
+        const geometry = result.zones[current.zone.id];
+        const original = current.zone;
+        if (
+          Math.abs(geometry.x - original.x) > 0.01 ||
+          Math.abs(geometry.y - original.y) > 0.01 ||
+          Math.abs(geometry.w - original.w) > 0.01 ||
+          Math.abs(geometry.h - original.h) > 0.01
+        ) {
+          await api.updateZone(original.id, { ...original, ...geometry });
+          patchZoneLocal(original.id, geometry);
           await refreshState();
         }
       } else if (current.kind === 'draw' && result?.draw) {
@@ -540,6 +624,24 @@
     />
     <rect x={0} y={0} width={workArea.w} height={workArea.h} fill="url(#zf-grid)" class="pointer-events-none" />
 
+    {#if zones.length === 0}
+      <g class="pointer-events-none" text-anchor="middle">
+        <text
+          x={workArea.w / 2}
+          y={workArea.h / 2 - 14}
+          fill="#93a4bd"
+          font-size={Math.max(16, workArea.h * 0.028)}
+          font-weight="600">No zones yet</text
+        >
+        <text
+          x={workArea.w / 2}
+          y={workArea.h / 2 + 16}
+          fill="#6b7c96"
+          font-size={Math.max(12, workArea.h * 0.018)}>Create your first zone with Add or Draw</text
+        >
+      </g>
+    {/if}
+
     <SnapGuides
       {workArea}
       points={settings.snap_points}
@@ -556,6 +658,7 @@
         dropTarget={dropTargetId === zone.id}
         mergeSource={mergeSourceId === zone.id}
         {boundaries}
+        {outerHandles}
         tolerance={settings.boundary_tolerance_pct}
         inset={showGap ? gapWidth / 2 : 0}
         tint={settings.zone_tints[index % Math.max(1, settings.zone_tints.length)] ?? '#f59e0b'}

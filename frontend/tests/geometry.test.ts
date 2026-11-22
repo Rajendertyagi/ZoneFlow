@@ -13,8 +13,10 @@ import {
   moveZone,
   rectFromPoints,
   resizeBoundary,
+  resizeZoneEdge,
   snapPercent,
   snapRectToGrid,
+  zoneEdgeHandles,
   type ZoneRect,
 } from '../src/lib/components/Canvas/geometry';
 
@@ -88,6 +90,83 @@ describe('resizeBoundary', () => {
     const snapped = snapPercent(86, [25, 50, 75], 1.5); // 86 -> unchanged
     const result = resizeBoundary(zones, boundary, snapped, 15, 1.5);
     expect(result!.at).toBe(85);
+  });
+});
+
+describe('zoneEdgeHandles', () => {
+  test('a lone zone gets four outer handles (zero shared boundaries)', () => {
+    const zones = [zone(1, 0, 0, 100, 100)];
+    const boundaries = findSharedBoundaries(zones, 1.5);
+    expect(boundaries).toEqual([]);
+    const handles = zoneEdgeHandles(zones, boundaries, 1.5);
+    expect(handles.length).toBe(4);
+    expect(handles.map((h) => `${h.axis}:${h.edge}`).sort()).toEqual([
+      'h:high',
+      'h:low',
+      'v:high',
+      'v:low',
+    ]);
+    expect(handles.every((h) => h.kind === 'outer' && h.zoneId === 1)).toBe(true);
+  });
+
+  test('shared edges are excluded; only perimeter edges get outer handles', () => {
+    const zones = [zone(1, 0, 0, 50, 100), zone(2, 50, 0, 50, 100)];
+    const boundaries = findSharedBoundaries(zones, 1.5);
+    const handles = zoneEdgeHandles(zones, boundaries, 1.5);
+    // Each zone: left/right shared at x=50 for one side, top+bottom perimeter.
+    // Zone 1: v:low (x=0), h:low, h:high. Zone 2: v:high (x=100), h:low, h:high.
+    expect(handles.length).toBe(6);
+    expect(handles.some((h) => h.zoneId === 1 && h.axis === 'v' && h.at === 50)).toBe(false);
+    expect(handles.some((h) => h.zoneId === 2 && h.axis === 'v' && h.at === 50)).toBe(false);
+    expect(handles.some((h) => h.zoneId === 1 && h.axis === 'v' && h.at === 0)).toBe(true);
+    expect(handles.some((h) => h.zoneId === 2 && h.axis === 'v' && h.at === 100)).toBe(true);
+  });
+});
+
+describe('resizeZoneEdge', () => {
+  const single = zone(1, 0, 0, 100, 100);
+
+  test('resizes a single zone right edge and clamps to the work area', () => {
+    const r = resizeZoneEdge(single, 'v', 'high', 60, 15, [], 1.5);
+    expect(r).toEqual({ x: 0, y: 0, w: 60, h: 100 });
+    const clamped = resizeZoneEdge(single, 'v', 'high', 140, 15, [], 1.5);
+    expect(clamped!.w).toBe(100);
+  });
+
+  test('resizes a single zone left edge keeping the right edge fixed', () => {
+    const r = resizeZoneEdge(single, 'v', 'low', 40, 15, [], 1.5);
+    expect(r).toEqual({ x: 40, y: 0, w: 60, h: 100 });
+  });
+
+  test('respects min_zone_pct on every edge', () => {
+    // Right edge cannot move left past x + minPct.
+    const right = resizeZoneEdge(single, 'v', 'high', 5, 15, [], 1.5);
+    expect(right!.w).toBe(15);
+    // Left edge cannot move right past right - minPct.
+    const left = resizeZoneEdge(single, 'v', 'low', 95, 15, [], 1.5);
+    expect(left!.x).toBe(85);
+    expect(left!.w).toBe(15);
+    // Bottom edge cannot move up past y + minPct.
+    const bottom = resizeZoneEdge(single, 'h', 'high', 5, 15, [], 1.5);
+    expect(bottom!.h).toBe(15);
+    // Top edge cannot move down past bottom - minPct.
+    const top = resizeZoneEdge(single, 'h', 'low', 95, 15, [], 1.5);
+    expect(top!.y).toBe(85);
+    expect(top!.h).toBe(15);
+  });
+
+  test('snaps the moved edge to snap points', () => {
+    const r = resizeZoneEdge(single, 'v', 'high', 74, 15, [25, 50, 75], 1.5);
+    expect(r!.w).toBe(75);
+  });
+
+  test('shared-boundary resize still moves both sides (regression)', () => {
+    const zones = [zone(1, 0, 0, 50, 100), zone(2, 50, 0, 50, 100)];
+    const boundary = { axis: 'v' as const, at: 50, start: 0, end: 100 };
+    const result = resizeBoundary(zones, boundary, 60, 15, 1.5);
+    expect(result!.changes[1].w).toBe(60);
+    expect(result!.changes[2].x).toBe(60);
+    expect(result!.changes[2].w).toBe(40);
   });
 });
 

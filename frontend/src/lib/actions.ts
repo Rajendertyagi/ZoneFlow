@@ -249,8 +249,14 @@ async function confirmDiscardIfDirty(profile: string, action: string): Promise<b
 }
 
 export async function createProfile(name: string): Promise<boolean> {
+  // Creating a profile switches the editor to it, so the same D2 Discard/Cancel
+  // rule as rename/duplicate applies before we replace the current draft.
+  if (!(await confirmDiscardIfDirty(name, `create ${name}`))) return false;
   try {
-    await api.createProfile(name);
+    // The draft is clean here (confirmDiscardIfDirty reverted it), so the
+    // backend's own dirty guard passes without a discard flag. The backend
+    // switches active+selected to the new empty profile in one atomic command.
+    await api.createProfile(name, false);
     await refreshState();
     toast('success', `Created profile ${name}.`);
     return true;

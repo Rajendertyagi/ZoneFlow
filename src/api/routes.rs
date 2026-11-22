@@ -87,13 +87,25 @@ async fn list_profiles(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn create_profile(State(state): State<AppState>, Json(name): Json<Value>) -> Response {
+async fn create_profile(
+    State(state): State<AppState>,
+    Query(q): Query<DiscardQuery>,
+    Json(name): Json<Value>,
+) -> Response {
     let name = name
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    match call(&state, CommandPayload::ProfileCreate { name }).await {
+    match call(
+        &state,
+        CommandPayload::ProfileCreate {
+            name,
+            discard_dirty: q.discard_dirty,
+        },
+    )
+    .await
+    {
         Ok(v) => json_response(v),
         Err(e) => e.into_response(),
     }
@@ -613,6 +625,84 @@ mod tests {
             .unwrap()
             .iter()
             .any(|p| p["name"] == "Gaming"));
+    }
+
+    #[tokio::test]
+    async fn create_profile_switches_to_new_profile_and_guards_dirty() {
+        let h = harness();
+        // Create switches active+selected to the new (empty) profile.
+        let res = h
+            .router
+            .clone()
+            .oneshot(req(
+                "/api/profiles",
+                "POST",
+                Body::from(r#"{"name":"Gaming"}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/state", "GET", Body::empty()))
+            .await
+            .unwrap();
+        let json = body_json(res).await;
+        assert_eq!(json["selected"], "Gaming");
+        assert_eq!(json["draft"]["active_profile"], "Gaming");
+        assert_eq!(json["applied"], "Website");
+        assert_eq!(json["zones"].as_array().unwrap().len(), 0);
+
+        // A dirty draft blocks a second create with 409 unless discarded.
+        let res = h
+            .router
+            .clone()
+            .oneshot(req(
+                "/api/zones",
+                "POST",
+                Body::from(
+                    r#"{"id":0,"label":"A","exe":"a.exe","path":"","x":0,"y":0,"w":50,"h":100}"#,
+                ),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = h
+            .router
+            .clone()
+            .oneshot(req(
+                "/api/profiles",
+                "POST",
+                Body::from(r#"{"name":"Blocked"}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let json = body_json(res).await;
+        assert_eq!(json["error"]["code"], "dirty_state");
+
+        // With discard_dirty=true the create proceeds and switches again.
+        let res = h
+            .router
+            .clone()
+            .oneshot(req(
+                "/api/profiles?discard_dirty=true",
+                "POST",
+                Body::from(r#"{"name":"Discarded"}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = h
+            .router
+            .clone()
+            .oneshot(req("/api/state", "GET", Body::empty()))
+            .await
+            .unwrap();
+        let json = body_json(res).await;
+        assert_eq!(json["selected"], "Discarded");
+        assert_eq!(json["draft"]["active_profile"], "Discarded");
     }
 
     #[tokio::test]

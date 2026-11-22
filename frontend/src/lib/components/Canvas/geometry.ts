@@ -39,6 +39,31 @@ export interface ResizeResult {
   changes: Record<number, RectPct>;
 }
 
+/** A shared divider handle: moves both neighbouring zones via `resizeBoundary`. */
+export interface SharedResizeHandle {
+  kind: 'shared';
+  axis: 'v' | 'h';
+  at: number;
+  start: number;
+  end: number;
+  boundary: SharedBoundary;
+}
+
+/** An outer zone edge: resized alone via `resizeZoneEdge` (one undo point). */
+export interface OuterResizeHandle {
+  kind: 'outer';
+  axis: 'v' | 'h';
+  at: number;
+  start: number;
+  end: number;
+  zoneId: number;
+  /** 'low' = left/top edge, 'high' = right/bottom edge. */
+  edge: 'low' | 'high';
+}
+
+/** A grabbable resize edge, shared divider or outer zone edge. */
+export type ResizeHandle = SharedResizeHandle | OuterResizeHandle;
+
 export function clamp(value: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, value));
 }
@@ -108,6 +133,111 @@ export function findSharedBoundaries(zones: RectPct[], tolerance: number): Share
   }
 
   return found;
+}
+
+/**
+ * Outer-edge resize handles. Every zone edge that is NOT a shared divider gets
+ * a handle, so a lone zone (zero shared boundaries) is still fully resizable.
+ * This includes the work-area perimeter (x=0, x+w=100, y=0, y+h=100) and any
+ * edge left unpaired by a gap — the common case is the perimeter.
+ *
+ * `findSharedBoundaries` is deliberately left untouched: it is a faithful port
+ * of `engine_core::find_shared_boundaries` and its "shared only" contract is
+ * covered by tests. Outer handles are a UI concern layered on top.
+ */
+export function zoneEdgeHandles(
+  zones: ZoneRect[],
+  boundaries: SharedBoundary[],
+  tolerance: number,
+): OuterResizeHandle[] {
+  const handles: OuterResizeHandle[] = [];
+  const isShared = (axis: 'v' | 'h', at: number, start: number, end: number): boolean =>
+    boundaries.some(
+      (b) =>
+        b.axis === axis &&
+        Math.abs(b.at - at) <= tolerance &&
+        b.start < end - 1e-6 &&
+        b.end > start + 1e-6,
+    );
+
+  for (const z of zones) {
+    const vEdges: Array<{ at: number; edge: 'low' | 'high' }> = [
+      { at: z.x, edge: 'low' },
+      { at: z.x + z.w, edge: 'high' },
+    ];
+    for (const e of vEdges) {
+      if (isShared('v', e.at, z.y, z.y + z.h)) continue;
+      handles.push({
+        kind: 'outer',
+        axis: 'v',
+        at: e.at,
+        start: z.y,
+        end: z.y + z.h,
+        zoneId: z.id,
+        edge: e.edge,
+      });
+    }
+
+    const hEdges: Array<{ at: number; edge: 'low' | 'high' }> = [
+      { at: z.y, edge: 'low' },
+      { at: z.y + z.h, edge: 'high' },
+    ];
+    for (const e of hEdges) {
+      if (isShared('h', e.at, z.x, z.x + z.w)) continue;
+      handles.push({
+        kind: 'outer',
+        axis: 'h',
+        at: e.at,
+        start: z.x,
+        end: z.x + z.w,
+        zoneId: z.id,
+        edge: e.edge,
+      });
+    }
+  }
+  return handles;
+}
+
+/**
+ * Resize one zone's outer edge. The opposite edge stays fixed; the moved edge
+ * is snapped to `snapPoints` and clamped to the 0..100 work area so the zone
+ * never falls below `minPct`. Returns null only when the zone is already too
+ * small to keep a `minPct` remainder (a degenerate case the UI never creates).
+ */
+export function resizeZoneEdge(
+  zone: ZoneRect,
+  axis: 'v' | 'h',
+  edge: 'low' | 'high',
+  requestedAt: number,
+  minPct: number,
+  snapPoints: number[],
+  tolerance: number,
+): RectPct | null {
+  const at = snapPercent(requestedAt, snapPoints, tolerance);
+  if (axis === 'v') {
+    const right = zone.x + zone.w;
+    if (edge === 'low') {
+      const hi = right - minPct;
+      if (hi < 0) return null;
+      const x = clamp(at, 0, hi);
+      return { x, y: zone.y, w: right - x, h: zone.h };
+    }
+    const lo = zone.x + minPct;
+    if (lo > 100) return null;
+    const newRight = clamp(at, lo, 100);
+    return { x: zone.x, y: zone.y, w: newRight - zone.x, h: zone.h };
+  }
+  const bottom = zone.y + zone.h;
+  if (edge === 'low') {
+    const hi = bottom - minPct;
+    if (hi < 0) return null;
+    const y = clamp(at, 0, hi);
+    return { x: zone.x, y, w: zone.w, h: bottom - y };
+  }
+  const lo = zone.y + minPct;
+  if (lo > 100) return null;
+  const newBottom = clamp(at, lo, 100);
+  return { x: zone.x, y: zone.y, w: zone.w, h: newBottom - zone.y };
 }
 
 /**

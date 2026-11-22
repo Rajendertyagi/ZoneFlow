@@ -287,8 +287,8 @@ export const api = {
   shutdown: () => apiFetch<OkResult>('/api/shutdown', { method: 'POST' }),
 
   listProfiles: () => apiFetch<ProfileSummary[]>('/api/profiles'),
-  createProfile: (name: string) =>
-    apiFetch<{ name: string }>('/api/profiles', {
+  createProfile: (name: string, discardDirty = false) =>
+    apiFetch<{ name: string }>(withDiscard('/api/profiles', discardDirty), {
       method: 'POST',
       body: JSON.stringify({ name }),
     }),
