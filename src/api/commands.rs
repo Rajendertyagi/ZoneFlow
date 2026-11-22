@@ -613,9 +613,6 @@ pub fn handle(
         }
         CommandPayload::ZoneDelete { id } => {
             let zones = &mut inner.draft.active_mut().zones;
-            if zones.len() == 1 {
-                return Err(bad_request("cannot delete the last zone"));
-            }
             let pos = zones
                 .iter()
                 .position(|z| z.id == id)
@@ -1509,7 +1506,7 @@ mod tests {
     }
 
     #[test]
-    fn zone_crud_split_merge_and_last_zone_guard() {
+    fn zone_crud_split_merge_and_last_zone_deletion() {
         let (mut inner, queue, shutdown, mut cache) = setup();
         let mut ctx = test_context(&queue, &shutdown, &mut cache);
         handle(
@@ -1521,11 +1518,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(inner.draft.active().zones.len(), 1);
-        // Refuse deleting the last zone.
-        assert!(matches!(
-            handle(CommandPayload::ZoneDelete { id: 1 }, &mut inner, &mut ctx),
-            Err(ApiError::BadRequest(_))
-        ));
+
+        // Deleting the last zone is allowed and leaves the profile empty.
+        handle(CommandPayload::ZoneDelete { id: 1 }, &mut inner, &mut ctx).unwrap();
+        assert!(
+            inner.draft.active().zones.is_empty(),
+            "deleting the last zone must empty the profile"
+        );
+
+        // An empty profile still serializes and applies safely.
+        let json = serde_json::to_string(&inner.draft).unwrap();
+        let back: crate::config::AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.active().zones.is_empty(),
+            "empty profile must round-trip"
+        );
+        let applied = handle(CommandPayload::Apply, &mut inner, &mut ctx).unwrap();
+        let result: ApplyResultDto = serde_json::from_value(applied).unwrap();
+        assert_eq!(result.message, "no zones in profile");
+        assert_eq!(result.succeeded, 0);
+        assert_eq!(result.failed, 0);
+
+        // Creating a zone afterward works and reuses id 1 for an empty profile.
+        handle(
+            CommandPayload::ZoneCreate {
+                zone: ZoneDto::from(&Zone::new(0, "B", "b.exe", 0.0, 0.0, 100.0, 100.0)),
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        assert_eq!(inner.draft.active().zones.len(), 1);
+        assert_eq!(inner.draft.active().zones[0].id, 1);
+
+        // Undo restores the deleted zone; Redo removes it again.
+        // History: [empty, zone A, empty(after delete), zone B].
+        // Undo from zone B -> empty(after delete); Undo again -> zone A.
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert!(inner.draft.active().zones.is_empty());
+        handle(CommandPayload::Undo, &mut inner, &mut ctx).unwrap();
+        assert_eq!(
+            inner.draft.active().zones.len(),
+            1,
+            "undo must restore the deleted zone"
+        );
+        assert_eq!(inner.draft.active().zones[0].label, "A");
+        handle(CommandPayload::Redo, &mut inner, &mut ctx).unwrap();
+        assert!(
+            inner.draft.active().zones.is_empty(),
+            "redo must remove the restored zone again"
+        );
+
+        // Split then merge still work on a freshly created zone.
+        handle(
+            CommandPayload::ZoneCreate {
+                zone: ZoneDto::from(&Zone::new(0, "C", "c.exe", 0.0, 0.0, 100.0, 100.0)),
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
         handle(
             CommandPayload::ZoneSplit {
                 id: 1,
