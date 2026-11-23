@@ -5,6 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
     <title>ZoneFlow Studio</title>
+    <script>
+      // Single pre-paint theme initialization owner. Mirrors the validation in
+      // src/lib/theme/preference.ts. This is the ONLY script that sets the
+      // initial .dark / color-scheme / data-theme state; ModeWatcher is mounted
+      // with disableHeadScriptInjection={true} so it cannot inject a competing
+      // init script. Preset IDs only — all token values come from the generated
+      // CSS in src/themes/generated/presets.css (no duplication here).
+      (function () {
+        var MODE_KEY = 'mode-watcher-mode';
+        var THEME_KEY = 'mode-watcher-theme';
+        var DEFAULT_MODE = 'system';
+        var DEFAULT_PRESET = 'zoneflow-amber';
+        var PRESET_IDS = ['zoneflow-amber', 'caffeine'];
+        var root = document.documentElement;
+        var storedMode = null;
+        var storedTheme = null;
+        try {
+          storedMode = localStorage.getItem(MODE_KEY);
+          storedTheme = localStorage.getItem(THEME_KEY);
+        } catch (_) {
+          // localStorage unavailable/corrupt — use defaults below.
+        }
+        var mode =
+          storedMode === 'light' || storedMode === 'dark' || storedMode === 'system'
+            ? storedMode
+            : DEFAULT_MODE;
+        var preset = PRESET_IDS.indexOf(storedTheme) !== -1 ? storedTheme : DEFAULT_PRESET;
+        var prefersDark = false;
+        try {
+          prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        } catch (_) {
+          // matchMedia unavailable — treat as light.
+        }
+        var resolved = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+        root.classList.toggle('dark', resolved === 'dark');
+        root.style.colorScheme = resolved;
+        root.dataset.theme = preset;
+        // Keep ModeWatcher's onMount read synchronized with the validated
+        // values so an invalid stored value cannot be re-applied after paint.
+        try {
+          localStorage.setItem(MODE_KEY, mode);
+          localStorage.setItem(THEME_KEY, preset);
+        } catch (_) {
+          // localStorage unavailable — in-memory state above still applies.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

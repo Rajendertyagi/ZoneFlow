@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { ModeWatcher } from 'mode-watcher';
   import { CircleCheck, CircleAlert, Info, TriangleAlert, X } from '@lucide/svelte';
   import { api, readViewFromHash } from '$lib/api/client';
   import {
@@ -15,6 +16,7 @@
   import { resolveCloseAction } from '$lib/state/settings-helpers';
   import { resolveUndoShortcut } from '$lib/state/undo-shortcut';
   import { errorMessage } from '$lib/state/workflow';
+  import { MODE_STORAGE_KEY, THEME_STORAGE_KEY } from '$lib/theme/preference';
   import {
     dismissToast,
     navigate,
@@ -186,6 +188,17 @@
 <svelte:head>
   <title>ZoneFlow Studio</title>
 </svelte:head>
+
+<!--
+  Single ModeWatcher mount. Head script injection is disabled because the
+  pre-paint bootstrap in index.html is the sole initialization owner; the
+  explicit storage keys match that bootstrap and ModeWatcher's defaults.
+-->
+<ModeWatcher
+  disableHeadScriptInjection={true}
+  modeStorageKey={MODE_STORAGE_KEY}
+  themeStorageKey={THEME_STORAGE_KEY}
+/>
 
 <div class="flex h-screen min-h-[560px] flex-col overflow-hidden bg-zf-bg text-zf-text">
   <TopBar onclose={requestClose} />

@@ -6,6 +6,7 @@
   import { isValidHexColor } from '$lib/state/settings-helpers';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
+  import AppearanceSettings from '$lib/components/AppearanceSettings.svelte';
   import Button from '$lib/components/ui/button.svelte';
   import Input from '$lib/components/ui/input.svelte';
   import Label from '$lib/components/ui/label.svelte';
@@ -127,6 +128,9 @@
     <p class="text-[0.7rem] leading-relaxed text-zf-muted">
       Settings are part of your draft. Use Save in the editor to persist them to disk.
     </p>
+
+    <!-- Appearance is browser-local and intentionally outside the draft/save flow. -->
+    <AppearanceSettings />
 
     {#if !loaded}
       <p class="text-sm text-zf-faint">Loading settings…</p>
