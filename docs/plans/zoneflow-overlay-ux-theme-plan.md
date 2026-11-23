@@ -8,6 +8,24 @@
 - **Plan file**: `docs/plans/zoneflow-overlay-ux-theme-plan.md`
 - **Supersedes**: prior overlay/theme plan content; this revision locks the decisions and scope below.
 
+## WP completion status (WP6 QA record)
+
+Factual implementation/check record for this plan (no manual verification claimed):
+
+| WP | Status | Commit |
+|---|---|---|
+| WP0 — audit / spec lock | Implemented (plan committed) | `774465f`, `df7f289`, `6b28435`, `33e195e` |
+| WP1 — theme token foundation | Implemented | `65cb6b3` |
+| WP2 — preferences / JSON presets | Implemented | `f551425` |
+| WP3 — selective primitive a11y | Implemented | `f0c07af` |
+| WP4 — theme-aware canvas | Implemented | `c49b42b` |
+| WP5 — native overlay UX | Implemented | `3c12e71` |
+| WP6 — QA / accessibility / docs | Automated checks run (all passed); docs updated | working tree (uncommitted) |
+
+WP6 automated checks run and passing: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (257 unit + 3 integration), `bun run check`, `bun test` (223 pass), `bun run build`, `bun run themes:check`. Exact commands, exit codes and output were captured in the WP6 review record / PR description (not a repo file); the repo-verifiable evidence artifacts are this status section, [`docs/theme-and-appearance.md`](../theme-and-appearance.md) and [`docs/manual-verification-checklist.md`](../manual-verification-checklist.md).
+
+**Manual Windows/browser verification: NONE PERFORMED.** AC1–AC4, AC7–AC9 and AC10–AC12 remain open and are tracked in [`docs/manual-verification-checklist.md`](../manual-verification-checklist.md). No contrast-ratio checker was run, so AC7 is not established by automated evidence. See [`docs/theme-and-appearance.md`](../theme-and-appearance.md) for the accessibility evidence summary and deferred limitations.
+
 ## Baseline Audit (verified against current code)
 
 | Area | Verified current state | Evidence |

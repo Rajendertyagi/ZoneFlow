@@ -73,6 +73,10 @@ The editor is always at **`http://127.0.0.1:4000/`** — a fixed loopback addres
 - **`ScreenLayout.json`** — created next to the `.exe` on first run. Plain JSON, schema version **1**; back it up freely. New installs start with three empty starter profiles (Website / Coding / Trading) and no hardcoded apps, URLs, or titles. Older v0 configs are migrated forward without losing profiles or zones; an unreadable file is renamed to `ScreenLayout.json.bad` rather than wiped. The on-disk schema is unchanged by the migration — the config round-trip integration tests verify no data loss.
 - **`zoneflow.log`** — written next to the `.exe`. Log level is controlled by the `RUST_LOG` environment variable (default `info`), e.g. `RUST_LOG=debug screenlayout.exe`.
 
+## Theme & appearance
+
+The editor supports a light/dark/system mode and built-in color presets. Appearance preferences are stored per browser profile in `localStorage` (`mode-watcher-mode` / `mode-watcher-theme`) and are independent of the workspace draft and of the native overlay colors. Built-in preset JSON files live in `frontend/src/themes/presets/` and generate the static CSS at build time. See [`docs/theme-and-appearance.md`](docs/theme-and-appearance.md) for the preset format, how to add a preset, overlay independence and accessibility notes. The interactive checks that still require a Windows/browser session are tracked in [`docs/manual-verification-checklist.md`](docs/manual-verification-checklist.md).
+
 ## Hotkeys
 
 These defaults mirror the original AHK script and can be changed in the Hotkeys view.
@@ -126,7 +130,7 @@ All tunables live in the `Settings` struct in `src/config.rs` — never as liter
 
 ## Testing
 
-**246 unit + 3 integration Rust tests pass** — 246 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. The crate now has a library target (`src/lib.rs`) consumed by the binary and the integration tests; unit tests still live inline in the source modules, and `tests/config_file_roundtrip.rs` imports the real `config::AppConfig` types (see `tests/README.md` for the rationale). The **frontend adds 162 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
+**257 unit + 3 integration Rust tests pass** — 257 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. The crate now has a library target (`src/lib.rs`) consumed by the binary and the integration tests; unit tests still live inline in the source modules, and `tests/config_file_roundtrip.rs` imports the real `config::AppConfig` types (see `tests/README.md` for the rationale). The **frontend adds 223 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
 
 ```powershell
 cargo test
