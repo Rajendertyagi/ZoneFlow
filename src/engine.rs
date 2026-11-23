@@ -678,6 +678,81 @@ const POLL_INTERVAL_MS: u64 = 100;
 /// first one prematurely.
 const AMBIGUITY_SETTLE_MS: u64 = 400;
 
+/// Pure, Win32-free timing state for launcher window attribution.
+///
+/// The quiet period is measured from the most recent NEW unique window, not
+/// from the first one. A script that opens a second app after the initial
+/// settle window must keep the collection loop alive so the result is reported
+/// as ambiguous instead of silently snapping the first window.
+#[derive(Clone, Debug)]
+struct AttributionTracker {
+    last_new_window_at: Option<std::time::Instant>,
+    settle: std::time::Duration,
+}
+
+impl AttributionTracker {
+    fn new(settle_ms: u64) -> Self {
+        Self {
+            last_new_window_at: None,
+            settle: std::time::Duration::from_millis(settle_ms),
+        }
+    }
+
+    /// Record `new_count` newly discovered unique windows at `now`. A zero
+    /// count (repeated enumeration of windows already seen) does not reset the
+    /// quiet period.
+    fn observe(&mut self, new_count: usize, now: std::time::Instant) {
+        if new_count > 0 {
+            self.last_new_window_at = Some(now);
+        }
+    }
+
+    /// True once at least one window has been seen and the quiet period since
+    /// the most recent new window has elapsed. A `now` earlier than the last
+    /// observation (e.g. probing the old break point after a later window was
+    /// discovered) is never settled.
+    fn is_settled(&self, now: std::time::Instant) -> bool {
+        match self.last_new_window_at {
+            Some(t) => match now.checked_duration_since(t) {
+                Some(elapsed) => elapsed >= self.settle,
+                None => false,
+            },
+            None => false,
+        }
+    }
+}
+
+/// Pure loop-exit decision for the attribution poll. The overall `deadline`
+/// always caps the wait; otherwise we stop once the quiet period has elapsed.
+/// Kept Win32-free so the timeout behaviour is unit-testable without sleeping.
+fn should_stop_attribution(
+    now: std::time::Instant,
+    deadline: std::time::Instant,
+    tracker: &AttributionTracker,
+) -> bool {
+    now >= deadline || tracker.is_settled(now)
+}
+
+/// Pure outcome of a Job PID query. A failed query must be a truthful error,
+/// never an empty PID set that would fall through to the EXE-override fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum JobQueryOutcome {
+    /// Query succeeded (possibly with an empty PID set) — proceed to window
+    /// filtering and the existing no-window/EXE-override logic.
+    Proceed(Vec<u32>),
+    /// Query failed — report the error; do not use the EXE override.
+    Failed(String),
+}
+
+impl JobQueryOutcome {
+    fn from_query_result(result: Result<Vec<u32>, String>) -> Self {
+        match result {
+            Ok(pids) => Self::Proceed(pids),
+            Err(e) => Self::Failed(e),
+        }
+    }
+}
+
 /// Execute a zone that has a `.bat`/`.cmd` launcher configured.
 ///
 /// The script is executed via `cmd.exe /c` inside a Job Object; the job's PID
@@ -726,39 +801,39 @@ fn execute_launcher_zone(
     let launched = spawn.is_some();
 
     // Attribute windows from the job's authoritative PID set. We keep every
-    // distinct HWND seen during the poll (plus a short settle window) so a
-    // multi-app script is reported as ambiguous rather than guessed.
+    // distinct HWND seen during the poll (plus a short quiet period measured
+    // from the LAST new window) so a multi-app script is reported as ambiguous
+    // rather than guessed. A failed PID query is a truthful error, never an
+    // empty set that would trigger the EXE-override fallback.
     let mut seen: Vec<CandidateWindow> = Vec::new();
     if let Some(ref s) = spawn {
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(LAUNCH_WINDOW_POLL_SECS);
-        let mut first_seen: Option<std::time::Instant> = None;
+        let mut tracker = AttributionTracker::new(AMBIGUITY_SETTLE_MS);
         while std::time::Instant::now() < deadline {
-            let pids = match crate::launcher::query_job_pids(s.job_handle()) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!(error = %e, "job PID query failed during launcher attribution");
-                    Vec::new()
+            let pids = match JobQueryOutcome::from_query_result(crate::launcher::query_job_pids(
+                s.job_handle(),
+            )) {
+                JobQueryOutcome::Proceed(pids) => pids,
+                JobQueryOutcome::Failed(e) => {
+                    return ZoneExecution::Failed {
+                        failure: ZoneFailure::LauncherFailed,
+                        message: format!("could not query launcher process tree: {e}"),
+                        launched,
+                    };
                 }
             };
             let matched = filter_job_windows(&enumerate_real_windows(min_px), &pids, s.cmd_pid);
+            let before = seen.len();
             for w in matched {
                 if !seen.iter().any(|u| u.hwnd == w.hwnd) {
                     seen.push(w);
                 }
             }
-            if !seen.is_empty() {
-                let now = std::time::Instant::now();
-                match first_seen {
-                    None => first_seen = Some(now),
-                    Some(t)
-                        if now.duration_since(t)
-                            >= std::time::Duration::from_millis(AMBIGUITY_SETTLE_MS) =>
-                    {
-                        break
-                    }
-                    _ => {}
-                }
+            let now = std::time::Instant::now();
+            tracker.observe(seen.len() - before, now);
+            if !seen.is_empty() && should_stop_attribution(now, deadline, &tracker) {
+                break;
             }
             std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
         }
@@ -1625,6 +1700,150 @@ mod tests {
         z.path = r"C:\App\app.exe".into();
         z.launcher_path = script.into();
         z
+    }
+
+    fn candidate(hwnd: isize, pid: u32) -> CandidateWindow {
+        CandidateWindow {
+            hwnd,
+            pid,
+            class: format!("class-{hwnd}"),
+            process_path: format!(r"C:\App\app{hwnd}.exe"),
+            title: format!("App {hwnd}"),
+        }
+    }
+
+    /* ---------------- WP7: ambiguity settle timer resets on each new window ---------------- */
+
+    #[test]
+    fn delayed_second_window_resets_quiet_period_and_yields_ambiguous() {
+        let t0 = std::time::Instant::now();
+        let mut tracker = AttributionTracker::new(AMBIGUITY_SETTLE_MS);
+
+        // First unique window appears at t0.
+        tracker.observe(1, t0);
+        assert!(!tracker.is_settled(t0));
+
+        // Second unique window appears at t0+500ms -> quiet period resets.
+        let t_second = t0 + std::time::Duration::from_millis(500);
+        tracker.observe(1, t_second);
+
+        // The old first_seen logic would have broken at t0+400ms. After the
+        // reset, that point is no longer a settle point: the tracker waits a
+        // full quiet period from the SECOND window instead.
+        assert!(
+            !tracker.is_settled(t0 + std::time::Duration::from_millis(AMBIGUITY_SETTLE_MS)),
+            "the old break point must not be a settle point once a later window was seen"
+        );
+        assert!(!tracker.is_settled(t_second));
+        assert!(!tracker.is_settled(t_second + std::time::Duration::from_millis(399)));
+        assert!(tracker.is_settled(t_second + std::time::Duration::from_millis(400)));
+
+        // Final attribution sees both windows -> Ambiguous (never snaps first).
+        let a = candidate(1, 100);
+        let b = candidate(2, 101);
+        assert_eq!(
+            decide_attribution(vec![a.clone(), b.clone()]),
+            AttributionDecision::Ambiguous(vec![a, b])
+        );
+    }
+
+    #[test]
+    fn repeated_enumeration_of_same_hwnd_does_not_reset_quiet_period() {
+        let t0 = std::time::Instant::now();
+        let mut tracker = AttributionTracker::new(AMBIGUITY_SETTLE_MS);
+        tracker.observe(1, t0); // first discovery
+
+        // Repeated polls see the same HWND -> new_count == 0 -> no reset.
+        for ms in [100, 200, 300] {
+            tracker.observe(0, t0 + std::time::Duration::from_millis(ms));
+        }
+        assert!(!tracker.is_settled(t0 + std::time::Duration::from_millis(399)));
+        assert!(tracker.is_settled(t0 + std::time::Duration::from_millis(400)));
+
+        // A single window (even enumerated repeatedly) decides as Single.
+        let w = candidate(7, 200);
+        assert_eq!(
+            decide_attribution(vec![w.clone(), w.clone()]),
+            AttributionDecision::Single(w)
+        );
+    }
+
+    #[test]
+    fn single_window_settles_after_quiet_period_to_single() {
+        let t0 = std::time::Instant::now();
+        let mut tracker = AttributionTracker::new(AMBIGUITY_SETTLE_MS);
+        tracker.observe(1, t0);
+        assert!(!tracker.is_settled(t0 + std::time::Duration::from_millis(399)));
+        let settled_at = t0 + std::time::Duration::from_millis(400);
+        assert!(tracker.is_settled(settled_at));
+        // The settled branch of the loop-exit decision (deadline still ahead).
+        assert!(should_stop_attribution(
+            settled_at,
+            settled_at + std::time::Duration::from_secs(1),
+            &tracker
+        ));
+
+        let w = candidate(42, 300);
+        assert_eq!(
+            decide_attribution(vec![w.clone()]),
+            AttributionDecision::Single(w)
+        );
+    }
+
+    #[test]
+    fn multiple_windows_decide_as_ambiguous() {
+        let a = candidate(10, 400);
+        let b = candidate(11, 401);
+        let c = candidate(12, 402);
+        assert_eq!(
+            decide_attribution(vec![a.clone(), b.clone(), c.clone()]),
+            AttributionDecision::Ambiguous(vec![a, b, c])
+        );
+    }
+
+    #[test]
+    fn deadline_forces_decision_on_what_was_seen_without_false_single() {
+        let t0 = std::time::Instant::now();
+        let deadline = t0 + std::time::Duration::from_secs(LAUNCH_WINDOW_POLL_SECS);
+        let mut tracker = AttributionTracker::new(AMBIGUITY_SETTLE_MS);
+        tracker.observe(2, t0); // two windows seen, quiet period not elapsed
+
+        // Not settled yet, but the deadline still stops the loop (no hang).
+        assert!(!tracker.is_settled(t0 + std::time::Duration::from_millis(100)));
+        assert!(should_stop_attribution(deadline, deadline, &tracker));
+
+        // Decision is made on what was seen: >1 window is Ambiguous, not Single.
+        let a = candidate(20, 500);
+        let b = candidate(21, 501);
+        assert_eq!(
+            decide_attribution(vec![a.clone(), b.clone()]),
+            AttributionDecision::Ambiguous(vec![a, b])
+        );
+    }
+
+    /* ---------------- WP7: failed Job PID query is a truthful error ---------------- */
+
+    #[test]
+    fn job_query_failure_is_failed_outcome_and_never_proceeds() {
+        let outcome = JobQueryOutcome::from_query_result(Err("access denied".to_string()));
+        assert_eq!(
+            outcome,
+            JobQueryOutcome::Failed("access denied".to_string())
+        );
+        // A failure must NOT be a Proceed(empty) that would use the EXE override.
+        assert!(!matches!(outcome, JobQueryOutcome::Proceed(_)));
+    }
+
+    #[test]
+    fn job_query_success_empty_proceeds_to_existing_fallback_path() {
+        let outcome = JobQueryOutcome::from_query_result(Ok(vec![]));
+        assert_eq!(outcome, JobQueryOutcome::Proceed(vec![]));
+    }
+
+    #[test]
+    fn job_query_success_with_pids_proceeds() {
+        let outcome = JobQueryOutcome::from_query_result(Ok(vec![100, 200, 300]));
+        assert_eq!(outcome, JobQueryOutcome::Proceed(vec![100, 200, 300]));
     }
 
     #[test]
