@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "bun run themes:generate && vite build",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json --noEmit",
     "test": "bun test",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "themes:generate": "bun run src/themes/generate-css.ts",
+    "themes:check": "bun run src/themes/generate-css.ts --check"
   },
   "dependencies": {
     "@lucide/svelte": "1.77.0",

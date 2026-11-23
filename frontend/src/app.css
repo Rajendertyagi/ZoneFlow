@@ -1,26 +1,79 @@
 @import 'tailwindcss';
+@import './themes/generated/presets.css';
 
-/* Deep-slate surfaces with an amber accent — the ZoneFlow Studio palette.
-   Tailwind 4 CSS-first theme: these become `bg-zf-*`, `text-zf-*`, etc. */
+/* Semantic token -> Tailwind utility mappings. `inline` keeps preset values in
+   generated/presets.css as the single source of truth: utilities reference the
+   semantic CSS variables directly instead of copying their values here. */
+@theme inline {
+  /* Shared preset keys. The `--zf-*` internal names are emitted by the
+     generator, so these mappings never self-reference and preset values win. */
+  --radius: var(--zf-radius);
+  --font-sans: var(--zf-font-sans);
+  --font-mono: var(--zf-font-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted-foreground-faint: var(--muted-foreground-faint);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-canvas-bg: var(--canvas-bg);
+  --color-canvas-grid: var(--canvas-grid);
+  --color-canvas-zone-stroke: var(--canvas-zone-stroke);
+  --color-canvas-zone-selected: var(--canvas-zone-selected);
+  --color-canvas-zone-drop: var(--canvas-zone-drop);
+  --color-canvas-zone-merge: var(--canvas-zone-merge);
+  --color-canvas-handle-shared: var(--canvas-handle-shared);
+  --color-canvas-handle-outer: var(--canvas-handle-outer);
+  --color-canvas-preview: var(--canvas-preview);
+  --color-canvas-label-bg: var(--canvas-label-bg);
+  --color-canvas-label-fg: var(--canvas-label-fg);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+/* zf-* compatibility aliases. Existing call sites use both utility classes
+   (`bg-zf-bg`) and raw `var(--color-zf-bg)`, so these stay as a regular @theme
+   (which emits the custom properties) until the WP3/WP4 migration is verified.
+   Each alias has exactly one semantic destination. */
 @theme {
-  --color-zf-bg: #070b14;
-  --color-zf-surface: #0d1526;
-  --color-zf-panel: #111c31;
-  --color-zf-raised: #17243d;
-  --color-zf-border: #22304a;
-  --color-zf-border-strong: #33445f;
-  --color-zf-text: #e6edf7;
-  --color-zf-muted: #93a4bd;
-  --color-zf-faint: #64748b;
-  --color-zf-accent: #f59e0b;
-  --color-zf-accent-hover: #fbbf24;
-  --color-zf-accent-ink: #1a1204;
-  --color-zf-ok: #34d399;
-  --color-zf-warn: #fbbf24;
-  --color-zf-error: #f87171;
-
-  --font-sans: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
+  --color-zf-bg: var(--background);
+  --color-zf-surface: var(--card);
+  --color-zf-panel: var(--popover);
+  --color-zf-raised: var(--secondary);
+  --color-zf-border: var(--border);
+  --color-zf-border-strong: var(--input);
+  --color-zf-text: var(--foreground);
+  --color-zf-muted: var(--muted-foreground);
+  --color-zf-faint: var(--muted-foreground-faint);
+  --color-zf-accent: var(--primary);
+  --color-zf-accent-hover: var(--primary-hover);
+  --color-zf-accent-ink: var(--primary-foreground);
+  --color-zf-ok: var(--success);
+  --color-zf-warn: var(--warning);
+  --color-zf-error: var(--destructive);
 }
 
 @layer base {
