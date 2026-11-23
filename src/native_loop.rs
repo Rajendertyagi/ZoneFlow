@@ -26,8 +26,9 @@ use windows::Win32::Foundation::{
     CloseHandle, COLORREF, HANDLE, HWND, LPARAM, LRESULT, POINT, SIZE, WAIT_OBJECT_0, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, AC_SRC_ALPHA,
-    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetStockObject, SelectObject,
+    SetBkMode, SetTextColor, TextOutW, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, BLENDFUNCTION, DEFAULT_GUI_FONT, DIB_RGB_COLORS, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::SetEvent;
@@ -52,6 +53,22 @@ const ACTIVE_MS: u32 = 16;
 const QUEUE_CAP: usize = 256;
 const VK_CONTROL: i32 = 0x11;
 const VK_LBUTTON: i32 = 0x01;
+const VK_ESCAPE: i32 = 0x1B;
+
+/// Native-only overlay zone payload: geometry plus a short display label.
+///
+/// This is an **internal native message payload**, not an HTTP endpoint,
+/// workspace DTO, theme API or persisted field. The cached rectangle is used
+/// for visualization and hit-testing only: on release the native side sends
+/// the selected `id` to the worker, which independently resolves it against
+/// authoritative state before any `MoveWindow` command is issued.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlayZone {
+    pub id: i32,
+    pub rect: Rect,
+    /// Short display label (may be empty). Truncated by the renderer.
+    pub label: String,
+}
 
 /* ============================ payload queue ============================== */
 
@@ -77,7 +94,7 @@ pub enum NativeMessage {
     /// Full-state refresh of the cached zone rectangles used by the overlay
     /// and drag-release hit testing (idempotent, coalesces on overflow).
     SetZones {
-        zones: Vec<(i32, Rect)>,
+        zones: Vec<OverlayZone>,
     },
     /// Full-state refresh of overlay colours/alpha from Settings (idempotent).
     SetOverlayStyle {
@@ -280,8 +297,8 @@ impl NativeNotifier {
         });
     }
 
-    /// Push a full-state zone refresh to the native overlay cache.
-    pub fn set_zones(&self, zones: Vec<(i32, Rect)>) {
+    /// Push a full-state zone refresh (geometry + labels) to the native cache.
+    pub fn set_zones(&self, zones: Vec<OverlayZone>) {
         self.send(NativeMessage::SetZones { zones });
     }
 
@@ -546,7 +563,9 @@ pub struct NativeLoop {
     event: HANDLE,
     system: System,
     work: Rect,
-    zones: Vec<(i32, Rect)>,
+    /// Native cached overlay zones (visualization + hit-testing only). Labels
+    /// arrive via `SetZones`; the worker never uses this cache for the move.
+    zones: Vec<OverlayZone>,
     hover_zone: i32,
     tints: Vec<(u8, u8, u8)>,
     inactive_alpha: u8,
@@ -679,6 +698,10 @@ impl NativeLoop {
         initial.selected_profile = cfg.active_profile.clone();
         notifier.rebuild_menu(&initial);
         notifier.set_toggle_label(true);
+        // Startup overlay zones include labels from the selected profile so the
+        // very first drag already shows index badges and short zone names.
+        let initial_zones = initial.overlay_zones();
+        notifier.set_zones(initial_zones.clone());
         // Drain the initial payloads now (before the loop starts) so they are
         // applied on the first iteration.
         drain_into_pending();
@@ -698,7 +721,7 @@ impl NativeLoop {
             event,
             system,
             work,
-            zones: crate::engine_core::compute_zones(cfg.active(), work, cfg.gap),
+            zones: initial_zones,
             hover_zone: -1,
             tints,
             inactive_alpha: cfg.settings.overlay_inactive_alpha,
@@ -715,7 +738,7 @@ impl NativeLoop {
     /// Refresh the locally cached zone rectangles used by the overlay and
     /// drag-release hit testing. Driven by `NativeMessage::SetZones` from the
     /// worker after every state change.
-    pub fn set_zones(&mut self, zones: Vec<(i32, Rect)>) {
+    pub fn set_zones(&mut self, zones: Vec<OverlayZone>) {
         self.zones = zones;
     }
 
@@ -743,14 +766,14 @@ impl NativeLoop {
         shutdown: &ShutdownHandle,
         confirm: &dyn DirtyConfirm,
     ) {
-        let mut active = false;
+        let mut gesture = GestureState::default();
         // Tray profile switches are sent as guarded commands; their oneshot
         // replies are polled here so a 409 dirty_state can open the native D2
         // dialog without blocking the message loop on a busy worker.
         let mut pending_applies: Vec<(String, oneshot::Receiver<Result<Value, ApiError>>)> =
             Vec::new();
         loop {
-            let timeout = if active { ACTIVE_MS } else { IDLE_MS };
+            let timeout = if gesture.active { ACTIVE_MS } else { IDLE_MS };
             // SAFETY: `self.event` is a valid manual-reset event created before
             // the loop and closed only after it exits. The handle slice lives
             // for the duration of the call; QS_ALLINPUT + MWMO_INPUTAVAILABLE
@@ -864,11 +887,14 @@ impl NativeLoop {
             }
 
             // Gesture detection (§3.7): global key state, focus-independent.
+            // Escape is polled BEFORE normal gesture-end handling so a cancel
+            // takes priority over a drop on the same iteration (WP5 / AC10).
             // While the layout is disabled (D4) the overlay is never shown, so
             // a Ctrl+drag cannot highlight zones whose drop would be ignored.
             let down = gesture_down();
-            let (next_active, step) = gesture_step(self.enabled, down, active);
-            active = next_active;
+            let escape = escape_down();
+            let (next, step) = gesture_step(self.enabled, down, escape, gesture);
+            gesture = next;
             match step {
                 GestureStep::Begin => {
                     self.show_overlay();
@@ -880,6 +906,11 @@ impl NativeLoop {
                     self.on_drag_release(&cmd_tx);
                 }
                 GestureStep::Cancel => self.hide_overlay(),
+                GestureStep::EscapeCancel => {
+                    // Latched cancel: hide, clear hover, and NEVER send a drop.
+                    self.hide_overlay();
+                    self.hover_zone = -1;
+                }
                 GestureStep::Idle => {}
             }
 
@@ -952,13 +983,13 @@ impl NativeLoop {
 
     fn update_overlay(&mut self) {
         let (x, y) = cursor_pos();
-        self.hover_zone = crate::engine_core::zone_at(&self.zones, x, y).unwrap_or(-1);
+        self.hover_zone = overlay_zone_at(&self.zones, x, y).unwrap_or(-1);
         self.paint_overlay();
     }
 
     fn on_drag_release(&self, cmd_tx: &mpsc::Sender<Command>) {
         let (x, y) = cursor_pos();
-        let Some(zone_id) = crate::engine_core::zone_at(&self.zones, x, y) else {
+        let Some(zone_id) = overlay_zone_at(&self.zones, x, y) else {
             return;
         };
         // `window_at` wraps its own Win32 calls with documented SAFETY notes;
@@ -1033,9 +1064,10 @@ impl NativeLoop {
             );
             pixels.fill(0);
             let stride = self.work.w as usize;
-            for (idx, (zid, z)) in self.zones.iter().enumerate() {
+            for (idx, zone) in self.zones.iter().enumerate() {
                 let (r, g, b) = self.tints[idx % self.tints.len()];
-                let hovered = *zid == self.hover_zone;
+                let hovered = zone.id == self.hover_zone;
+                let z = zone.rect;
                 let alpha = if hovered {
                     self.active_alpha
                 } else {
@@ -1074,6 +1106,10 @@ impl NativeLoop {
                     edge,
                 );
             }
+
+            // Draw index badges and short labels last so they sit above the
+            // zone fills. Best-effort: text failure never blocks the overlay.
+            draw_zone_labels(mem_dc, pixels, stride, &self.zones, self.work);
 
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -1183,8 +1219,17 @@ impl NativeLoop {
     }
 }
 
-/// Pure gesture → overlay decision (D3/D4). Kept separate from the Win32 loop
-/// so the disabled-state behavior is unit-testable without a real window.
+/// Pure gesture state owned by the native main thread (WP5 / AC10).
+///
+/// `cancelled_until_release` is the Escape latch: once Escape cancels an active
+/// gesture, no new gesture may start until Ctrl or LeftButton is released. This
+/// prevents the next loop iteration from restarting the same held gesture.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct GestureState {
+    active: bool,
+    cancelled_until_release: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum GestureStep {
     /// Begin a drag: show and paint the overlay.
@@ -1196,32 +1241,86 @@ enum GestureStep {
     /// A drag was in flight when the layout was disabled: hide the overlay
     /// without sending a drop (the worker would reject it as inactive).
     Cancel,
+    /// Escape during an active drag: latch cancel, hide, clear hover, NO drop.
+    EscapeCancel,
     /// Nothing to do.
     Idle,
 }
 
-/// Decide the next gesture state and overlay action. When `enabled` is false
-/// the overlay is never shown or updated, so a Ctrl+drag cannot highlight
-/// zones whose drop the worker would silently ignore (D3/D4).
-fn gesture_step(enabled: bool, down: bool, active: bool) -> (bool, GestureStep) {
+/// Decide the next gesture state and overlay action without any Win32 calls.
+///
+/// Priority order (WP5 / AC10, preserving D3/D4):
+/// 1. Escape while active -> latch cancel, hide, clear, NO drop.
+/// 2. Ctrl/LButton released -> clear latch; end a normal drag with a drop, but
+///    a drag ended while disabled is still cancelled without a drop (D4).
+/// 3. Disabled layout while held -> never show; cancel in-flight without a
+///    drop. The latch is preserved so it still needs a release edge to clear.
+/// 4. Latched + still held -> suppressed (no overlay show/update, no drop).
+/// 5. Normal begin/track edges.
+fn gesture_step(
+    enabled: bool,
+    down: bool,
+    escape: bool,
+    state: GestureState,
+) -> (GestureState, GestureStep) {
+    // 1) Escape takes priority over normal gesture-end handling.
+    if escape && state.active {
+        return (
+            GestureState {
+                active: false,
+                cancelled_until_release: true,
+            },
+            GestureStep::EscapeCancel,
+        );
+    }
+
+    // 2) `down` is ctrl && lbtn, so releasing EITHER key makes it false. Clear
+    //    the latch; only a normal active drag while enabled may drop.
+    if !down {
+        let step = if state.active {
+            if enabled {
+                GestureStep::End
+            } else {
+                GestureStep::Cancel
+            }
+        } else {
+            GestureStep::Idle
+        };
+        return (GestureState::default(), step);
+    }
+
+    // 3) Disabled layout while held: never show; cancel in-flight without a
+    //    drop (D3/D4). Keep the latch so re-enabling mid-hold cannot restart.
     if !enabled {
         return (
-            false,
-            if active {
+            GestureState {
+                active: false,
+                cancelled_until_release: state.cancelled_until_release,
+            },
+            if state.active {
                 GestureStep::Cancel
             } else {
                 GestureStep::Idle
             },
         );
     }
-    if down && !active {
-        (true, GestureStep::Begin)
-    } else if !down && active {
-        (false, GestureStep::End)
-    } else if down && active {
-        (true, GestureStep::Track)
+
+    // 4) Keys still held after Escape: stay suppressed until a release edge.
+    if state.cancelled_until_release {
+        return (state, GestureStep::Idle);
+    }
+
+    // 5) Normal edges.
+    if state.active {
+        (state, GestureStep::Track)
     } else {
-        (active, GestureStep::Idle)
+        (
+            GestureState {
+                active: true,
+                cancelled_until_release: false,
+            },
+            GestureStep::Begin,
+        )
     }
 }
 
@@ -1234,6 +1333,123 @@ fn gesture_down() -> bool {
         let ctrl = (GetAsyncKeyState(VK_CONTROL) as u16 & 0x8000) != 0;
         let lbtn = (GetAsyncKeyState(VK_LBUTTON) as u16 & 0x8000) != 0;
         ctrl && lbtn
+    }
+}
+
+/// Escape key state (WP5). Focus-independent, like `gesture_down`.
+fn escape_down() -> bool {
+    // SAFETY: GetAsyncKeyState takes an i32 virtual-key code by value, reads no
+    // caller memory, and has no preconditions beyond a valid VK constant.
+    unsafe { (GetAsyncKeyState(VK_ESCAPE) as u16 & 0x8000) != 0 }
+}
+
+/// Hit-test the native cached overlay zones. The cache is visualization /
+/// hit-testing only; the returned id is sent to the worker, which resolves it
+/// independently against authoritative state before any `MoveWindow`.
+fn overlay_zone_at(zones: &[OverlayZone], x: i32, y: i32) -> Option<i32> {
+    let pairs: Vec<(i32, Rect)> = zones.iter().map(|z| (z.id, z.rect)).collect();
+    crate::engine_core::zone_at(&pairs, x, y)
+}
+
+/// Truncate a zone label to `max` characters, appending an ellipsis when cut.
+/// Pure so the renderer's readability rule is unit-testable without GDI.
+fn truncate_label(label: &str, max: usize) -> String {
+    let trimmed = label.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= max {
+        return trimmed.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out: String = chars[..max - 1].iter().collect();
+    out.push('…');
+    out
+}
+
+/// Draw a 1-based index badge and a short zone name with lightweight GDI text.
+///
+/// GDI writes RGB into the DIB but may leave the alpha byte at 0; a final pass
+/// restores alpha for drawn glyph pixels so `AC_SRC_ALPHA` blending shows them.
+/// Text stays small and near each zone's top-left corner so it never obscures
+/// the drop target. Rendering is best-effort: failure is ignored, never fatal
+/// to the overlay or the Escape/cancel safety path.
+///
+/// # Safety
+///
+/// The caller must guarantee all of the following:
+/// - `mem_dc` is a valid device context with the target 32bpp **top-down** DIB
+///   section currently selected into it (so GDI text lands in that bitmap).
+/// - `pixels` is the backing-byte slice of that exact DIB, and `stride` equals
+///   `work.w` (the DIB width in pixels); each pixel is 4 BGRA bytes. The slice
+///   must remain valid for the whole call and must not alias another writer.
+/// - `work` is the same work-area rectangle used to create the DIB, so the
+///   zone-to-overlay coordinate conversion stays in bounds.
+/// - The call happens on the owning (native main) thread, which created the
+///   DC/DIB and is the only thread that touches them.
+unsafe fn draw_zone_labels(
+    mem_dc: windows::Win32::Graphics::Gdi::HDC,
+    pixels: &mut [u8],
+    stride: usize,
+    zones: &[OverlayZone],
+    work: Rect,
+) {
+    let font = GetStockObject(DEFAULT_GUI_FONT);
+    if font.is_invalid() {
+        return;
+    }
+    let old_font = SelectObject(mem_dc, font);
+    let _ = SetBkMode(mem_dc, TRANSPARENT);
+    // COLORREF is 0x00BBGGRR; 0x00FFFFFF is white.
+    let _ = SetTextColor(mem_dc, COLORREF(0x00FFFFFF));
+
+    const BADGE_W: usize = 20;
+    const BADGE_H: usize = 18;
+    for (idx, zone) in zones.iter().enumerate() {
+        let x0 = (zone.rect.x - work.x).max(0) as usize;
+        let y0 = (zone.rect.y - work.y).max(0) as usize;
+        let x1 = ((zone.rect.x - work.x + zone.rect.w) as usize).min(work.w as usize);
+        let y1 = ((zone.rect.y - work.y + zone.rect.h) as usize).min(work.h as usize);
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+
+        // Small dark chip with the 1-based index.
+        let bx = x0 + 4;
+        let by = y0 + 4;
+        if bx + BADGE_W <= x1 && by + BADGE_H <= y1 {
+            blit_rect(
+                pixels,
+                stride,
+                (bx, by, bx + BADGE_W, by + BADGE_H),
+                (16, 20, 28, 230),
+            );
+            let index_text: Vec<u16> = (idx + 1).to_string().encode_utf16().collect();
+            let _ = TextOutW(mem_dc, (bx + 5) as i32, (by + 2) as i32, &index_text);
+        }
+
+        // Short label to the right of the badge, ellipsized for readability.
+        let label = truncate_label(&zone.label, 18);
+        if !label.is_empty() {
+            let text: Vec<u16> = label.encode_utf16().collect();
+            let tx = (x0 + 4 + BADGE_W + 6) as i32;
+            let ty = (y0 + 5) as i32;
+            if (tx as usize) < x1 && (ty as usize) < y1 {
+                let _ = TextOutW(mem_dc, tx, ty, &text);
+            }
+        }
+    }
+
+    if !old_font.is_invalid() {
+        let _ = SelectObject(mem_dc, old_font);
+    }
+
+    // GDI may leave the alpha byte at 0 for glyph pixels; make any drawn
+    // (non-black) pixel opaque so UpdateLayeredWindow's AC_SRC_ALPHA shows it.
+    for px in pixels.chunks_exact_mut(4) {
+        if px[3] == 0 && (px[0] != 0 || px[1] != 0 || px[2] != 0) {
+            px[3] = 255;
+        }
     }
 }
 
@@ -1360,14 +1576,31 @@ mod tests {
 
     /* --------------------------- D3/D4 gesture -------------------------- */
 
+    fn active_state() -> GestureState {
+        GestureState {
+            active: true,
+            cancelled_until_release: false,
+        }
+    }
+
+    fn cancelled_state() -> GestureState {
+        GestureState {
+            active: false,
+            cancelled_until_release: true,
+        }
+    }
+
     #[test]
     fn gesture_step_disabled_never_shows_overlay_on_ctrl_drag() {
         // The core D-3 finding: Ctrl+drag while disabled must not highlight
         // zones, because the worker would silently ignore the drop.
-        assert_eq!(gesture_step(false, true, false), (false, GestureStep::Idle));
         assert_eq!(
-            gesture_step(false, false, false),
-            (false, GestureStep::Idle)
+            gesture_step(false, true, false, GestureState::default()),
+            (GestureState::default(), GestureStep::Idle)
+        );
+        assert_eq!(
+            gesture_step(false, false, false, GestureState::default()),
+            (GestureState::default(), GestureStep::Idle)
         );
     }
 
@@ -1376,21 +1609,220 @@ mod tests {
         // If the layout is disabled mid-drag, hide the overlay but do NOT send
         // a drop (Cancel never calls on_drag_release).
         assert_eq!(
-            gesture_step(false, true, true),
-            (false, GestureStep::Cancel)
+            gesture_step(false, true, false, active_state()),
+            (GestureState::default(), GestureStep::Cancel)
         );
         assert_eq!(
-            gesture_step(false, false, true),
-            (false, GestureStep::Cancel)
+            gesture_step(false, false, false, active_state()),
+            (GestureState::default(), GestureStep::Cancel)
         );
     }
 
     #[test]
     fn gesture_step_enabled_drives_normal_begin_track_end() {
-        assert_eq!(gesture_step(true, true, false), (true, GestureStep::Begin));
-        assert_eq!(gesture_step(true, true, true), (true, GestureStep::Track));
-        assert_eq!(gesture_step(true, false, true), (false, GestureStep::End));
-        assert_eq!(gesture_step(true, false, false), (false, GestureStep::Idle));
+        assert_eq!(
+            gesture_step(true, true, false, GestureState::default()),
+            (active_state(), GestureStep::Begin)
+        );
+        assert_eq!(
+            gesture_step(true, true, false, active_state()),
+            (active_state(), GestureStep::Track)
+        );
+        assert_eq!(
+            gesture_step(true, false, false, active_state()),
+            (GestureState::default(), GestureStep::End)
+        );
+        assert_eq!(
+            gesture_step(true, false, false, GestureState::default()),
+            (GestureState::default(), GestureStep::Idle)
+        );
+    }
+
+    /* ---------------------- WP5: Escape cancel latch -------------------- */
+
+    #[test]
+    fn escape_during_active_gesture_latches_cancel_without_drop() {
+        // AC10: Escape takes priority; latch set; no End (drop) step.
+        let (next, step) = gesture_step(true, true, true, active_state());
+        assert_eq!(step, GestureStep::EscapeCancel);
+        assert_eq!(next, cancelled_state());
+        assert_ne!(step, GestureStep::End, "cancel must never send MoveWindow");
+    }
+
+    #[test]
+    fn continued_ctrl_lbutton_after_escape_stays_suppressed() {
+        // Keys still held after Escape: no overlay show/update, no drop.
+        let (next, step) = gesture_step(true, true, false, cancelled_state());
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, cancelled_state(), "latch must persist while held");
+        assert_ne!(step, GestureStep::End);
+    }
+
+    #[test]
+    fn release_of_ctrl_or_lbutton_clears_latch() {
+        // `down` is ctrl && lbtn, so releasing EITHER key makes it false.
+        let (next, step) = gesture_step(true, false, false, cancelled_state());
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, GestureState::default());
+        assert!(!next.cancelled_until_release);
+    }
+
+    #[test]
+    fn fresh_gesture_requires_new_down_edge_after_release() {
+        // After release, a new Ctrl+LButton down edge starts a fresh gesture.
+        let released = gesture_step(true, false, false, cancelled_state()).0;
+        let (next, step) = gesture_step(true, true, false, released);
+        assert_eq!(step, GestureStep::Begin);
+        assert_eq!(next, active_state());
+    }
+
+    #[test]
+    fn no_move_window_command_during_cancelled_gesture_sequence() {
+        // Drive the full sequence and assert no End step ever occurs.
+        let mut state = GestureState::default();
+        let inputs = [
+            (true, false),  // begin
+            (true, false),  // track
+            (true, true),   // Escape while held
+            (true, false),  // still held after Escape
+            (true, false),  // still held
+            (false, false), // release
+            (true, false),  // fresh gesture
+        ];
+        let mut steps = Vec::new();
+        for (down, escape) in inputs {
+            let (next, step) = gesture_step(true, down, escape, state);
+            state = next;
+            steps.push(step);
+        }
+        assert_eq!(
+            steps,
+            vec![
+                GestureStep::Begin,
+                GestureStep::Track,
+                GestureStep::EscapeCancel,
+                GestureStep::Idle,
+                GestureStep::Idle,
+                GestureStep::Idle,
+                GestureStep::Begin,
+            ]
+        );
+        assert!(
+            !steps.contains(&GestureStep::End),
+            "a cancelled gesture must never produce a drop"
+        );
+    }
+
+    #[test]
+    fn escape_while_idle_does_not_latch() {
+        let (next, step) = gesture_step(true, false, true, GestureState::default());
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, GestureState::default());
+    }
+
+    #[test]
+    fn escape_and_release_on_same_tick_cancels_without_drop() {
+        // F-3: Escape has priority over the release-clear branch on the same
+        // poll. The first tick latches cancel (no End/drop); the next !down
+        // tick clears the latch with no drop either.
+        let (latched, step) = gesture_step(true, false, true, active_state());
+        assert_eq!(step, GestureStep::EscapeCancel);
+        assert_eq!(latched, cancelled_state());
+        assert_ne!(step, GestureStep::End, "same-tick cancel must not drop");
+
+        let (released, step2) = gesture_step(true, false, false, latched);
+        assert_eq!(step2, GestureStep::Idle);
+        assert_eq!(released, GestureState::default());
+        assert_ne!(
+            step2,
+            GestureStep::End,
+            "release after cancel must not drop"
+        );
+    }
+
+    #[test]
+    fn disabled_while_latched_then_reenabled_mid_hold_cannot_restart() {
+        // F-1: Escape latch -> layout disabled while still held -> re-enabled
+        // while still held must stay suppressed (NO Begin), then release clears
+        // the latch and a fresh down edge begins normally. No End anywhere.
+        // 1) Active gesture, Escape -> latch cancel.
+        let (mut state, step) = gesture_step(true, true, true, active_state());
+        assert_eq!(step, GestureStep::EscapeCancel);
+        assert_eq!(state, cancelled_state());
+        let mut steps = vec![step];
+
+        // 2) Layout disabled while keys still held -> Idle, latch preserved.
+        let (next, step) = gesture_step(false, true, false, state);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, cancelled_state(), "disable must not clear the latch");
+        state = next;
+        steps.push(step);
+
+        // 3) Re-enabled while STILL held -> suppressed Idle, never Begin.
+        let (next, step) = gesture_step(true, true, false, state);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(
+            next,
+            cancelled_state(),
+            "re-enable mid-hold must not restart"
+        );
+        assert_ne!(step, GestureStep::Begin, "no fresh down edge occurred");
+        state = next;
+        steps.push(step);
+
+        // 4) Release -> latch cleared, no drop.
+        let (next, step) = gesture_step(true, false, false, state);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, GestureState::default());
+        assert!(!next.cancelled_until_release);
+        state = next;
+        steps.push(step);
+
+        // 5) Fresh down edge -> Begin.
+        let (next, step) = gesture_step(true, true, false, state);
+        assert_eq!(step, GestureStep::Begin);
+        assert_eq!(next, active_state());
+        steps.push(step);
+
+        assert!(
+            !steps.contains(&GestureStep::End),
+            "no step in this sequence may produce a drop"
+        );
+    }
+
+    /* ------------------------ WP5: overlay labels ----------------------- */
+
+    #[test]
+    fn set_zones_message_carries_labels() {
+        let queue = Arc::new(NativeQueue::new());
+        let notifier = NativeNotifier::new(queue.clone(), Arc::new(OnceLock::new()));
+        let zones = vec![OverlayZone {
+            id: 7,
+            rect: Rect {
+                x: 1,
+                y: 2,
+                w: 3,
+                h: 4,
+            },
+            label: "Editor".into(),
+        }];
+        notifier.set_zones(zones.clone());
+        let drained = queue.drain();
+        assert_eq!(drained.len(), 1);
+        match &drained[0] {
+            NativeMessage::SetZones { zones: got } => assert_eq!(got, &zones),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_label_ellipsizes_long_names() {
+        assert_eq!(truncate_label("Editor", 18), "Editor");
+        assert_eq!(truncate_label("  Browser  ", 18), "Browser");
+        let short = truncate_label("A very long zone name that should be shortened", 10);
+        assert_eq!(short.chars().count(), 10);
+        assert!(short.ends_with('…'));
+        assert_eq!(truncate_label("Anything", 0), "");
     }
 
     #[test]

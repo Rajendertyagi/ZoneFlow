@@ -9,6 +9,7 @@ use super::dto::{
     ZoneDto,
 };
 use crate::config::AppConfig;
+use crate::native_loop::OverlayZone;
 use crate::system::HotkeyFailures;
 use std::collections::VecDeque;
 
@@ -256,7 +257,7 @@ impl Inner {
         self.last_saved_json = serde_json::to_string(&cfg).unwrap_or_default();
     }
 
-    /// Zone rectangles used for the drag overlay and drag-release hit testing.
+    /// Authoritative zone geometry + short labels for the selected profile.
     ///
     /// Both the overlay cache (worker → native `SetZones`) and the `MoveWindow`
     /// command MUST derive their geometry from this single source. They key off
@@ -264,11 +265,35 @@ impl Inner {
     /// apply, launch, hotkeys), so a Home `select` that leaves the draft's
     /// `active_profile` unchanged cannot make the overlay show one profile's
     /// zones while the drop snaps to another's.
-    pub fn drag_zones(&self) -> Vec<(i32, crate::engine_core::Rect)> {
+    ///
+    /// `label` is native-only visualization data (WP5): it is not a new
+    /// persisted field and never affects the final move decision. The native
+    /// cached rectangle is never authoritative — the worker re-derives it from
+    /// this method at release time before issuing `MoveWindow`.
+    pub fn drag_zones(&self) -> Vec<OverlayZone> {
         let mut cfg = self.draft.clone();
         cfg.active_profile = self.selected_profile.clone();
         let area = crate::engine::work_area();
-        crate::engine_core::compute_zones(cfg.active(), area, cfg.gap)
+        let profile = cfg.active();
+        let geometry = crate::engine_core::compute_zones(profile, area, cfg.gap);
+        // `compute_zones` maps 1:1 over `profile.zones` in order, so zipping
+        // preserves the id → label association without a second lookup.
+        geometry
+            .into_iter()
+            .zip(profile.zones.iter())
+            .map(|((id, rect), zone)| OverlayZone {
+                id,
+                rect,
+                label: zone.label.clone(),
+            })
+            .collect()
+    }
+
+    /// Native-only overlay payload view (visualization / hit-testing only).
+    /// Reuses the exact geometry from [`Self::drag_zones`]; the worker remains
+    /// authoritative for the final `MoveWindow` decision.
+    pub fn overlay_zones(&self) -> Vec<OverlayZone> {
+        self.drag_zones()
     }
 
     /// Persist the current draft: write to disk, then update the dirty baseline.
@@ -564,9 +589,27 @@ mod tests {
         let zones = s.drag_zones();
         assert_eq!(zones.len(), 1);
         assert_eq!(
-            zones[0].0, 2,
+            zones[0].id, 2,
             "drag zones must come from the selected profile"
         );
+    }
+
+    #[test]
+    fn overlay_zones_carry_labels_from_selected_profile() {
+        let mut s = Inner::new(cfg());
+        s.draft
+            .profiles
+            .get_mut("Coding")
+            .unwrap()
+            .zones
+            .push(Zone::new(2, "Code", "code.exe", 0.0, 0.0, 50.0, 50.0));
+        s.selected_profile = "Coding".into();
+        let zones = s.overlay_zones();
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].id, 2);
+        assert_eq!(zones[0].label, "Code");
+        // Same geometry source as the authoritative drag zones.
+        assert_eq!(zones[0].rect, s.drag_zones()[0].rect);
     }
 
     #[test]

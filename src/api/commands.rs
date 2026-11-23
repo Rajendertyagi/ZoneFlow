@@ -1056,9 +1056,12 @@ pub fn handle(
             // Use the same geometry the overlay displayed (Inner::drag_zones),
             // otherwise a Home select can make the drop snap to a different
             // profile's rectangles than the ones the user saw highlighted.
+            // The native cached rectangle is NEVER used here: the worker
+            // re-derives it from authoritative state at release time and only
+            // the selected zone_id crosses the native → worker boundary.
             let zones = inner.drag_zones();
-            if let Some(rect) = crate::engine_core::zone_by_id(&zones, zone_id) {
-                crate::engine::move_window_raw(hwnd, rect);
+            if let Some(zone) = zones.iter().find(|z| z.id == zone_id) {
+                crate::engine::move_window_raw(hwnd, zone.rect);
             } else {
                 tracing::warn!(zone_id, "drag release referenced an unknown zone");
             }
