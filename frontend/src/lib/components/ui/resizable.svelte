@@ -57,11 +57,15 @@
   <div class="min-h-0 min-w-0 overflow-auto" style:flex-basis="{split}%">
     {@render start?.()}
   </div>
+  <!-- Known limitation (WP3): keyboard resize is intentionally deferred. The
+       handle is not focusable because a non-functional tab stop would be worse
+       than none. Pointer/touch resize is unchanged. -->
   <div
     role="separator"
     aria-orientation={direction === 'horizontal' ? 'vertical' : 'horizontal'}
+    aria-label="Resize panes"
     class={cn(
-      'shrink-0 bg-zf-border transition-colors hover:bg-zf-accent',
+      'shrink-0 bg-border transition-colors motion-reduce:transition-none hover:bg-primary',
       direction === 'horizontal' ? 'w-1 cursor-col-resize' : 'h-1 cursor-row-resize',
     )}
     onpointerdown={onPointerDown}

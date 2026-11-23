@@ -12,7 +12,7 @@
 
 <div
   class={cn(
-    'overflow-auto [scrollbar-color:var(--color-zf-border-strong)_transparent] [scrollbar-width:thin]',
+    'overflow-auto [scrollbar-color:var(--color-input)_transparent] [scrollbar-width:thin]',
     className,
   )}
 >

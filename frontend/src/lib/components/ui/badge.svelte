@@ -13,11 +13,11 @@
   let { variant = 'default', class: className = '', children }: Props = $props();
 
   const variants: Record<Variant, string> = {
-    default: 'bg-zf-raised text-zf-text',
-    outline: 'border border-zf-border-strong text-zf-muted',
-    success: 'bg-zf-ok/15 text-zf-ok ring-1 ring-zf-ok/30',
-    warning: 'bg-zf-warn/15 text-zf-warn ring-1 ring-zf-warn/30',
-    error: 'bg-zf-error/15 text-zf-error ring-1 ring-zf-error/30',
+    default: 'bg-secondary text-foreground',
+    outline: 'border border-input text-muted-foreground',
+    success: 'bg-success/15 text-success ring-1 ring-success/30',
+    warning: 'bg-warning/15 text-warning ring-1 ring-warning/30',
+    error: 'bg-destructive/15 text-destructive ring-1 ring-destructive/30',
   };
 </script>
 

@@ -9,6 +9,10 @@
     id?: string;
     /** Accessible name for inputs without a visible <label for> association. */
     ariaLabel?: string;
+    /** Optional invalid state for form validation messaging. */
+    ariaInvalid?: boolean;
+    /** Id of a description/error element for screen readers. */
+    ariaDescribedby?: string;
     class?: string;
     oninput?: (event: Event) => void;
     onchange?: (event: Event) => void;
@@ -21,6 +25,8 @@
     disabled = false,
     id,
     ariaLabel,
+    ariaInvalid,
+    ariaDescribedby,
     class: className = '',
     oninput,
     onchange,
@@ -33,12 +39,14 @@
   {placeholder}
   {disabled}
   aria-label={ariaLabel}
+  aria-invalid={ariaInvalid}
+  aria-describedby={ariaDescribedby}
   {oninput}
   {onchange}
   bind:value
   class={cn(
-    'h-9 w-full rounded-md border border-zf-border bg-zf-surface px-3 text-sm text-zf-text',
-    'placeholder:text-zf-faint focus-visible:border-zf-accent focus-visible:outline-none',
+    'h-9 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground',
+    'placeholder:text-muted-foreground-faint focus-visible:border-primary focus-visible:outline-none',
     'disabled:cursor-not-allowed disabled:opacity-50',
     className,
   )}

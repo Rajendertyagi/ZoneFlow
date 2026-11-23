@@ -8,6 +8,8 @@
     step?: number;
     disabled?: boolean;
     id?: string;
+    /** Accessible name for ranges without a visible <label for> association. */
+    ariaLabel?: string;
     class?: string;
     onchange?: (value: number) => void;
   }
@@ -19,6 +21,7 @@
     step = 1,
     disabled = false,
     id,
+    ariaLabel,
     class: className = '',
     onchange,
   }: Props = $props();
@@ -36,10 +39,11 @@
   {max}
   {step}
   {disabled}
+  aria-label={ariaLabel}
   {value}
   oninput={handleInput}
   class={cn(
-    'h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zf-border-strong accent-zf-accent',
+    'h-1.5 w-full cursor-pointer appearance-none rounded-full bg-input accent-primary',
     'disabled:cursor-not-allowed disabled:opacity-50',
     className,
   )}

@@ -13,7 +13,7 @@
 
 <label
   for={htmlFor}
-  class={cn('text-xs font-medium text-zf-muted', className)}
+  class={cn('text-xs font-medium text-muted-foreground', className)}
 >
   {@render children?.()}
 </label>

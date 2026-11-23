@@ -12,6 +12,8 @@
     placeholder?: string;
     disabled?: boolean;
     id?: string;
+    /** Accessible name for selects without a visible <label for> association. */
+    ariaLabel?: string;
     class?: string;
     onchange?: (value: string) => void;
   }
@@ -22,6 +24,7 @@
     placeholder,
     disabled = false,
     id,
+    ariaLabel,
     class: className = '',
     onchange,
   }: Props = $props();
@@ -35,11 +38,12 @@
 <select
   {id}
   {disabled}
+  aria-label={ariaLabel}
   {value}
   onchange={handleChange}
   class={cn(
-    'h-9 w-full rounded-md border border-zf-border bg-zf-surface px-2 text-sm text-zf-text',
-    'focus-visible:border-zf-accent focus-visible:outline-none disabled:opacity-50',
+    'h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground',
+    'focus-visible:border-primary focus-visible:outline-none disabled:opacity-50',
     className,
   )}
 >

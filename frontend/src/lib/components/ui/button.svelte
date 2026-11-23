@@ -28,10 +28,10 @@
   }: Props = $props();
 
   const variants: Record<Variant, string> = {
-    default: 'bg-zf-accent text-zf-accent-ink hover:bg-zf-accent-hover',
-    outline: 'border border-zf-border-strong bg-transparent text-zf-text hover:bg-zf-raised',
-    ghost: 'bg-transparent text-zf-muted hover:bg-zf-raised hover:text-zf-text',
-    destructive: 'bg-zf-error text-white hover:brightness-110',
+    default: 'bg-primary text-primary-foreground hover:bg-primary-hover',
+    outline: 'border border-input bg-transparent text-foreground hover:bg-secondary',
+    ghost: 'bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground',
+    destructive: 'bg-destructive text-destructive-foreground hover:brightness-110',
   };
   const sizes: Record<Size, string> = {
     sm: 'h-7 px-2.5 text-xs',
@@ -46,8 +46,8 @@
   {title}
   {onclick}
   class={cn(
-    'inline-flex shrink-0 items-center justify-center gap-2 rounded-md font-medium transition-colors',
-    'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zf-accent',
+    'inline-flex shrink-0 items-center justify-center gap-2 rounded-md font-medium transition-colors motion-reduce:transition-none',
+    'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
     'disabled:pointer-events-none disabled:opacity-50',
     variants[variant],
     sizes[size],
