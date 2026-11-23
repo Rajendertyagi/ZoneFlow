@@ -110,7 +110,7 @@ No component may map a `zf-*` token to multiple semantic targets. Compatibility 
 | `frontend/src/lib/components/Canvas/ZoneCanvas.svelte` | grid stroke `#22304a`, empty-state text `#93a4bd/#6b7c96`, fallback tint `#f59e0b` | Replace with canvas semantic tokens/CSS vars. |
 | `frontend/src/lib/components/Canvas/ZoneRect.svelte` | strokes/fills `#f59e0b`, `#c792ea`, `#33445f`, badge bg `#0b1322`, text `#e6edf7/#93a4bd/#1a1204`, handles `#6EA8FE/#f59e0b` | Replace with canvas semantic tokens; preserve meaning of selected/drop/merge/shared/outer handles. |
 | `frontend/src/lib/components/Canvas/DragPreview.svelte` | preview fill/stroke/text `#f59e0b/#fbbf24` | Replace with `canvas-preview` tokens. |
-| `frontend/src/lib/components/Canvas/SnapGuides.svelte` | guide/hud `#f59e0b/#0b1322/#fbbf24` | Replace with canvas/overlay-guide tokens. |
+| `frontend/src/lib/components/Canvas/SnapGuides.svelte` | guide/hud `#f59e0b/#0b1322/#fbbf24` | Replace with exact mappings: guide strokes -> `canvas-preview`; HUD background -> `canvas-label-bg`; HUD border -> `canvas-preview`; HUD text -> `canvas-label-fg`. |
 | `frontend/src/lib/components/ui/*` | `bg-white`, `bg-black/70` in dialog/switch as applicable | Evaluate: keep only if mapped to semantic overlay/switch-thumb tokens or documented exception. |
 
 ## Theme System Design
@@ -337,11 +337,11 @@ struct OverlayZone {
 ```
 
 **Data flow**:
-- Worker constructs `Vec<OverlayZone>` from the currently selected profile's zones and the same authoritative geometry used by `drag_zones()`/overlay hit-testing.
+- Worker constructs `Vec<OverlayZone>` from the currently selected profile's zones using the same geometry calculation as `Inner::drag_zones()` (same selected profile, same work area/gap/zone geometry source).
 - Startup sends initial overlay zones including labels.
 - Subsequent `SetZones` refreshes include labels whenever zone/profile/selection state changes that affect overlay zones.
 - Native renderer draws a 1-based index badge and a suitably short zone name (truncate/ellipsize as needed for readability; never obscure hit target).
-- Hit-testing and `MoveWindow` continue using the same authoritative geometry/zone IDs from the same cached overlay-zone structure.
+- **Authority boundary (locked)**: native cached overlay zones are used for visualization and hit-testing only. On drag release, native sends the selected `zone_id` to the worker; the worker independently resolves that ID against `Inner::drag_zones()`/authoritative worker state and performs the final `MoveWindow` decision. Both native cache and worker resolution must derive from the same selected profile and geometry calculation. The native cached rectangle is never authoritative for the final move.
 
 **Constraints**:
 - No HTTP endpoint, workspace DTO, theme API, or persisted field for this.
@@ -442,7 +442,7 @@ struct OverlayZone {
 - **Non-goals**: No keyboard zone selection; no snap-success feedback unless worker confirmation path is implemented; no theme-preset coupling; no HTTP endpoint/workspace DTO/theme API/persisted field for labels.
 - **Dependencies**: WP0; independent of WP2-WP4 except shared release QA.
 - **Exact files/areas**: `src/native_loop.rs`, possibly `src/api/commands.rs`/`src/api/state.rs`/native message payloads only for internal overlay-zone label payload (not a theme-preference API); tests in `src/native_loop.rs`.
-- **Data flow/state ownership**: Native main thread owns overlay/gesture state; worker remains authoritative for move command execution. Worker constructs native-only overlay-zone payload (ID, rect, label) from currently selected profile using same authoritative geometry. Hit-testing and `MoveWindow` use same cached geometry/IDs.
+- **Data flow/state ownership**: Native main thread owns overlay/gesture state and uses cached overlay zones for visualization/hit-testing only. Worker remains authoritative for final move command execution: native sends `zone_id`, worker independently resolves it against `Inner::drag_zones()`/authoritative state. Both derive from the same selected profile and geometry calculation; native cached rectangle is never authoritative.
 - **Behavior**: Esc sets `cancelled_until_release`, hides overlay, clears active/hover state, and prevents `MoveWindow`; Escape takes priority over normal gesture-end handling. While cancelled, continued Ctrl+LButton does not restart gesture. Release of Ctrl or LeftButton clears latch; next fresh gesture requires new down edge. Release outside zone no move; disabled layout suppresses/cancels; hovered zone clearly emphasized; overlay draws 1-based index and short zone name.
 - **Failure/fallback**: If label rendering is unreliable, ship index badge/minimal label with documented limitation; do not block Escape/cancel safety.
 - **Automated tests**: Pure/state-machine tests for normal start, Escape during active gesture, continued Ctrl+LButton after Escape, release of Ctrl or LeftButton, subsequent fresh gesture, and no `MoveWindow` during cancelled gesture.
@@ -527,7 +527,7 @@ struct OverlayZone {
 - [ ] Every `zf-*` token has exactly one semantic mapping; `zf-faint` -> `muted-foreground-faint`.
 - [ ] Preset schema uses literal allowed-key types/runtime allowlists; required/optional tokens explicit; no overlay preset tokens.
 - [ ] Native Escape cancel uses `cancelled_until_release` latch with required test cases; no `MoveWindow` during cancelled gesture.
-- [ ] Native zone labels use internal-only payload extension; no HTTP endpoint/workspace DTO/theme API/persisted field.
+- [ ] Native zone labels use internal-only payload extension; native cache is visualization/hit-test only, worker resolves final `MoveWindow` from authoritative state; no HTTP endpoint/workspace DTO/theme API/persisted field.
 - [ ] WP dependencies are acyclic and independently reviewable; `index.html` changes only in WP2; WP1 owns schema/fixtures/CSS generation.
 - [ ] Every acceptance criterion has a verification method; accessibility ratios/reduced-motion explicitly stated.
 - [ ] Manual Windows behavior is not claimed unless actually tested.
