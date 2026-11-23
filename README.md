@@ -19,7 +19,7 @@ Your original AHK files are untouched at `E:\Apps\Hotkeys\ScreenLayout.ahk` (and
 - **Global hotkeys** — 17 keyboard bindings plus the `Ctrl`+drag mouse gesture (see table below). All bindings are stored in config and editable in the Hotkeys view.
 - **Undo/redo** — `Ctrl+Z` / `Ctrl+Shift+Z` (or `Ctrl+Y`) over zone and profile edits, with a configurable undo depth.
 - **Tray menu** — dynamic profile list with applied/selected markers, Disable/Enable, Open editor, Copy editor URL, Settings, Re-tile, Reload and Exit.
-- **Autostart** — optional launch at Windows login, plus optional auto-launch-and-snap of bound apps on startup.
+- **Autostart** — optional launch of ZoneFlow at Windows login.
 - **Config persistence** — versioned JSON config (schema v1) with empty-by-default starter profiles and automatic migration of older configs.
 
 ## Build

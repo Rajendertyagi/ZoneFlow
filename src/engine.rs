@@ -1723,8 +1723,8 @@ mod tests {
         tracker.observe(1, t0);
         assert!(!tracker.is_settled(t0));
 
-        // Second unique window appears at t0+500ms -> quiet period resets.
-        let t_second = t0 + std::time::Duration::from_millis(500);
+        // Second unique window appears at t0+300ms -> quiet period resets.
+        let t_second = t0 + std::time::Duration::from_millis(300);
         tracker.observe(1, t_second);
 
         // The old first_seen logic would have broken at t0+400ms. After the
