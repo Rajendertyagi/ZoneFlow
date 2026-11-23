@@ -2,7 +2,7 @@
 
 ## FINAL STATUS (2026-11-23) — all work packages complete
 
-Every applicable finding below has been resolved, independently reviewed, and pushed to `origin/main`. Final HEAD: `7861087`. Final checks: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (**238 unit + 3 integration**), `cargo build --release`, `bun run check`, `bun test` (**162**), `bun run build` — all passing.
+Every applicable finding below has been resolved, independently reviewed, and pushed to `origin/main`. This follow-up started at `138f126`; final HEAD: `99d5673`. Final checks: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (**246 unit + 3 integration**), `cargo build --release`, `bun run check`, `bun test` (**162**), `bun run build` — all passing.
 
 | Package | Commit(s) | Findings closed |
 |---|---|---|
@@ -15,12 +15,14 @@ Every applicable finding below has been resolved, independently reviewed, and pu
 | WP5 | `d8299aa` | U-02, U-04, U-05, U-06, U-07, U-08, U-09, B-3/B-6 + EnumWindows fail-open |
 | WP6 | `1a2ea7b` | F8 (library target + full round-trip), R-05 (`.bad` recovery), SSE backoff tests, path-isolated config write |
 | WP7 | `7861087` | BAT/CMD launcher support via Job Objects (reliable attribution, no HWND snapshot heuristic) |
+| WP7 follow-up | `99d5673` | WP7 ambiguity quiet-period reset + Job PID query error handling |
 
 **Intentionally deferred / documented, not defects:**
 - **R-02 (security):** the unauthenticated loopback API CSRF/DNS-rebinding risk remains an accepted trade-off. Per explicit user decision, no Origin/Host/CSRF/CORS/auth mechanism was introduced. Documented as a known limitation.
 - **D-1 display-change re-tiling:** the dead `display_debounce_ms` control was removed; full display-change detection was not implemented (native-loop change beyond settings scope). Documented as a limitation.
 - **B-4 startup auto-launch:** the dead toggle was removed; feature not implemented. Documented as a limitation.
 - **BAT/CMD live Windows verification:** 11 manual acceptance scenarios are documented in `tests/README.md`; no live Windows BAT execution was performed (headless environment). Job Object attribution is implemented and unit-tested at the pure-logic level, but not exercised against a real desktop.
+- **BAT/CMD ambiguity quiet period (documented limitation, not a regression):** the ambiguity quiet period is 400 ms measured from the most recent new window. A second application window appearing AFTER that quiet period has already elapsed (e.g. >400 ms after the first with no new windows in between) can still be missed because the poll loop breaks on settle. An absolute guarantee would require polling the full 8 s deadline on every single-app launch (a UX regression). This is a documented limitation of the prescribed mechanism, not a regression.
 
 **Original audit baseline below (historical record).**
 

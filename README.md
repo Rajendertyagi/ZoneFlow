@@ -101,7 +101,7 @@ That is **17 keyboard bindings** (9 + 1 + 4 + 2 + 1) plus **1 mouse gesture**. `
 
 ## Architecture
 
-The crate is a binary (`src/main.rs`, no `src/lib.rs`). It runs **three long-lived threads**:
+The crate has a library target (`src/lib.rs`) consumed by the binary (`src/main.rs`) and the integration tests. It runs **three long-lived threads**:
 
 1. **Main / native** — owns the tray, global hotkeys, the hidden message-only window and the layered drag overlay; runs the `MsgWaitForMultipleObjectsEx` message loop (150 ms idle gesture poll → 16 ms active tracking).
 2. **Command worker** — authoritative state, history and synchronous engine calls; receives commands over an mpsc channel and broadcasts SSE events.
@@ -122,11 +122,11 @@ Modules:
 - **`src/autostart.rs`** — login autostart.
 - **`frontend/`** — Svelte 5 SPA (Vite 8, Tailwind 4, shadcn-svelte, Bits UI, Paneforge, Lucide icons). Built to `frontend/dist/` at build time and embedded into the `.exe`; no separate server and no Node/Bun at runtime.
 
-All tunables live in the `Settings` struct in `src/config.rs` — never as literals in code. Key ones: `snap_points`, `grid_cols` / `grid_rows`, `min_zone_pct`, `resize_step_pct`, `boundary_tolerance_pct`, `undo_depth`, `display_debounce_ms`, `overlay_inactive_alpha` / `overlay_active_alpha`, `dwm_snap_retries`, `min_window_px`, `zone_tints`, `auto_launch_on_startup`, `resolutions`, `app_list_cap`, `running_apps_ttl_secs`, `taskbar_h`, and `stage_lower_h`. Add new configurables there.
+All tunables live in the `Settings` struct in `src/config.rs` — never as literals in code. Active tunables include `snap_points`, `grid_cols` / `grid_rows`, `min_zone_pct`, `boundary_tolerance_pct`, `undo_depth`, `overlay_inactive_alpha` / `overlay_active_alpha`, `dwm_snap_retries`, `min_window_px`, `zone_tints`, `app_list_cap`, `running_apps_ttl_secs` and `gap`. Some fields (`resize_step_pct`, `display_debounce_ms`, `auto_launch_on_startup`, `resolutions`, `taskbar_h`, `stage_lower_h`) are retained in the schema for compatibility but are not exposed in the UI and have no runtime effect. Add new configurables there.
 
 ## Testing
 
-**126 Rust tests pass** — 123 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. Because this is a binary crate with no `src/lib.rs`, the authoritative unit tests live inline in the source modules; see `tests/README.md` for the rationale. The **frontend adds 43 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
+**246 unit + 3 integration Rust tests pass** — 246 inline `#[cfg(test)]` unit tests (covering config, engine core, engine, system, apps, browser, clipboard, web assets, native loop and the full API/D1–D6 command matrix) plus 3 integration tests in `tests/config_file_roundtrip.rs` that verify the on-disk JSON contract. The crate now has a library target (`src/lib.rs`) consumed by the binary and the integration tests; unit tests still live inline in the source modules, and `tests/config_file_roundtrip.rs` imports the real `config::AppConfig` types (see `tests/README.md` for the rationale). The **frontend adds 162 tests** (`bun test`) and `bun run check` (svelte-check + tsc) is clean.
 
 ```powershell
 cargo test

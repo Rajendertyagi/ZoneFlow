@@ -1,8 +1,66 @@
 # ZoneFlow — BAT/CMD launcher support (implementation plan)
 
-Status: **plan only — not implemented.** Based on `main` at `1456d63`.
-No code changes, no commits. Preserve D1–D6, the CPU/SSE fix in `1456d63`,
-fixed port 4000, open API, and existing config compatibility.
+> **⚠️ HISTORICAL PLAN — SUPERSEDED / IMPLEMENTED.** This document is retained
+> as the historical research and design record only. The feature was implemented
+> in `7861087` (WP7), with follow-up fixes in `99d5673`. **The actual
+> implementation differs from this plan in key ways** — most notably it uses
+> Windows Job Objects for authoritative process-tree attribution instead of the
+> before/after HWND snapshot proposed below. See **ACTUAL IMPLEMENTATION** just
+> below for what actually shipped; the research and design sections that follow
+> are kept for historical context and are not a description of the shipped code.
+
+Status: **SUPERSEDED / IMPLEMENTED** — implemented in `7861087`, follow-up fixes
+in `99d5673`. Originally based on `main` at `1456d63`. Preserves D1–D6, the
+CPU/SSE fix in `1456d63`, fixed port 4000, open API, and existing config
+compatibility.
+
+## ACTUAL IMPLEMENTATION (what shipped)
+
+This section records the design that actually shipped in `7861087` and was
+corrected in `99d5673`. Where it conflicts with the historical plan below, **this
+section is authoritative**.
+
+- **Process-tree attribution via Job Objects, not an HWND snapshot.** The launcher
+  calls `CreateJobObjectW`, spawns the interpreter with `CreateProcessW` using
+  `CREATE_SUSPENDED`, calls `AssignProcessToJobObject` **before** `ResumeThread`,
+  then queries `QueryInformationJobObject(JobObjectBasicProcessIdList)` for the
+  authoritative set of PIDs in the process tree. Windows are attributed by
+  matching against that PID list. There is deliberately **no** before/after HWND
+  snapshot: the visible console is itself a new eligible window and unrelated
+  windows can appear during the poll, so a snapshot cannot guarantee attribution.
+  If Job Object assignment fails (e.g. an incompatible parent job), the outcome
+  is `LauncherFailed` — never a silent downgrade to a snapshot heuristic.
+- **Console exclusion.** The `cmd.exe` console (`ConsoleWindowClass`), the
+  spawned `cmd.exe` PID, and the `conhost.exe` path are excluded from attribution
+  in every case, so the console is never arranged.
+- **Script path validation.** CMD metacharacters `% ! & | ^ < >`, quotes and
+  control characters are rejected outright (not escaped). `ComSpec` is validated
+  (basename `cmd.exe` + exists) with a `GetSystemDirectoryW() + "\cmd.exe"`
+  fallback. The script path is resolved to an absolute path and existence-checked;
+  the child's working directory is the script's parent; the script path is passed
+  as a single quoted argv element via `cmd.exe /c`.
+- **Console visibility.** `launcher_show_console` (default `true`) controls
+  `CREATE_NO_WINDOW`: `true` leaves the console visible, `false` hides it. EXE
+  launches remain hidden regardless.
+- **EXE override is identification-only.** `Zone.path` is never launched when a
+  launcher is set; it only narrows window identification. The script always runs.
+- **Honest outcomes.** New `LauncherFailed` and `AmbiguousWindow` outcomes were
+  added. A successful spawn is never reported as a successful arrangement;
+  multiple candidate windows are reported as ambiguous rather than guessed.
+- **Ambiguity quiet period.** 400 ms measured from the most recent new HWND,
+  capped by the overall 8 s deadline. A second application window appearing after
+  the quiet period has already elapsed (e.g. >400 ms after the first with no new
+  windows in between) can still be missed because the poll loop breaks on settle;
+  an absolute guarantee would require polling the full 8 s deadline on every
+  single-app launch (a UX regression). This is a documented limitation of the
+  prescribed mechanism, not a regression.
+- **Config compatibility.** `launcher_path` and `launcher_show_console` are
+  serde-defaulted on `Zone` (no schema version bump); old configs load with
+  `launcher_path = ""` and `launcher_show_console = true`.
+- **Manual acceptance scenarios.** The 11 real-Windows BAT/CMD acceptance
+  scenarios are documented in `tests/README.md` under "BAT/CMD launcher — manual
+  Windows acceptance criteria" (sentinel proof, console exclusion, Job lifetime,
+  backward compatibility, etc.). They are not run by the headless automated suite.
 
 ## Objective
 
