@@ -39,14 +39,14 @@
       y={r.y}
       width={r.w}
       height={r.h}
-      fill={tints[(entry.id - 1) % Math.max(1, tints.length)] ?? '#f59e0b'}
+      fill={tints[(entry.id - 1) % Math.max(1, tints.length)] ?? 'var(--canvas-preview)'}
       fill-opacity={0.16}
-      stroke="#fbbf24"
+      stroke="var(--canvas-preview)"
       stroke-width={strokeW}
       stroke-dasharray={`${Math.max(7, workArea.w * 0.007)} ${Math.max(5, workArea.w * 0.005)}`}
       rx={Math.max(2, workArea.w * 0.002)}
     />
-    <text x={r.x + r.w / 2} y={r.y + r.h / 2} fill="#fbbf24" font-size={labelSize} font-family="var(--font-mono)" text-anchor="middle" dominant-baseline="central">
+    <text x={r.x + r.w / 2} y={r.y + r.h / 2} fill="var(--canvas-label-fg)" font-size={labelSize} font-family="var(--font-mono)" text-anchor="middle" dominant-baseline="central">
       {entry.rect.x.toFixed(1)}, {entry.rect.y.toFixed(1)} · {entry.rect.w.toFixed(1)}×{entry.rect.h.toFixed(1)}
     </text>
   {/each}
@@ -58,14 +58,14 @@
       y={r.y}
       width={r.w}
       height={r.h}
-      fill="#f59e0b"
+      fill="var(--canvas-preview)"
       fill-opacity={0.14}
-      stroke="#fbbf24"
+      stroke="var(--canvas-preview)"
       stroke-width={strokeW}
       stroke-dasharray={`${Math.max(7, workArea.w * 0.007)} ${Math.max(5, workArea.w * 0.005)}`}
       rx={Math.max(2, workArea.w * 0.002)}
     />
-    <text x={r.x + r.w / 2} y={r.y + r.h / 2} fill="#fbbf24" font-size={labelSize} font-family="var(--font-mono)" text-anchor="middle" dominant-baseline="central">
+    <text x={r.x + r.w / 2} y={r.y + r.h / 2} fill="var(--canvas-label-fg)" font-size={labelSize} font-family="var(--font-mono)" text-anchor="middle" dominant-baseline="central">
       {draw.w.toFixed(1)} × {draw.h.toFixed(1)}%
     </text>
   {/if}

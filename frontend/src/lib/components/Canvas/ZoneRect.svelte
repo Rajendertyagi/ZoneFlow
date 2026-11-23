@@ -122,7 +122,15 @@
     return out;
   });
 
-  const stroke = $derived(dropTarget ? '#f59e0b' : mergeSource ? '#c792ea' : selected ? '#f59e0b' : '#33445f');
+  const stroke = $derived(
+    dropTarget
+      ? 'var(--canvas-zone-drop)'
+      : mergeSource
+        ? 'var(--canvas-zone-merge)'
+        : selected
+          ? 'var(--canvas-zone-selected)'
+          : 'var(--canvas-zone-stroke)',
+  );
   const strokeWidth = $derived(dropTarget || selected || mergeSource ? Math.max(2, workArea.w * 0.0016) : 1);
 </script>
 
@@ -157,7 +165,7 @@
 
   <!-- Number badge -->
   <g class="pointer-events-none" transform={`translate(${x + pad}, ${y + pad})`}>
-    <rect width={badgeSize} height={badgeSize} rx={badgeSize / 3} fill="#0b1322" fill-opacity={0.85} stroke={tint} stroke-width={1} />
+    <rect width={badgeSize} height={badgeSize} rx={badgeSize / 3} fill="var(--canvas-label-bg)" fill-opacity={0.85} stroke={tint} stroke-width={1} />
     <text
       x={badgeSize / 2}
       y={badgeSize / 2}
@@ -171,16 +179,16 @@
 
   <!-- Label + executable -->
   <g class="pointer-events-none" transform={`translate(${x + pad}, ${y + pad + badgeSize + pad * 0.6})`}>
-    <text fill="#e6edf7" font-size={labelSize} font-weight="600">{zone.label || `Zone ${index + 1}`}</text>
-    <text y={labelSize * 1.25} fill="#93a4bd" font-size={subSize} font-family="var(--font-mono)">
+    <text fill="var(--canvas-label-fg)" font-size={labelSize} font-weight="600">{zone.label || `Zone ${index + 1}`}</text>
+    <text y={labelSize * 1.25} fill="var(--muted-foreground)" font-size={subSize} font-family="var(--font-mono)">
       {zone.exe || 'unassigned'}
     </text>
   </g>
 
   {#if mergeSource}
     <g class="pointer-events-none" transform={`translate(${x + w - pad}, ${y + pad})`}>
-      <rect x={-badgeSize * 1.5} width={badgeSize * 1.5} height={badgeSize * 0.7} rx={badgeSize / 4} fill="#c792ea" />
-      <text x={-badgeSize * 0.75} y={badgeSize * 0.35} fill="#1a1204" font-size={badgeSize * 0.34} font-weight="700" text-anchor="middle" dominant-baseline="central">SRC</text>
+      <rect x={-badgeSize * 1.5} width={badgeSize * 1.5} height={badgeSize * 0.7} rx={badgeSize / 4} fill="var(--canvas-zone-merge)" />
+      <text x={-badgeSize * 0.75} y={badgeSize * 0.35} fill="var(--primary-foreground)" font-size={badgeSize * 0.34} font-weight="700" text-anchor="middle" dominant-baseline="central">SRC</text>
     </g>
   {/if}
 
@@ -191,9 +199,9 @@
       y={rh.y}
       width={rh.w}
       height={rh.h}
-      fill={rh.handle.kind === 'outer' ? '#6EA8FE' : '#f59e0b'}
+      fill={rh.handle.kind === 'outer' ? 'var(--canvas-handle-outer)' : 'var(--canvas-handle-shared)'}
       fill-opacity={rh.handle.kind === 'outer' ? 0.16 : 0.18}
-      stroke={rh.handle.kind === 'outer' ? '#6EA8FE' : '#f59e0b'}
+      stroke={rh.handle.kind === 'outer' ? 'var(--canvas-handle-outer)' : 'var(--canvas-handle-shared)'}
       stroke-opacity={0.55}
       stroke-width={1}
       style:cursor={rh.handle.axis === 'v' ? 'col-resize' : 'row-resize'}

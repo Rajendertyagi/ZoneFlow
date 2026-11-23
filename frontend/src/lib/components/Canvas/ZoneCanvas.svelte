@@ -75,6 +75,10 @@
     grid_rows: 8,
     min_zone_pct: 15,
     boundary_tolerance_pct: 1.5,
+    // Documented exception (WP4): zone_tints are user-configurable overlay/zone
+    // tint defaults from workspace settings, independent of the editor theme
+    // (Locked Decision 9 / plan hardcoded-colour inventory). They are not theme
+    // colours and have no sensible existing semantic token, so they stay literal.
     zone_tints: ['#F5B544', '#6EA8FE', '#5BD6A0', '#C792EA', '#FF8A65', '#4DD0E1'],
   };
 
@@ -616,7 +620,7 @@
         <path
           d={`M ${workArea.w / Math.max(1, settings.grid_cols)} 0 L 0 0 0 ${workArea.h / Math.max(1, settings.grid_rows)}`}
           fill="none"
-          stroke="#22304a"
+          stroke="var(--canvas-grid)"
           stroke-opacity={mode === 'draw' ? 0.55 : 0.22}
           stroke-width="1"
         />
@@ -641,14 +645,14 @@
         <text
           x={workArea.w / 2}
           y={workArea.h / 2 - 14}
-          fill="#93a4bd"
+          fill="var(--canvas-label-fg)"
           font-size={Math.max(16, workArea.h * 0.028)}
           font-weight="600">No zones yet</text
         >
         <text
           x={workArea.w / 2}
           y={workArea.h / 2 + 16}
-          fill="#6b7c96"
+          fill="var(--muted-foreground-faint)"
           font-size={Math.max(12, workArea.h * 0.018)}>Create your first zone with Add or Draw</text
         >
       </g>
@@ -673,7 +677,7 @@
         {outerHandles}
         tolerance={settings.boundary_tolerance_pct}
         inset={showGap ? gapWidth / 2 : 0}
-        tint={settings.zone_tints[index % Math.max(1, settings.zone_tints.length)] ?? '#f59e0b'}
+        tint={settings.zone_tints[index % Math.max(1, settings.zone_tints.length)] ?? 'var(--primary)'}
         onBodyPointerDown={onBodyPointerDown}
         onResizeStart={onResizeStart}
         onZoneContextMenu={(z, event) => {
