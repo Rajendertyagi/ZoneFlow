@@ -2,7 +2,7 @@
 
 ## Status
 
-- **Plan type**: documentation/specification only. No application feature implementation in this task.
+- **Plan type**: implementation-ready specification. WP0-WP6 have been implemented and committed (see WP completion status below); this document remains the authoritative spec.
 - **Repository**: `Rajendertyagi/ZoneFlow`
 - **Baseline commit verified**: `7e55c39` (`fix: correct autostart README and delayed-window test timing`, `origin/main` HEAD at audit time)
 - **Plan file**: `docs/plans/zoneflow-overlay-ux-theme-plan.md`
@@ -20,7 +20,7 @@ Factual implementation/check record for this plan (no manual verification claime
 | WP3 — selective primitive a11y | Implemented | `f0c07af` |
 | WP4 — theme-aware canvas | Implemented | `c49b42b` |
 | WP5 — native overlay UX | Implemented | `3c12e71` |
-| WP6 — QA / accessibility / docs | Automated checks run (all passed); docs updated | working tree (uncommitted) |
+| WP6 — QA / accessibility / docs | Automated checks run (all passed); docs updated | `597dc60` |
 
 WP6 automated checks run and passing: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (257 unit + 3 integration), `bun run check`, `bun test` (223 pass), `bun run build`, `bun run themes:check`. Exact commands, exit codes and output were captured in the WP6 review record / PR description (not a repo file); the repo-verifiable evidence artifacts are this status section, [`docs/theme-and-appearance.md`](../theme-and-appearance.md) and [`docs/manual-verification-checklist.md`](../manual-verification-checklist.md).
 

@@ -1221,9 +1221,11 @@ impl NativeLoop {
 
 /// Pure gesture state owned by the native main thread (WP5 / AC10).
 ///
-/// `cancelled_until_release` is the Escape latch: once Escape cancels an active
-/// gesture, no new gesture may start until Ctrl or LeftButton is released. This
-/// prevents the next loop iteration from restarting the same held gesture.
+/// `cancelled_until_release` is a general "cancelled until release" latch: once
+/// Escape cancels an active gesture OR the layout is disabled while Ctrl and
+/// LeftButton are held, no new gesture may start until Ctrl or LeftButton is
+/// released. This prevents the next loop iteration (or a mid-hold re-enable)
+/// from restarting the same held gesture.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct GestureState {
     active: bool,
@@ -1254,7 +1256,8 @@ enum GestureStep {
 /// 2. Ctrl/LButton released -> clear latch; end a normal drag with a drop, but
 ///    a drag ended while disabled is still cancelled without a drop (D4).
 /// 3. Disabled layout while held -> never show; cancel in-flight without a
-///    drop. The latch is preserved so it still needs a release edge to clear.
+///    drop. ALWAYS set the latch so a mid-hold re-enable cannot restart the
+///    gesture; it still needs a release edge to clear.
 /// 4. Latched + still held -> suppressed (no overlay show/update, no drop).
 /// 5. Normal begin/track edges.
 fn gesture_step(
@@ -1290,12 +1293,13 @@ fn gesture_step(
     }
 
     // 3) Disabled layout while held: never show; cancel in-flight without a
-    //    drop (D3/D4). Keep the latch so re-enabling mid-hold cannot restart.
+    //    drop (D3/D4). ALWAYS latch cancellation so re-enabling mid-hold cannot
+    //    restart the gesture, whether it began disabled or was disabled mid-drag.
     if !enabled {
         return (
             GestureState {
                 active: false,
-                cancelled_until_release: state.cancelled_until_release,
+                cancelled_until_release: true,
             },
             if state.active {
                 GestureStep::Cancel
@@ -1596,7 +1600,7 @@ mod tests {
         // zones, because the worker would silently ignore the drop.
         assert_eq!(
             gesture_step(false, true, false, GestureState::default()),
-            (GestureState::default(), GestureStep::Idle)
+            (cancelled_state(), GestureStep::Idle)
         );
         assert_eq!(
             gesture_step(false, false, false, GestureState::default()),
@@ -1610,7 +1614,7 @@ mod tests {
         // a drop (Cancel never calls on_drag_release).
         assert_eq!(
             gesture_step(false, true, false, active_state()),
-            (GestureState::default(), GestureStep::Cancel)
+            (cancelled_state(), GestureStep::Cancel)
         );
         assert_eq!(
             gesture_step(false, false, false, active_state()),
@@ -1779,6 +1783,168 @@ mod tests {
         steps.push(step);
 
         // 5) Fresh down edge -> Begin.
+        let (next, step) = gesture_step(true, true, false, state);
+        assert_eq!(step, GestureStep::Begin);
+        assert_eq!(next, active_state());
+        steps.push(step);
+
+        assert!(
+            !steps.contains(&GestureStep::End),
+            "no step in this sequence may produce a drop"
+        );
+    }
+
+    /* --------- WP5: disabled-layout cancellation latch (regression) ----- */
+
+    #[test]
+    fn disabled_during_active_gesture_sets_cancel_latch() {
+        // Disabling the layout while a gesture is held must latch cancellation
+        // (active=false, cancelled_until_release=true) and Cancel without a drop.
+        let (next, step) = gesture_step(false, true, false, active_state());
+        assert!(!next.active);
+        assert!(next.cancelled_until_release, "disable must set the latch");
+        assert_eq!(next, cancelled_state());
+        assert_eq!(step, GestureStep::Cancel);
+        assert_ne!(step, GestureStep::End, "cancel must never send MoveWindow");
+    }
+
+    #[test]
+    fn reenable_while_held_after_disable_stays_latched_idle() {
+        // From a disable-induced latch, re-enabling while Ctrl+LButton remain
+        // held must stay suppressed: Idle, latch intact, never Begin or End.
+        let latched = gesture_step(false, true, false, active_state()).0;
+        let (next, step) = gesture_step(true, true, false, latched);
+        assert_eq!(step, GestureStep::Idle);
+        assert!(
+            next.cancelled_until_release,
+            "latch must persist while held"
+        );
+        assert_eq!(next, cancelled_state());
+        assert_ne!(step, GestureStep::Begin, "no overlay restart mid-hold");
+        assert_ne!(step, GestureStep::End, "no drop mid-hold");
+    }
+
+    #[test]
+    fn disable_then_reenable_held_produces_no_begin_or_end() {
+        // Across the whole disable -> re-enable-while-held sequence there must
+        // be no overlay restart (Begin) and no drop (End).
+        let mut state = active_state();
+        let mut steps = Vec::new();
+        for enabled in [false, true, true] {
+            let (next, step) = gesture_step(enabled, true, false, state);
+            state = next;
+            steps.push(step);
+        }
+        assert_eq!(
+            steps,
+            vec![GestureStep::Cancel, GestureStep::Idle, GestureStep::Idle,]
+        );
+        assert!(
+            !steps.contains(&GestureStep::Begin),
+            "no overlay restart across disable -> re-enable-held"
+        );
+        assert!(
+            !steps.contains(&GestureStep::End),
+            "no drop across disable -> re-enable-held"
+        );
+    }
+
+    #[test]
+    fn release_after_disable_latch_clears_without_drop() {
+        // `down` is ctrl && lbtn, so releasing EITHER key makes it false and
+        // clears the disable-induced latch with no drop.
+        let latched = gesture_step(false, true, false, active_state()).0;
+        let (next, step) = gesture_step(true, false, false, latched);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, GestureState::default());
+        assert!(!next.cancelled_until_release);
+        assert_ne!(step, GestureStep::End, "release after cancel must not drop");
+    }
+
+    #[test]
+    fn fresh_gesture_begins_after_disable_latch_release() {
+        // After the disable-induced latch is cleared by release, a new
+        // Ctrl+LButton down edge starts a fresh gesture normally.
+        let latched = gesture_step(false, true, false, active_state()).0;
+        let released = gesture_step(true, false, false, latched).0;
+        let (next, step) = gesture_step(true, true, false, released);
+        assert_eq!(step, GestureStep::Begin);
+        assert_eq!(next, active_state());
+    }
+
+    #[test]
+    fn gesture_begins_while_disabled_then_reenabled_before_release() {
+        // A gesture that BEGINS while disabled must latch cancellation too, so
+        // re-enabling before release cannot restart it. No End anywhere.
+        let (latched, step) = gesture_step(false, true, false, GestureState::default());
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(latched, cancelled_state());
+
+        let (still_latched, step) = gesture_step(true, true, false, latched);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(still_latched, cancelled_state());
+        assert_ne!(
+            step,
+            GestureStep::Begin,
+            "re-enable mid-hold must not restart"
+        );
+        assert_ne!(step, GestureStep::End);
+
+        let (released, step) = gesture_step(true, false, false, still_latched);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(released, GestureState::default());
+
+        let (next, step) = gesture_step(true, true, false, released);
+        assert_eq!(step, GestureStep::Begin);
+        assert_eq!(next, active_state());
+        assert_ne!(step, GestureStep::End);
+    }
+
+    #[test]
+    fn disabled_layout_mid_hold_reenable_regression_no_restart_no_drop() {
+        // Key regression: active gesture -> disable while held -> re-enable
+        // while still held -> NO Begin/End -> release -> fresh gesture begins.
+        let mut state = active_state();
+        let mut steps = Vec::new();
+
+        // 1) Disable while the gesture is active and keys are held.
+        let (next, step) = gesture_step(false, true, false, state);
+        assert_eq!(step, GestureStep::Cancel);
+        assert_eq!(next, cancelled_state());
+        state = next;
+        steps.push(step);
+
+        // 2) Re-enable while STILL held: must stay suppressed, never Begin.
+        let (next, step) = gesture_step(true, true, false, state);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, cancelled_state());
+        assert_ne!(
+            step,
+            GestureStep::Begin,
+            "overlay must not restart mid-hold"
+        );
+        state = next;
+        steps.push(step);
+
+        // 3) No overlay restart and no drop across the disable -> re-enable-held sequence.
+        assert!(
+            !steps.contains(&GestureStep::Begin),
+            "no overlay restart across disable -> re-enable-held"
+        );
+        assert!(
+            !steps.contains(&GestureStep::End),
+            "no drop across disable -> re-enable-held"
+        );
+
+        // 4) Release either key: latch cleared, no drop.
+        let (next, step) = gesture_step(true, false, false, state);
+        assert_eq!(step, GestureStep::Idle);
+        assert_eq!(next, GestureState::default());
+        assert_ne!(step, GestureStep::End, "release after cancel must not drop");
+        state = next;
+        steps.push(step);
+
+        // 5) Fresh gesture begins after release.
         let (next, step) = gesture_step(true, true, false, state);
         assert_eq!(step, GestureStep::Begin);
         assert_eq!(next, active_state());
