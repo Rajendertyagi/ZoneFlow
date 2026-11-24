@@ -68,6 +68,26 @@ describe('generated/presets.css', () => {
     }
   });
 
+  test('scrim is present in every preset and mode block', () => {
+    const css = generateCss();
+    for (const item of PRESET_MANIFEST) {
+      for (const [mode, selector] of [
+        ['light', `:root[data-theme="${item.id}"]`],
+        ['dark', `:root[data-theme="${item.id}"].dark`],
+      ] as const) {
+        const body = block(css, selector);
+        expect(body, `${item.id} ${mode} missing --scrim`).toContain('--scrim:');
+        expect(body, `${item.id} ${mode} wrong value for --scrim`).toContain(
+          `--scrim: ${item.preset[mode].scrim};`,
+        );
+      }
+    }
+    // Default blocks must also expose scrim so the app renders before a preset
+    // is explicitly selected.
+    expect(block(css, ':root')).toContain('--scrim:');
+    expect(block(css, ':root.dark')).toContain('--scrim:');
+  });
+
   test('current fixtures provide all optional chart keys in both modes', () => {
     for (const item of PRESET_MANIFEST) {
       for (const mode of ['light', 'dark'] as const) {
@@ -122,6 +142,7 @@ describe('app.css wiring', () => {
     expect(css).toContain('--color-background: var(--background);');
     expect(css).toContain('--color-muted-foreground-faint: var(--muted-foreground-faint);');
     expect(css).toContain('--color-canvas-preview: var(--canvas-preview);');
+    expect(css).toContain('--color-scrim: var(--scrim);');
   });
 
   test('radius/font-sans/font-mono map to preset variables without self-reference', () => {

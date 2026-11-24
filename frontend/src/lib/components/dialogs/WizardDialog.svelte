@@ -93,7 +93,7 @@
     <button
       type="button"
       aria-label="Close wizard"
-      class="absolute inset-0 cursor-default bg-black/70"
+      class="absolute inset-0 cursor-default bg-scrim"
       onclick={onclose}
     ></button>
     <div
@@ -174,16 +174,16 @@
                   y={rect.y}
                   width={rect.w}
                   height={rect.h}
-                  fill={tints[i % Math.max(1, tints.length)] ?? '#f59e0b'}
+                  fill={tints[i % Math.max(1, tints.length)] ?? 'var(--canvas-preview)'}
                   fill-opacity="0.22"
-                  stroke={tints[i % Math.max(1, tints.length)] ?? '#f59e0b'}
+                  stroke={tints[i % Math.max(1, tints.length)] ?? 'var(--canvas-preview)'}
                   stroke-width="0.6"
                   vector-effect="non-scaling-stroke"
                 />
                 <text
                   x={rect.x + rect.w / 2}
                   y={rect.y + rect.h / 2}
-                  fill="#e6edf7"
+                  fill="var(--canvas-label-fg)"
                   font-size="3.2"
                   text-anchor="middle"
                   dominant-baseline="middle"

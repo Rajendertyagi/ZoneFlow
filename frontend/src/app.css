@@ -30,6 +30,7 @@
   --color-ring: var(--ring);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-scrim: var(--scrim);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-success: var(--success);

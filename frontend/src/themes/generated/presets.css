@@ -30,6 +30,7 @@
   --border: #d8dee9;
   --input: #b8c2d1;
   --ring: #b45309;
+  --scrim: rgba(7, 11, 20, 0.55);
   --canvas-bg: #f7f8fb;
   --canvas-grid: #d8dee9;
   --canvas-zone-stroke: #b8c2d1;
@@ -80,6 +81,7 @@
   --border: #22304a;
   --input: #33445f;
   --ring: #f59e0b;
+  --scrim: rgba(0, 0, 0, 0.72);
   --canvas-bg: #070b14;
   --canvas-grid: #22304a;
   --canvas-zone-stroke: #33445f;
@@ -130,6 +132,7 @@
   --border: #d8dee9;
   --input: #b8c2d1;
   --ring: #b45309;
+  --scrim: rgba(7, 11, 20, 0.55);
   --canvas-bg: #f7f8fb;
   --canvas-grid: #d8dee9;
   --canvas-zone-stroke: #b8c2d1;
@@ -180,6 +183,7 @@
   --border: #22304a;
   --input: #33445f;
   --ring: #f59e0b;
+  --scrim: rgba(0, 0, 0, 0.72);
   --canvas-bg: #070b14;
   --canvas-grid: #22304a;
   --canvas-zone-stroke: #33445f;
@@ -230,6 +234,7 @@
   --border: #e7ded2;
   --input: #d6c9b8;
   --ring: #92400e;
+  --scrim: rgba(41, 37, 36, 0.55);
   --canvas-bg: #faf7f2;
   --canvas-grid: #e7ded2;
   --canvas-zone-stroke: #d6c9b8;
@@ -280,6 +285,7 @@
   --border: #3c3229;
   --input: #57534e;
   --ring: #d6a87c;
+  --scrim: rgba(0, 0, 0, 0.72);
   --canvas-bg: #181512;
   --canvas-grid: #3c3229;
   --canvas-zone-stroke: #57534e;

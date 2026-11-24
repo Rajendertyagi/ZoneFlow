@@ -75,7 +75,7 @@
     <button
       type="button"
       aria-label="Cancel close"
-      class="absolute inset-0 cursor-default bg-black/70"
+      class="absolute inset-0 cursor-default bg-scrim"
       onclick={onclose}
     ></button>
     <div

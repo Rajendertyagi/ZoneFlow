@@ -154,7 +154,7 @@
     <button
       type="button"
       aria-label="Close picker"
-      class="absolute inset-0 cursor-default bg-black/70"
+      class="absolute inset-0 cursor-default bg-scrim"
       onclick={onclose}
     ></button>
     <div

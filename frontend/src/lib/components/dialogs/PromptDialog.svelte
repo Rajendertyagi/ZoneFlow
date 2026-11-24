@@ -42,7 +42,7 @@
     <button
       type="button"
       aria-label="Cancel dialog"
-      class="absolute inset-0 cursor-default bg-black/70"
+      class="absolute inset-0 cursor-default bg-scrim"
       onclick={() => onresolve(null)}
     ></button>
     <div

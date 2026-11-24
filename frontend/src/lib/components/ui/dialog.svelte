@@ -114,14 +114,16 @@
 
 {#if open}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <!-- Scrim: `bg-black/70` is an intentional documented exception — the
-         preset schema has no scrim token and a theme-derived scrim would be
-         unreadable in light presets. tabindex=-1 keeps it out of the trap. -->
+    <!-- Scrim: uses the theme-aware `bg-scrim` utility, backed by the required
+         `scrim` token (mapped via `--color-scrim` in app.css). The only remaining
+         hardcoded styling colours are documented exceptions: native overlay
+         `zone_tints` defaults (independent of the editor theme) and test-fixture
+         hex. tabindex=-1 keeps the scrim out of the focus trap. -->
     <button
       type="button"
       tabindex="-1"
       aria-label="Close dialog"
-      class="absolute inset-0 cursor-default bg-black/70"
+      class="absolute inset-0 cursor-default bg-scrim"
       onclick={close}
     ></button>
     <div

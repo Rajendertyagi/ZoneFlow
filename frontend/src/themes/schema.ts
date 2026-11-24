@@ -46,6 +46,7 @@ export const REQUIRED_LIGHT_DARK_KEYS = [
   'canvas-preview',
   'canvas-label-bg',
   'canvas-label-fg',
+  'scrim',
 ] as const;
 
 export const OPTIONAL_LIGHT_DARK_KEYS = [
