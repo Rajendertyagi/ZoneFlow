@@ -76,9 +76,9 @@
       </div>
     {/if}
 
-    <div class="overflow-hidden rounded-lg border border-zf-border">
+    <div class="overflow-hidden rounded-lg bg-zf-surface shadow-zf-1">
       {#each Object.keys(bindings).sort() as name (name)}
-        <div class="flex items-center gap-4 border-b border-zf-border bg-zf-surface px-4 py-2.5 last:border-0">
+        <div class="flex items-center gap-4 border-b border-[color:var(--zf-hairline)] px-4 py-2.5 transition-colors last:border-0 hover:bg-zf-raised motion-reduce:transition-none">
           <span class="min-w-0 flex-1 text-sm text-zf-text">{hotkeyLabel(name)}</span>
           <span class="hidden font-mono text-[0.65rem] text-zf-faint sm:block">{name}</span>
           <Input

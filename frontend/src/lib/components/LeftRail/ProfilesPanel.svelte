@@ -75,9 +75,9 @@
   <div class="min-h-0 flex-1 overflow-auto p-2">
     {#each profiles as profile (profile.name)}
       <div
-        class="group mb-1 rounded-md border px-2.5 py-2 transition-colors {profile.selected
-          ? 'border-zf-accent/60 bg-zf-accent/10'
-          : 'border-zf-border bg-zf-surface hover:border-zf-border-strong'}"
+        class="group mb-1 rounded-md px-2.5 py-2 transition-colors motion-reduce:transition-none {profile.selected
+          ? 'bg-zf-accent/10 ring-1 ring-inset ring-zf-accent/50'
+          : 'hover:bg-zf-raised'}"
       >
         <button
           type="button"
@@ -96,13 +96,13 @@
             <Badge variant="outline" class="!px-1.5 !py-0 !text-[0.6rem]">selected</Badge>
           {/if}
           <span class="ml-auto flex gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
-            <button type="button" title="Rename" class="rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void rename(profile.name)}>
+            <button type="button" title="Rename" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void rename(profile.name)}>
               <Pencil size={12} />
             </button>
-            <button type="button" title="Duplicate" class="rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void duplicate(profile.name)}>
+            <button type="button" title="Duplicate" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void duplicate(profile.name)}>
               <Copy size={12} />
             </button>
-            <button type="button" title="Delete" class="rounded p-1 text-zf-faint hover:bg-zf-error/15 hover:text-zf-error" onclick={() => void deleteProfile(profile.name)}>
+            <button type="button" title="Delete" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-error/15 hover:text-zf-error" onclick={() => void deleteProfile(profile.name)}>
               <Trash2 size={12} />
             </button>
           </span>

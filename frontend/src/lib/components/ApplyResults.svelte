@@ -7,7 +7,7 @@
 
 {#if applyResults.visible}
   <section
-    class="border-t border-zf-border bg-zf-surface px-4 py-2"
+    class="border-t border-zf-border bg-zf-raised px-4 py-2"
     aria-label="Per-zone apply results"
   >
     <div class="mb-1.5 flex items-center justify-between gap-2">
@@ -20,7 +20,7 @@
       <button
         type="button"
         aria-label="Dismiss zone results"
-        class="rounded p-0.5 text-zf-faint hover:text-zf-text"
+        class="inline-flex h-6 w-6 items-center justify-center rounded p-0.5 text-zf-faint hover:bg-zf-raised hover:text-zf-text"
         onclick={dismissApplyResults}
       >
         <X size={13} />

@@ -63,7 +63,7 @@
     id={tooltipId}
     role="tooltip"
     hidden={!visible}
-    class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 whitespace-nowrap rounded border border-input bg-popover px-2 py-1 text-xs text-foreground shadow-lg"
+    class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1 -translate-x-1/2 whitespace-nowrap rounded border border-input bg-popover px-2 py-1 text-xs text-foreground shadow-zf-3"
   >
     {text}
   </span>

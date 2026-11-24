@@ -53,7 +53,7 @@
        primary track when on. Both pairs clear AA in every preset/mode. -->
   <span
     class={cn(
-      'inline-block h-4 w-4 rounded-full shadow transition-transform motion-reduce:transition-none',
+      'inline-block h-4 w-4 rounded-full shadow-zf-1 transition-transform motion-reduce:transition-none',
       checked ? 'translate-x-4 bg-primary-foreground' : 'translate-x-0.5 bg-foreground',
     )}
   ></span>

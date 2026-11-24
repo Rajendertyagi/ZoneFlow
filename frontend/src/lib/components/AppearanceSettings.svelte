@@ -6,6 +6,12 @@
    * imports no store/api modules and never calls setSettings/setAppOptions/save.
    * Changing mode or preset only writes ModeWatcher's localStorage keys and
    * cannot dirty the draft or create undo/redo history.
+   *
+   * Preset identities (documentation note only — no behaviour here): the two
+   * built-in JSON presets are `zoneflow-amber` (amber / deep-slate) and
+   * `caffeine` (warmer coffee / cream). This component only selects one via
+   * ModeWatcher; it never imports, derives or applies theme values itself, so
+   * the low-chrome surface/elevation treatment stays entirely in the presets.
    */
   import { setMode, setTheme, theme, userPrefersMode } from 'mode-watcher';
   import { PRESET_MANIFEST, resolvePresetId } from '../../themes/manifest';

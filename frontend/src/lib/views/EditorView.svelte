@@ -95,7 +95,7 @@
 <div class="flex h-full min-h-0 flex-col">
   <!-- Canvas tools -->
   <div class="flex flex-wrap items-center gap-2 border-b border-zf-border bg-zf-surface px-4 py-2">
-    <div class="flex items-center rounded-md border border-zf-border bg-zf-bg p-0.5" role="group" aria-label="Canvas mode">
+    <div class="flex items-center rounded-md bg-zf-bg p-0.5 shadow-zf-1" role="group" aria-label="Canvas mode">
       <button
         type="button"
         aria-pressed={mode === 'layout'}
@@ -181,7 +181,7 @@
       aria-pressed={showGap}
       onclick={() => (showGap = !showGap)}
       title="Toggle the configured gap preview between zones"
-      class="inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors aria-pressed:border-zf-accent/60 aria-pressed:bg-zf-accent/10 aria-pressed:text-zf-accent border-zf-border text-zf-muted hover:text-zf-text"
+      class="inline-flex h-7 items-center gap-1.5 rounded-md bg-zf-surface px-2.5 text-xs font-medium shadow-zf-1 transition-colors aria-pressed:bg-zf-accent/15 aria-pressed:text-zf-accent text-zf-muted hover:bg-zf-raised hover:text-zf-text motion-reduce:transition-none"
     >
       <Grid2x2 size={14} /> Gap
     </button>
@@ -254,7 +254,7 @@
     </div>
 
     <main class="relative flex min-h-0 min-w-0 flex-1 flex-col p-3">
-      <div class="relative min-h-[320px] flex-1 overflow-hidden rounded-lg border border-zf-border bg-zf-surface shadow-[0_0_0_1px_rgba(0,0,0,0.2)]">
+      <div class="relative min-h-[320px] flex-1 overflow-hidden rounded-lg bg-zf-surface shadow-zf-1">
         <ZoneCanvas
           bind:this={canvas}
           {mode}
@@ -280,7 +280,7 @@
   <StatusBar {selectedId} />
 
   {#if notice}
-    <div class="pointer-events-none fixed bottom-16 right-5 z-40 rounded-md border border-zf-accent/50 bg-zf-panel px-3 py-2 text-xs text-zf-accent shadow-xl">
+    <div class="pointer-events-none fixed bottom-16 right-5 z-40 rounded-md bg-zf-panel px-3 py-2 text-xs text-zf-accent shadow-zf-2">
       {notice}
     </div>
   {/if}

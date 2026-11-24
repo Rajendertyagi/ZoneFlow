@@ -120,7 +120,7 @@
             <Input bind:value={query} placeholder="Search apps…" class="h-8 pl-8 text-xs" />
           </div>
 
-          <div class="min-h-0 flex-1 overflow-auto rounded-md border border-zf-border bg-zf-surface">
+          <div class="min-h-0 flex-1 overflow-auto rounded-md">
             {#if loading}
               <p class="p-3 text-xs text-zf-faint">Loading…</p>
             {:else if filtered.length === 0}
@@ -133,7 +133,7 @@
                   tabindex="0"
                   title={`Drag ${app.label} onto a zone`}
                   ondragstart={(event) => onDragStart(event, app)}
-                  class="group flex cursor-grab items-center gap-2 border-b border-zf-border/60 px-2 py-1.5 last:border-0 hover:bg-zf-raised active:cursor-grabbing"
+                  class="group flex cursor-grab items-center gap-2 border-b border-[color:var(--zf-hairline)] px-2 py-1.5 transition-colors last:border-0 hover:bg-zf-raised active:cursor-grabbing motion-reduce:transition-none"
                 >
                   <GripVertical size={13} class="shrink-0 text-zf-faint" />
                   <span class="min-w-0 flex-1">

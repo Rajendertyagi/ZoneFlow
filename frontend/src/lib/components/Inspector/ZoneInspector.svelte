@@ -92,7 +92,7 @@
     <button
       type="button"
       aria-label="Close inspector"
-      class="rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text"
+      class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text"
       onclick={onclose}
     >
       <X size={15} />
@@ -133,7 +133,7 @@
                 <span class="text-xs font-medium text-zf-text">Executable</span>
                 <div
                   id="insp-exe"
-                  class="rounded-md border border-zf-border bg-zf-bg px-3 py-2 font-mono text-xs text-zf-muted"
+                  class="rounded-md bg-zf-bg px-3 py-2 font-mono text-xs text-zf-muted"
                 >
                   {zone.exe || '—'}
                 </div>
@@ -142,7 +142,7 @@
                 <span class="text-xs font-medium text-zf-text">Full path (optional)</span>
                 <div
                   id="insp-path"
-                  class="break-all rounded-md border border-zf-border bg-zf-bg px-3 py-2 font-mono text-xs text-zf-muted"
+                  class="break-all rounded-md bg-zf-bg px-3 py-2 font-mono text-xs text-zf-muted"
                 >
                   {zone.path || '—'}
                 </div>
@@ -152,7 +152,7 @@
               </p>
 
               <!-- Launcher script: when set, it runs instead of the EXE above. -->
-              <div class="flex flex-col gap-1.5 rounded-md border border-zf-border bg-zf-bg p-3">
+              <div class="flex flex-col gap-1.5 rounded-md bg-zf-bg p-3 shadow-zf-1">
                 <span class="text-xs font-medium text-zf-text">Launcher script (.bat/.cmd)</span>
                 <p class="text-[0.65rem] leading-relaxed text-zf-faint">
                   When set, this script is executed instead of the executable. The full path above
@@ -249,13 +249,13 @@
                   onchange={(v) => void commit({ tab_behavior: v as ZoneDto['tab_behavior'] })}
                 />
               </div>
-              <p class="rounded-md border border-zf-border bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
+              <p class="rounded-md bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
                 Browser rules are zone-scoped, so they belong to this profile only. Some browsers control their own windows and may ignore placement.
               </p>
             </div>
           {:else if value === 'macro'}
             <div class="flex flex-col gap-4">
-              <div class="flex items-center justify-between rounded-md border border-zf-border bg-zf-bg px-3 py-2">
+              <div class="flex items-center justify-between rounded-md bg-zf-bg px-3 py-2">
                 <span class="text-xs text-zf-muted">Enable macro</span>
                 <Switch
                   checked={zone.macro_enabled}
@@ -308,7 +308,7 @@
                   <Terminal size={13} /> Refresh
                 </Button>
               </div>
-              <div class="min-h-0 flex-1 overflow-auto rounded-md border border-zf-border bg-zf-bg p-2 font-mono text-[0.7rem] leading-relaxed">
+              <div class="min-h-0 flex-1 overflow-auto rounded-md bg-zf-bg p-2 font-mono text-[0.7rem] leading-relaxed shadow-zf-1">
                 {#each logs as line (line.seq)}
                   <div class="flex gap-2">
                     <span class="shrink-0 text-zf-faint">{line.seq}</span>

@@ -144,7 +144,7 @@
     role="menu"
     aria-label="Context menu"
     tabindex="-1"
-    class="fixed z-50 min-w-40 rounded-md border border-input bg-popover p-1 shadow-xl focus:outline-none"
+    class="fixed z-50 min-w-40 rounded-md border border-input bg-popover p-1 shadow-zf-3 focus:outline-none"
     style:left="{x}px"
     style:top="{y}px"
     onkeydown={onMenuKeydown}

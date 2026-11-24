@@ -42,8 +42,8 @@
   {value}
   onchange={handleChange}
   class={cn(
-    'h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground',
-    'focus-visible:border-primary focus-visible:outline-none disabled:opacity-50',
+    'h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground shadow-zf-1',
+    'focus-visible:border-primary focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50',
     className,
   )}
 >

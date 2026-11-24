@@ -137,7 +137,7 @@
     {:else}
       <div class="grid gap-5 lg:grid-cols-2">
         <!-- Editor -->
-        <section class="rounded-lg border border-zf-border bg-zf-surface p-4">
+        <section class="rounded-lg bg-zf-surface p-4 shadow-zf-1">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zf-accent">Editor</h3>
           <div class="flex flex-col gap-3">
             <div class="grid grid-cols-2 gap-3">
@@ -195,10 +195,10 @@
         </section>
 
         <!-- Startup & close -->
-        <section class="rounded-lg border border-zf-border bg-zf-surface p-4">
+        <section class="rounded-lg bg-zf-surface p-4 shadow-zf-1">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zf-accent">Startup &amp; close</h3>
           <div class="flex flex-col gap-3">
-            <div class="flex items-center justify-between rounded-md border border-zf-border bg-zf-bg px-3 py-2">
+            <div class="flex items-center justify-between rounded-md bg-zf-bg px-3 py-2">
               <div>
                 <p class="text-xs font-medium text-zf-text">Start with Windows</p>
                 <p class="text-[0.65rem] text-zf-faint">Start ZoneFlow automatically when you sign in to Windows.</p>
@@ -222,14 +222,14 @@
               />
               <p class="text-[0.65rem] leading-relaxed text-zf-faint">Choose what happens when you close this browser window.</p>
             </div>
-            <p class="rounded-md border border-zf-border bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
+            <p class="rounded-md bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
               Closing the browser editor never stops the background process. Exit is the only action that shuts ZoneFlow down.
             </p>
           </div>
         </section>
 
         <!-- Overlay -->
-        <section class="rounded-lg border border-zf-border bg-zf-surface p-4">
+        <section class="rounded-lg bg-zf-surface p-4 shadow-zf-1">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zf-accent">Overlay</h3>
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-1.5">
@@ -268,7 +268,7 @@
         </section>
 
         <!-- Advanced engine tuning -->
-        <section class="rounded-lg border border-zf-border bg-zf-surface p-4">
+        <section class="rounded-lg bg-zf-surface p-4 shadow-zf-1">
           <details class="group">
             <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-zf-accent">
               Advanced
