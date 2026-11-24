@@ -42,9 +42,9 @@ Design references `docs/design/design-mockup.html`, `docs/design/design-v2.html`
 These five decisions resolve every open question in the thin draft. They are firm inputs to implementation.
 
 1. **Scrim token — ADD.** Add a `scrim` token to `frontend/src/themes/schema.ts` as a **required** key in `REQUIRED_LIGHT_DARK_KEYS` (therefore required in `light` and `dark` for **both** presets), add values to both preset JSON files, regenerate `frontend/src/themes/generated/presets.css`, add `--color-scrim: var(--scrim);` to the `@theme inline` block in `frontend/src/app.css` (this is what makes the `bg-scrim` utility resolvable), and replace `bg-black/70` with `bg-scrim` in dialogs. `bg-scrim` is the **canonical utility form**; `bg-[var(--scrim)]` arbitrary-value syntax is not used. `var(--scrim)` is reserved for contexts where a Tailwind utility cannot be applied. Justification: this is a small, documented schema extension that makes dialogs theme-aware and removes the last styling exception outside the overlay/test-data carve-outs. It is intentionally narrow (one token, two fixtures, one `@theme inline` mapping, regenerated CSS) and is covered by the existing schema/generated-CSS tests.
-2. **Elevation/shadow tokens — define in `app.css` ONLY.** Define elevation as CSS custom properties in `frontend/src/app.css` (e.g. `--zf-shadow-1/2/3` built with `color-mix(in oklab, var(--foreground) … , transparent)` or equivalent), **not** in the preset JSON schema. Rationale: shadows are structural, not per-preset identity; keeping them out of the schema avoids generator churn, fixture duplication and a second source of truth. They still adapt to each preset because they derive from semantic tokens.
+2. **Elevation/shadow tokens — define in `app.css` ONLY.** Define elevation as CSS custom properties in `frontend/src/app.css` around a dedicated dark shadow base that is **dark in both modes** with mode-specific strength (e.g. `:root { --zf-shadow-color: rgb(15 23 42 / 0.16); }` for light mode and `:root.dark { --zf-shadow-color: rgb(0 0 0 / 0.55); }` for dark mode, then `--zf-shadow-1: 0 1px 2px var(--zf-shadow-color);`, `--zf-shadow-2: 0 4px 14px var(--zf-shadow-color);`, `--zf-shadow-3: 0 18px 48px var(--zf-shadow-color);`), **not** in the preset JSON schema. Shadows **must be dark in both modes** and **must NOT be derived from `--foreground`**, which is near-white in dark mode and would produce light glows instead of natural shadows, undermining surface hierarchy. `--zf-hairline` may still be derived from `--foreground` via `color-mix`; a light hairline in dark mode is intentional for edge definition and is **not** a shadow. Rationale: shadows are structural, not per-preset identity; keeping them out of the schema avoids generator churn, fixture duplication and a second source of truth.
 3. **Preset distinctness — meaningfully but conservatively distinct.** Change accent hue, surface temperature and canvas tokens while preserving WCAG 2.2 AA contrast. `zoneflow-amber` stays amber/deep-slate; `caffeine` becomes a clearly warmer **coffee/cream** identity (warmer surfaces, warmer accent, warmer canvas). Exact values **must** be validated with a contrast checker and visual inspection; this is explicitly marked as **requiring visual verification** and is not claimed as done here.
-4. **Manifest swatches — DERIVE.** Replace the hardcoded hex arrays in `frontend/src/themes/manifest.ts` with values derived from the normalized fixture tokens (`primary`, `background`, `muted-foreground`). This removes the last hardcoded swatch duplication. The `entry(...)` helper already calls `normalizePreset(fixture)`; derive swatches from that result rather than from a second literal list.
+4. **Manifest swatches — DERIVE.** Replace the hardcoded hex arrays in `frontend/src/themes/manifest.ts` with values derived from the **dark-mode** token map of the normalized fixture, in this exact order: `preset.dark.primary`, `preset.dark.background`, `preset.dark.muted-foreground`. This matches the current hardcoded swatches (amber: `#f59e0b` / `#070b14` / `#93a4bd`; caffeine: `#d6a87c` / `#181512` / `#a8a29e`) so the picker preview stays visually consistent. This removes the last hardcoded swatch duplication. The `entry(...)` helper already calls `normalizePreset(fixture)`; derive swatches from that result's `dark` map rather than from a second literal list.
 5. **Documented exceptions remain.** Keep `zone_tints` defaults (SettingsView / ZoneCanvas) and test-fixture hex (e.g. `preference.test.ts`) as documented exceptions: overlay independence and test data, respectively. Do not tokenize them.
 
 ## Frozen constraints (carry over — must not regress)
@@ -123,7 +123,7 @@ The following tokens are the vocabulary of this plan. All except the `app.css`-o
 | `--canvas-preview` / `--canvas-label-bg` / `--canvas-label-fg` | Preview and labels | DragPreview, ZoneCanvas |
 | `--chart-1` … `--chart-5` | Optional chart series | reserved |
 | `--scrim` (**new, required**) + `--color-scrim: var(--scrim);` in `@theme inline` | Dialog scrim, theme-aware; the `@theme inline` mapping is what makes the `bg-scrim` utility resolvable | `app.css` (mapping), `ui/dialog.svelte` and all dialogs (consumers) |
-| `--zf-shadow-1/2/3`, `--zf-hairline` (**new, `app.css` only**) | Elevation and low-chrome lines | panels, cards, dialogs, separators |
+| `--zf-shadow-color`, `--zf-shadow-1/2/3`, `--zf-hairline` (**new, `app.css` only**) | Dark shadow base (dark in both modes) + elevation and low-chrome lines | panels, cards, dialogs, separators |
 
 `zf-*` compatibility aliases in `app.css` map one-to-one onto semantic destinations and remain until migration is verified complete. `bg-scrim` is the **canonical utility form** for the scrim, enabled by the `--color-scrim: var(--scrim);` mapping in `@theme inline`; do **not** use `bg-[var(--scrim)]` arbitrary-value syntax and do not introduce a `zf-*` alias for `scrim`. `var(--scrim)` is acceptable only where a Tailwind utility cannot be applied (e.g. inline SVG/CSS).
 
@@ -150,7 +150,7 @@ Rule: adjacent levels must be distinguishable without a border. If two levels ar
 
 - Standardize on a 4px-based rhythm: 4 / 8 / 12 / 16 / 24px (`p-1`…`p-6` equivalents).
 - Give removed borders back their breathing room: when a boxed row loses its border, add ~2px vertical padding so hit targets do not shrink.
-- Maintain minimum interactive hit targets of ~24–28px CSS height for dense desktop controls; do not reduce current targets to achieve a cleaner look.
+- Maintain a minimum interactive target of **24 × 24 CSS pixels (both width and height)** for dense desktop controls; do not shrink targets to achieve a cleaner look. Exceptions: purely visual separators (e.g. `h-5 w-px bg-zf-border` dividers) are not interactive and are exempt; inline text links inside prose are exempt. Existing controls that are already larger (e.g. `h-7` = 28px, `h-9 w-9` = 36px) already satisfy the floor. When a bordered row loses its border, preserve its padding so the target does not shrink below 24 × 24.
 - Keep pane widths (`w-60` rail, `w-80` inspector) and the 2/5 ProfilesPanel split unchanged.
 
 ### Typography
@@ -168,14 +168,15 @@ Rule: adjacent levels must be distinguishable without a border. If two levels ar
 
 ### Depth and elevation
 
-Define in `frontend/src/app.css` (not in preset JSON):
+Define in `frontend/src/app.css` (not in preset JSON) a dedicated dark shadow base that is **dark in both modes** with mode-specific strength, then build the three elevation levels from it:
 
-- `--zf-shadow-1` — subtle resting elevation for panels/cards (design-v3 `--sh-1` idea).
-- `--zf-shadow-2` — hover/raised elevation (design-v3 `--sh-2` idea).
-- `--zf-shadow-3` — dialogs/menus/tooltips (design-v3 `--sh-3` idea).
-- Optionally `--zf-hairline` — a low-chrome line derived from `--foreground` via `color-mix`, for purely visual separators.
+- `--zf-shadow-color` — dark shadow base: `:root { --zf-shadow-color: rgb(15 23 42 / 0.16); }` (light mode: subtle dark shadow) and `:root.dark { --zf-shadow-color: rgb(0 0 0 / 0.55); }` (dark mode: stronger dark shadow, still dark — not a glow).
+- `--zf-shadow-1: 0 1px 2px var(--zf-shadow-color);` — subtle resting elevation for panels/cards (design-v3 `--sh-1` idea).
+- `--zf-shadow-2: 0 4px 14px var(--zf-shadow-color);` — hover/raised elevation (design-v3 `--sh-2` idea).
+- `--zf-shadow-3: 0 18px 48px var(--zf-shadow-color);` — dialogs/menus/tooltips (design-v3 `--sh-3` idea).
+- Optionally `--zf-hairline` — a low-chrome line derived from `--foreground` via `color-mix`, for purely visual separators. A light hairline in dark mode is intentional for edge definition and is **not** a shadow.
 
-Build these with `color-mix(in oklab, var(--foreground) N%, transparent)` (or equivalent) so they adapt to light/dark and to both presets automatically. Map them to Tailwind utilities via `@theme` if utility classes are preferred, but keep their definitions in `app.css`.
+Shadows **must be dark in both modes** and **must NOT be derived from `--foreground`** (near-white in dark mode, which would yield light glows instead of natural shadows and undermine surface hierarchy). Map them to Tailwind utilities via `@theme` if utility classes are preferred, but keep their definitions in `app.css` only — not in preset JSON.
 
 ### Controls
 
@@ -214,7 +215,7 @@ Both presets currently have complete token sets but differ subtly in hue and rad
 - Preserve AA contrast for every foreground/background pair in both modes; prefer adjusting surface/background hues over weakening text contrast.
 - Add `scrim` values appropriate to each preset/mode.
 - **Exact values are not fixed in this plan.** They must be chosen with a contrast checker and confirmed by visual inspection; this is explicitly **requiring visual verification** (NOT YET PERFORMED).
-- Derive manifest swatches from the normalized fixture tokens (`primary`, `background`, `muted-foreground`) so the picker preview always matches the actual preset.
+- Derive manifest swatches from the **dark-mode** token map of the normalized fixture, in this exact order: `preset.dark.primary`, `preset.dark.background`, `preset.dark.muted-foreground`, so the picker preview always matches the actual preset and stays consistent with the current hardcoded swatches.
 
 ## Accessibility and usability requirements
 
@@ -223,7 +224,7 @@ Both presets currently have complete token sets but differ subtly in hue and rad
 - **Keyboard**: preserve WP3 helpers (`a11y-helpers.ts`) and keyboard semantics in dialog, context-menu, tabs, tooltip, switch; Tab/Shift+Tab, arrows, Home/End, Escape, Enter/Space must keep working.
 - **Reduced motion**: any new transition must carry `motion-reduce:transition-none`; verify with the OS/browser setting enabled.
 - **Disabled states**: distinguishable by more than color; keep cursor/opacity conventions.
-- **Hit targets**: do not shrink interactive targets when removing borders; maintain ~24–28px minimum for dense controls.
+- **Hit targets**: minimum interactive target of **24 × 24 CSS pixels (both width and height)** for dense desktop controls; do not shrink targets when removing borders. Exempt: purely visual separators (e.g. `h-5 w-px bg-zf-border` dividers) and inline text links inside prose. Existing larger controls (`h-7` = 28px, `h-9 w-9` = 36px) already satisfy the floor; when a bordered row loses its border, preserve padding so the target stays at least 24 × 24.
 - **Status distinctions**: selected/dirty/error/success/disabled must not rely on border presence alone after de-boxing.
 - **Zoom**: check at 200% zoom that low-chrome surfaces remain distinguishable.
 
@@ -236,6 +237,7 @@ One WP at a time, in order. Each has a reviewable checkpoint. Dependencies are s
 - **Scope**: capture baseline screenshots per the documented matrix; finalize token decisions; no application code changes.
 - **Files**: new screenshot artifacts under a documented location (e.g. `docs/screenshots/visual-polish/`); this plan file may be refined with confirmed values. **No app code.**
 - **Behavior**: capture the current UI at baseline `ba9b393` across the full matrix (see Screenshot comparison procedure). Confirm the five locked decisions and the surface hierarchy. Record exact preset values only after contrast validation.
+- **Fixture setup (deterministic — existing app capabilities only, no new features)**: before any capture, fix the browser viewport (e.g. maximize to a recorded size such as 1440×900, zoom 100%) and record it. Create a profile named `Visual QA` via the existing New profile prompt. Apply the `Duo` template via the existing Layout wizard (deterministic 2 zones) — use this one fixed template choice everywhere. Assign fixed apps to zones via the existing picker/Browse flow; record the exact app labels and paths in a committed fixture manifest (e.g. `docs/screenshots/visual-polish/fixture.md`) so before/after use identical data; if a chosen app is unavailable on the machine, record the substitute used and keep it identical across captures. Selected state: click zone 1 to select it (deterministic). Drop state: drag the recorded app from the library over zone 2 and capture while hovering BEFORE release; document the exact interaction. Merge state: use the existing Merge toolbar action, click zone 1 as source then hover zone 2 as target; document the exact interaction. Set mode/preset via the existing Appearance controls before each capture; capture both presets × both modes. Commit the fixture manifest alongside screenshots; if any state cannot be reproduced identically, document the deviation rather than claiming a valid comparison. **NOT YET PERFORMED.**
 - **Tests**: none (documentation/screenshot only).
 - **Manual verification**: **NOT YET PERFORMED** — requires an interactive Windows/browser session and the documented capture procedure.
 - **Completion criteria**: baseline captures exist for every matrix cell; token decisions recorded; no app code modified.
@@ -256,7 +258,7 @@ One WP at a time, in order. Each has a reviewable checkpoint. Dependencies are s
 ### VWP2 — Shell & navigation
 
 - **Scope**: restyle the app shell, top bar, status bar, toasts and connection banner to low-chrome.
-- **Files**: `frontend/src/app.css` (**additional to VWP1's `--color-scrim` mapping — VWP2 only adds `--zf-shadow-1/2/3`, optional `--zf-hairline` and base rules; do not remove or alter the scrim mapping**), `frontend/src/App.svelte`, `frontend/src/lib/components/TopBar.svelte`, `frontend/src/lib/components/StatusBar.svelte`, selected `frontend/src/lib/components/ui/*` (button, badge, input, separator).
+- **Files**: `frontend/src/app.css` (**additional to VWP1's `--color-scrim` mapping — VWP2 only adds `--zf-shadow-color`, `--zf-shadow-1/2/3`, optional `--zf-hairline` and base rules; do not remove or alter the scrim mapping**), `frontend/src/App.svelte`, `frontend/src/lib/components/TopBar.svelte`, `frontend/src/lib/components/StatusBar.svelte`, selected `frontend/src/lib/components/ui/*` (button, badge, input, separator).
 - **Behavior**: replace decorative borders with surface steps + elevation; status chips become tinted pills with semantic status color; keep nav active state, close button, Badge, focus rings, disabled states, `motion-reduce:transition-none`; keep all separators that carry meaning.
 - **Tests**: static/a11y checks (`bun run check`, `bun test`, existing `ux-consistency.test.ts`); no DOM harness.
 - **Manual verification**: shell/nav appearance and keyboard focus in light/dark — **NOT YET PERFORMED**.
@@ -290,7 +292,7 @@ One WP at a time, in order. Each has a reviewable checkpoint. Dependencies are s
 
 - **Scope**: make presets meaningfully distinct and remove swatch duplication.
 - **Files**: `frontend/src/themes/presets/zoneflow-amber.json`, `frontend/src/themes/presets/caffeine.json`, regenerate `frontend/src/themes/generated/presets.css`, `frontend/src/themes/manifest.ts`, `frontend/src/themes/schema.test.ts`, `frontend/src/themes/generated-css.test.ts`, optionally `frontend/src/lib/components/AppearanceSettings.svelte` (label copy only).
-- **Behavior**: apply locked decision 3 (amber/deep-slate vs. warmer coffee/cream), add `scrim` values, derive swatches from normalized fixture tokens (`primary`, `background`, `muted-foreground`) per locked decision 4; keep AA contrast; keep radius/font shared keys and all required tokens.
+- **Behavior**: apply locked decision 3 (amber/deep-slate vs. warmer coffee/cream), add `scrim` values, derive swatches from the **dark-mode** token map of the normalized fixture in this exact order — `preset.dark.primary`, `preset.dark.background`, `preset.dark.muted-foreground` — per locked decision 4 (matching the current hardcoded swatches); keep AA contrast; keep radius/font shared keys and all required tokens.
 - **Tests**: fixture schema tests, generated-CSS staleness/validity tests, contrast checker (VWP6), `bun run themes:check`.
 - **Manual verification**: preset switching is immediately visible in surfaces/accent/canvas; swatches match presets — **NOT YET PERFORMED**.
 - **Completion criteria**: presets visibly distinct; swatches derived; all contrast checks pass; generated CSS current.
@@ -334,6 +336,16 @@ Use a real contrast-checking tool/script over the normalized token pairs for eac
 
 - Root screenshots `inspect-01-default.png` … `inspect-07-bottom-crop.png` are **historical only** — they are not a valid baseline for this plan and must not be used as before-images.
 - VWP0 must capture **fresh** before-images via a documented procedure: build the app, launch it on Windows, and capture the same views/states that will be captured after the work.
+- **Fixture setup (deterministic — use the identical procedure for before and after captures; existing app capabilities only, no new features)**:
+  1. Fix the browser viewport (e.g. maximize to a recorded size such as 1440×900, zoom 100%) and record it in the fixture manifest.
+  2. Create a profile named `Visual QA` via the existing New profile prompt.
+  3. Apply the `Duo` template via the existing Layout wizard (deterministic 2 zones); use this one fixed template choice everywhere.
+  4. Assign fixed apps to zones via the existing picker/Browse flow; record the exact app labels and paths in a committed fixture manifest (e.g. `docs/screenshots/visual-polish/fixture.md`) so before/after use identical data. If a chosen app is unavailable on the machine, record the substitute used and keep it identical across captures.
+  5. Selected state: click zone 1 to select it (deterministic).
+  6. Drop state: drag the recorded app from the library over zone 2 and capture while hovering BEFORE release; document the exact interaction.
+  7. Merge state: use the existing Merge toolbar action, click zone 1 as source then hover zone 2 as target; document the exact interaction.
+  8. Set mode/preset via the existing Appearance controls before each capture; capture both presets × both modes.
+  9. Commit the fixture manifest alongside screenshots; if any state cannot be reproduced identically, document the deviation rather than claiming a valid comparison.
 - Capture matrix (each cell in both presets × both modes where applicable):
   1. Home view (default and maximized)
   2. Editor view — three-pane workspace, empty canvas
@@ -343,7 +355,7 @@ Use a real contrast-checking tool/script over the normalized token pairs for eac
   6. Settings view (including Appearance controls)
   7. Hotkeys view
   8. Bottom crop / status bar and toasts
-- After VWP5, capture the identical matrix and compare side by side. Record observations; do not claim improvement without comparison. **ALL CAPTURES NOT YET PERFORMED.**
+- After VWP5, capture the identical matrix using the identical fixture setup above and compare side by side. Record observations; do not claim improvement without comparison. **ALL CAPTURES NOT YET PERFORMED.**
 
 ### Manual visual verification
 
@@ -358,7 +370,7 @@ Requires an interactive Windows/browser session. Items include: low-chrome appea
 | VAC3 | Elevation tokens defined only in `app.css`, not in preset JSON | Static inspection + schema test | Not yet run |
 | VAC4 | Decorative borders removed from panels/cards/rows; functional borders/focus retained | Screenshot comparison + manual checklist | **NOT YET PERFORMED** |
 | VAC5 | Presets visibly distinct in surfaces, accent and canvas | Screenshot comparison + manual checklist | **NOT YET PERFORMED** |
-| VAC6 | Manifest swatches derived from normalized fixture tokens | Static inspection + unit test | Not yet run |
+| VAC6 | Manifest swatches derived from the dark-mode token map in order `preset.dark.primary`, `preset.dark.background`, `preset.dark.muted-foreground` | Static inspection + unit test | Not yet run |
 | VAC7 | WCAG 2.2 AA contrast across all presets/modes | Contrast checker results recorded | **NOT YET PERFORMED** |
 | VAC8 | Visible focus, keyboard operation, reduced motion, 200% zoom | Manual keyboard/visual pass | **NOT YET PERFORMED** |
 | VAC9 | Canvas states distinguishable in every preset/mode | Contrast check + manual visual pass | **NOT YET PERFORMED** |
