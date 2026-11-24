@@ -42,8 +42,8 @@
       x2={(point / 100) * workArea.w}
       y2={workArea.h}
       stroke="var(--canvas-preview)"
-      stroke-opacity={active?.axis === 'v' && active.snapped === point ? 0.85 : emphasized ? 0.28 : 0.12}
-      stroke-width={active?.axis === 'v' && active.snapped === point ? 2 : 1}
+      stroke-opacity={active?.axis === 'v' && active.snapped === point ? 0.85 : emphasized ? 0.22 : 0.08}
+      stroke-width={active?.axis === 'v' && active.snapped === point ? 2.5 : 1}
       stroke-dasharray={`${Math.max(4, workArea.w * 0.004)} ${Math.max(6, workArea.w * 0.006)}`}
     />
     <line
@@ -52,14 +52,14 @@
       x2={workArea.w}
       y2={(point / 100) * workArea.h}
       stroke="var(--canvas-preview)"
-      stroke-opacity={active?.axis === 'h' && active.snapped === point ? 0.85 : emphasized ? 0.28 : 0.12}
-      stroke-width={active?.axis === 'h' && active.snapped === point ? 2 : 1}
+      stroke-opacity={active?.axis === 'h' && active.snapped === point ? 0.85 : emphasized ? 0.22 : 0.08}
+      stroke-width={active?.axis === 'h' && active.snapped === point ? 2.5 : 1}
       stroke-dasharray={`${Math.max(4, workArea.w * 0.004)} ${Math.max(6, workArea.w * 0.006)}`}
     />
   {/each}
 
   {#if hud}
-    <rect x={hud.x} y={hud.y} width={hud.width} height={hud.height} rx={hud.height / 3} fill="var(--canvas-label-bg)" fill-opacity={0.94} stroke="var(--canvas-preview)" stroke-opacity={0.7} stroke-width={1} />
+    <rect x={hud.x} y={hud.y} width={hud.width} height={hud.height} rx={hud.height / 3} fill="var(--canvas-label-bg)" fill-opacity={0.96} stroke="var(--canvas-preview)" stroke-opacity={0.85} stroke-width={1} />
     <text x={hud.x + hudPad} y={hud.y + hud.height / 2} fill="var(--canvas-label-fg)" font-size={hudSize} font-family="var(--font-mono)" dominant-baseline="central">{hud.text}</text>
   {/if}
 </g>

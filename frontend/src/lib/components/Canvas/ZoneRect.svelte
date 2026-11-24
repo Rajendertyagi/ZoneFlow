@@ -58,7 +58,8 @@
   const badgeSize = $derived(Math.max(20, workArea.h * 0.032));
   const pad = $derived(Math.max(8, workArea.h * 0.012));
   const barH = $derived(Math.max(3, workArea.h * 0.006));
-  const handleSize = $derived(Math.max(9, workArea.w * 0.006));
+  // Wider grab strips improve discoverability; still display-only geometry.
+  const handleSize = $derived(Math.max(12, workArea.w * 0.0075));
 
   interface RenderHandle {
     handle: ResizeHandle;
@@ -131,7 +132,13 @@
           ? 'var(--canvas-zone-selected)'
           : 'var(--canvas-zone-stroke)',
   );
-  const strokeWidth = $derived(dropTarget || selected || mergeSource ? Math.max(2, workArea.w * 0.0016) : 1);
+  // Active states carry a clearly heavier stroke than the resting outline so
+  // selected / drop / merge stay legible at every zoom level.
+  const strokeWidth = $derived(
+    dropTarget || selected || mergeSource
+      ? Math.max(3, workArea.w * 0.0022)
+      : Math.max(1.5, workArea.w * 0.0009),
+  );
 </script>
 
 <g
@@ -153,7 +160,7 @@
     width={w}
     height={h}
     fill={tint}
-    fill-opacity={selected || dropTarget ? 0.2 : 0.1}
+    fill-opacity={dropTarget ? 0.24 : selected ? 0.2 : mergeSource ? 0.16 : 0.08}
     {stroke}
     stroke-width={strokeWidth}
     stroke-dasharray={dropTarget ? `${Math.max(6, workArea.w * 0.006)} ${Math.max(4, workArea.w * 0.004)}` : 'none'}
@@ -163,13 +170,13 @@
   <!-- Accent bar along the top edge -->
   <rect {x} {y} width={w} height={barH} fill={tint} fill-opacity={0.95} rx={barH / 2} />
 
-  <!-- Number badge -->
+  <!-- Number badge: opaque label background + high-contrast label foreground. -->
   <g class="pointer-events-none" transform={`translate(${x + pad}, ${y + pad})`}>
-    <rect width={badgeSize} height={badgeSize} rx={badgeSize / 3} fill="var(--canvas-label-bg)" fill-opacity={0.85} stroke={tint} stroke-width={1} />
+    <rect width={badgeSize} height={badgeSize} rx={badgeSize / 3} fill="var(--canvas-label-bg)" fill-opacity={0.95} stroke={tint} stroke-width={1} />
     <text
       x={badgeSize / 2}
       y={badgeSize / 2}
-      fill={tint}
+      fill="var(--canvas-label-fg)"
       font-size={badgeSize * 0.5}
       font-weight="700"
       text-anchor="middle"
@@ -177,10 +184,27 @@
     >
   </g>
 
-  <!-- Label + executable -->
+  <!-- Label + executable. A thin canvas-label-bg halo keeps text readable over
+       any zone tint without introducing a new colour or a visible box. -->
   <g class="pointer-events-none" transform={`translate(${x + pad}, ${y + pad + badgeSize + pad * 0.6})`}>
-    <text fill="var(--canvas-label-fg)" font-size={labelSize} font-weight="600">{zone.label || `Zone ${index + 1}`}</text>
-    <text y={labelSize * 1.25} fill="var(--muted-foreground)" font-size={subSize} font-family="var(--font-mono)">
+    <text
+      fill="var(--canvas-label-fg)"
+      font-size={labelSize}
+      font-weight="600"
+      stroke="var(--canvas-label-bg)"
+      stroke-width={Math.max(2, labelSize * 0.18)}
+      stroke-linejoin="round"
+      paint-order="stroke">{zone.label || `Zone ${index + 1}`}</text
+    >
+    <text
+      y={labelSize * 1.25}
+      fill="var(--muted-foreground)"
+      font-size={subSize}
+      font-family="var(--font-mono)"
+      stroke="var(--canvas-label-bg)"
+      stroke-width={Math.max(1.5, subSize * 0.18)}
+      stroke-linejoin="round"
+      paint-order="stroke">
       {zone.exe || 'unassigned'}
     </text>
   </g>
@@ -200,10 +224,10 @@
       width={rh.w}
       height={rh.h}
       fill={rh.handle.kind === 'outer' ? 'var(--canvas-handle-outer)' : 'var(--canvas-handle-shared)'}
-      fill-opacity={rh.handle.kind === 'outer' ? 0.16 : 0.18}
+      fill-opacity={rh.handle.kind === 'outer' ? 0.2 : 0.24}
       stroke={rh.handle.kind === 'outer' ? 'var(--canvas-handle-outer)' : 'var(--canvas-handle-shared)'}
-      stroke-opacity={0.55}
-      stroke-width={1}
+      stroke-opacity={0.85}
+      stroke-width={1.5}
       style:cursor={rh.handle.axis === 'v' ? 'col-resize' : 'row-resize'}
       role="presentation"
       onpointerdown={(event) => {

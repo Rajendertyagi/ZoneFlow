@@ -621,7 +621,7 @@
           d={`M ${workArea.w / Math.max(1, settings.grid_cols)} 0 L 0 0 0 ${workArea.h / Math.max(1, settings.grid_rows)}`}
           fill="none"
           stroke="var(--canvas-grid)"
-          stroke-opacity={mode === 'draw' ? 0.55 : 0.22}
+          stroke-opacity={mode === 'draw' ? 0.5 : 0.14}
           stroke-width="1"
         />
       </pattern>
@@ -633,7 +633,7 @@
       y={0}
       width={workArea.w}
       height={workArea.h}
-      fill="var(--color-zf-bg)"
+      fill="var(--canvas-bg)"
       onpointerdown={onBackgroundPointerDown}
       oncontextmenu={() => (contextZoneId = null)}
       role="presentation"
@@ -641,19 +641,54 @@
     <rect x={0} y={0} width={workArea.w} height={workArea.h} fill="url(#zf-grid)" class="pointer-events-none" />
 
     {#if zones.length === 0}
+      {@const cx = workArea.w / 2}
+      {@const cy = workArea.h / 2}
+      {@const cardW = Math.min(workArea.w * 0.5, 720)}
+      {@const cardH = Math.min(workArea.h * 0.22, 180)}
+      {@const cardX = cx - cardW / 2}
+      {@const cardY = cy - cardH / 2}
+      {@const iconY = cy - cardH * 0.2}
+      {@const iconR = Math.max(16, cardH * 0.13)}
       <g class="pointer-events-none" text-anchor="middle">
+        <!-- Quiet placeholder card. Canvas tokens only — no new colours. -->
+        <rect
+          x={cardX}
+          y={cardY}
+          width={cardW}
+          height={cardH}
+          rx={Math.max(8, cardH * 0.09)}
+          fill="var(--canvas-label-bg)"
+          fill-opacity={0.6}
+          stroke="var(--canvas-zone-stroke)"
+          stroke-opacity={0.9}
+          stroke-width={1.5}
+          stroke-dasharray={`${Math.max(8, workArea.w * 0.008)} ${Math.max(6, workArea.w * 0.006)}`}
+        />
+        <!-- "Add" affordance drawn from the preview token. -->
+        <circle
+          cx={cx}
+          cy={iconY}
+          r={iconR}
+          fill="var(--canvas-preview)"
+          fill-opacity={0.12}
+          stroke="var(--canvas-preview)"
+          stroke-opacity={0.75}
+          stroke-width={1.5}
+        />
+        <line x1={cx - iconR * 0.45} y1={iconY} x2={cx + iconR * 0.45} y2={iconY} stroke="var(--canvas-preview)" stroke-width={2.5} stroke-linecap="round" />
+        <line x1={cx} y1={iconY - iconR * 0.45} x2={cx} y2={iconY + iconR * 0.45} stroke="var(--canvas-preview)" stroke-width={2.5} stroke-linecap="round" />
         <text
-          x={workArea.w / 2}
-          y={workArea.h / 2 - 14}
+          x={cx}
+          y={cy + cardH * 0.14}
           fill="var(--canvas-label-fg)"
           font-size={Math.max(16, workArea.h * 0.028)}
           font-weight="600">No zones yet</text
         >
         <text
-          x={workArea.w / 2}
-          y={workArea.h / 2 + 16}
+          x={cx}
+          y={cy + cardH * 0.34}
           fill="var(--muted-foreground-faint)"
-          font-size={Math.max(12, workArea.h * 0.018)}>Create your first zone with Add or Draw</text
+          font-size={Math.max(12, workArea.h * 0.015)}>Create your first zone with Add or Draw</text
         >
       </g>
     {/if}

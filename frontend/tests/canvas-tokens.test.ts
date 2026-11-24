@@ -156,3 +156,81 @@ describe('WP4 canvas token migration', () => {
     }
   });
 });
+
+/**
+ * VWP4 — visual refinement guards. These lock in the token-only treatment so a
+ * later edit cannot silently reintroduce a hardcoded colour or a new token.
+ * Geometry, snapping and pointer logic are deliberately NOT asserted here.
+ */
+describe('VWP4 canvas visual refinement', () => {
+  const files = readdirSync(canvasDir).filter((file) => file.endsWith('.svelte'));
+
+  test('ZoneCanvas uses the canvas-bg token and a subtler resting grid', () => {
+    const source = read('ZoneCanvas.svelte');
+    expect(source).toContain('fill="var(--canvas-bg)"');
+    expect(source).toContain("mode === 'draw' ? 0.5 : 0.14");
+  });
+
+  test('ZoneCanvas empty state is a tokenized placeholder card', () => {
+    const source = read('ZoneCanvas.svelte');
+    expect(source).toContain('No zones yet');
+    expect(source).toContain('fill="var(--canvas-label-bg)"');
+    expect(source).toContain('stroke="var(--canvas-zone-stroke)"');
+    expect(source).toContain('stroke="var(--canvas-preview)"');
+  });
+
+  test('ZoneRect keeps four distinct fill opacities and a label halo', () => {
+    const source = read('ZoneRect.svelte');
+    expect(source).toContain(
+      'fill-opacity={dropTarget ? 0.24 : selected ? 0.2 : mergeSource ? 0.16 : 0.08}',
+    );
+    expect(source).toContain('paint-order="stroke"');
+    expect(source).toContain('stroke="var(--canvas-label-bg)"');
+    // Badge number and the primary label both use the legible label foreground.
+    expect(source.match(/fill="var\(--canvas-label-fg\)"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  test('ZoneRect handles are larger and higher-contrast', () => {
+    const source = read('ZoneRect.svelte');
+    expect(source).toContain('Math.max(12, workArea.w * 0.0075)');
+    expect(source).toContain('stroke-opacity={0.85}');
+    expect(source).toContain('stroke-width={1.5}');
+  });
+
+  test('SnapGuides resting guides are subtler than the snapped state', () => {
+    const source = read('SnapGuides.svelte');
+    expect(source).toContain('emphasized ? 0.22 : 0.08');
+    expect(source).toContain('? 2.5 : 1');
+  });
+
+  test('DragPreview readouts sit on a tokenized backdrop', () => {
+    const source = read('DragPreview.svelte');
+    expect(source).toContain('fill="var(--canvas-label-bg)"');
+    expect(source).toContain('labelWidth(coordText)');
+    expect(source).toContain('labelWidth(drawText)');
+    expect(source).toContain('fill-opacity={0.2}');
+    expect(source).toContain('fill-opacity={0.18}');
+  });
+
+  test('canvas sources reference only the existing token vocabulary (no new tokens)', () => {
+    // canvas-* tokens plus the semantic tokens already used by the canvas.
+    const allowed = new Set<string>([
+      ...CANVAS_TOKENS.map((token) => `--${token}`),
+      '--muted-foreground',
+      '--muted-foreground-faint',
+      '--primary',
+      '--primary-foreground',
+      '--font-mono',
+    ]);
+    const varPattern = /var\((--[a-z0-9-]+)\)/g;
+    for (const file of files) {
+      const source = read(file);
+      const used = new Set<string>();
+      let match: RegExpExecArray | null;
+      while ((match = varPattern.exec(source)) !== null) used.add(match[1]);
+      for (const token of used) {
+        expect(allowed.has(token), `${file} references unexpected token ${token}`).toBe(true);
+      }
+    }
+  });
+});
