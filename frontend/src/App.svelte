@@ -204,7 +204,7 @@
   <TopBar onclose={requestClose} />
 
   {#if store.connection === 'lost'}
-    <div role="alert" class="mx-5 mt-3 rounded-md border border-zf-warn/40 bg-zf-warn/10 px-4 py-2 text-sm text-zf-warn">
+    <div role="alert" class="mx-5 mt-3 rounded-md bg-zf-warn/10 px-4 py-2 text-sm text-zf-warn shadow-zf-1">
       Connection lost — showing the last known state.
     </div>
   {/if}
@@ -233,13 +233,13 @@
       {#each ui.toasts as item (item.id)}
         <div
           role="status"
-          class="pointer-events-auto flex items-start gap-2 rounded-md border bg-zf-panel px-3 py-2.5 text-xs shadow-xl {item.kind === 'error'
-            ? 'border-zf-error/50 text-zf-error'
+          class="pointer-events-auto flex items-start gap-2 rounded-md bg-zf-panel px-3 py-2.5 text-xs shadow-zf-2 {item.kind === 'error'
+            ? 'text-zf-error'
             : item.kind === 'warning'
-              ? 'border-zf-warn/50 text-zf-warn'
+              ? 'text-zf-warn'
               : item.kind === 'success'
-                ? 'border-zf-ok/50 text-zf-ok'
-                : 'border-zf-accent/50 text-zf-accent'}"
+                ? 'text-zf-ok'
+                : 'text-zf-accent'}"
         >
           <span class="mt-0.5 shrink-0">
             {#if item.kind === 'success'}<CircleCheck size={15} />
@@ -251,7 +251,7 @@
           <button
             type="button"
             aria-label="Dismiss notification"
-            class="shrink-0 rounded p-0.5 opacity-60 hover:opacity-100"
+            class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-60 hover:opacity-100"
             onclick={() => dismissToast(item.id)}
           >
             <X size={13} />

@@ -77,6 +77,33 @@
   --color-zf-error: var(--destructive);
 }
 
+/* VWP2 elevation tokens. Shadows are structural, not per-preset identity, so
+   they are defined here in app.css ONLY — never in the preset JSON schema.
+   The shadow base is dark in BOTH modes and is deliberately NOT derived from
+   --foreground (near-white in dark mode, which would produce light glows
+   instead of natural shadows). Only the strength changes between modes.
+   --zf-hairline is a LINE, not a shadow: deriving it from --foreground gives a
+   subtle light edge in dark mode for purely visual separators. */
+:root {
+  --zf-shadow-color: rgb(15 23 42 / 0.16);
+  --zf-shadow-1: 0 1px 2px var(--zf-shadow-color);
+  --zf-shadow-2: 0 4px 14px var(--zf-shadow-color);
+  --zf-shadow-3: 0 18px 48px var(--zf-shadow-color);
+  --zf-hairline: color-mix(in oklab, var(--foreground) 14%, transparent);
+}
+
+:root.dark {
+  --zf-shadow-color: rgb(0 0 0 / 0.55);
+}
+
+/* Tailwind utility mappings for the elevation levels above. The definitions
+   stay in app.css; these only expose `shadow-zf-1/2/3` as utilities. */
+@theme {
+  --shadow-zf-1: var(--zf-shadow-1);
+  --shadow-zf-2: var(--zf-shadow-2);
+  --shadow-zf-3: var(--zf-shadow-3);
+}
+
 @layer base {
   html,
   body {

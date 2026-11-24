@@ -31,7 +31,7 @@
   <span class="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
     <span class="text-zf-faint">apps in this workspace</span>
     {#each assignments as zone (zone.id)}
-      <span class="rounded border border-zf-border-strong bg-zf-panel px-1.5 py-0.5 text-[0.7rem] text-zf-text">
+      <span class="inline-flex items-center rounded-full bg-zf-raised px-1.5 py-0.5 text-[0.7rem] text-zf-text">
         {zone.label || zone.exe} <span class="text-zf-faint">→ {zone.id}</span>
       </span>
     {:else}

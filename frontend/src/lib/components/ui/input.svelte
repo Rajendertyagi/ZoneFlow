@@ -45,7 +45,7 @@
   {onchange}
   bind:value
   class={cn(
-    'h-9 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground',
+    'h-9 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground shadow-zf-1',
     'placeholder:text-muted-foreground-faint focus-visible:border-primary focus-visible:outline-none',
     'disabled:cursor-not-allowed disabled:opacity-50',
     className,

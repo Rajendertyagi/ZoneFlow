@@ -43,7 +43,7 @@
     <h1 class="whitespace-nowrap text-sm font-semibold tracking-tight">
       ZoneFlow <span class="text-zf-accent">Studio</span>
     </h1>
-    <nav class="flex items-center gap-0.5 rounded-md border border-zf-border bg-zf-surface p-0.5" aria-label="Main navigation">
+    <nav class="flex items-center gap-0.5 rounded-md bg-zf-surface p-0.5 shadow-zf-1" aria-label="Main navigation">
       {#each items as item (item.view)}
         <button
           type="button"
@@ -58,16 +58,17 @@
   </div>
 
   <div class="flex flex-wrap items-center gap-2 text-xs">
-    <!-- Four independent state dimensions (D1–D6) -->
-    <span class="flex items-center gap-1 rounded border border-zf-border bg-zf-surface px-2 py-1">
+    <!-- Four independent state dimensions (D1–D6). Tinted pills carry the
+         semantic status colour; no four identical bordered boxes. -->
+    <span class="inline-flex items-center gap-1 rounded-full px-2 py-1 {applied === '—' ? 'bg-zf-raised' : 'bg-zf-ok/10'}">
       <span class="text-[0.65rem] uppercase tracking-wide text-zf-faint">applied</span>
       <span class="font-medium {applied === '—' ? 'text-zf-faint' : 'text-zf-ok'}">{applied}</span>
     </span>
-    <span class="flex items-center gap-1 rounded border border-zf-border bg-zf-surface px-2 py-1">
+    <span class="inline-flex items-center gap-1 rounded-full bg-zf-raised px-2 py-1">
       <span class="text-[0.65rem] uppercase tracking-wide text-zf-faint">selected</span>
       <span class="font-medium text-zf-text">{selected}</span>
     </span>
-    <span class="flex items-center gap-1 rounded border border-zf-border bg-zf-surface px-2 py-1">
+    <span class="inline-flex items-center gap-1 rounded-full px-2 py-1 {dirty ? 'bg-zf-warn/10' : 'bg-zf-ok/10'}">
       <span class="text-[0.65rem] uppercase tracking-wide text-zf-faint">saved</span>
       {#if dirty}
         <Badge variant="warning" class="!px-1.5 !py-0 !text-[0.6rem]">unsaved</Badge>
@@ -75,7 +76,7 @@
         <span class="font-medium text-zf-ok">saved</span>
       {/if}
     </span>
-    <span class="flex items-center gap-1 rounded border border-zf-border bg-zf-surface px-2 py-1">
+    <span class="inline-flex items-center gap-1 rounded-full px-2 py-1 {enabled ? 'bg-zf-ok/10' : 'bg-zf-error/10'}">
       <span class="text-[0.65rem] uppercase tracking-wide text-zf-faint">layout</span>
       <span class="font-medium {enabled ? 'text-zf-ok' : 'text-zf-error'}">{enabled ? 'enabled' : 'disabled'}</span>
     </span>

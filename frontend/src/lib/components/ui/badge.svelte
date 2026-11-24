@@ -14,10 +14,14 @@
 
   const variants: Record<Variant, string> = {
     default: 'bg-secondary text-foreground',
+    // `outline` keeps its border: it marks the selected profile/zone and is a
+    // meaningful state boundary, not decorative chrome.
     outline: 'border border-input text-muted-foreground',
-    success: 'bg-success/15 text-success ring-1 ring-success/30',
-    warning: 'bg-warning/15 text-warning ring-1 ring-warning/30',
-    error: 'bg-destructive/15 text-destructive ring-1 ring-destructive/30',
+    // Status badges are tinted surfaces; the tint + semantic text colour keep
+    // the state legible without a boxed ring.
+    success: 'bg-success/15 text-success',
+    warning: 'bg-warning/15 text-warning',
+    error: 'bg-destructive/15 text-destructive',
   };
 </script>
 

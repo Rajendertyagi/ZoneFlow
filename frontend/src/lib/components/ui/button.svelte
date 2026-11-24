@@ -28,10 +28,10 @@
   }: Props = $props();
 
   const variants: Record<Variant, string> = {
-    default: 'bg-primary text-primary-foreground hover:bg-primary-hover',
-    outline: 'border border-input bg-transparent text-foreground hover:bg-secondary',
+    default: 'bg-primary text-primary-foreground shadow-zf-1 hover:bg-primary-hover hover:shadow-zf-2',
+    outline: 'border border-input bg-zf-surface text-foreground shadow-zf-1 hover:bg-secondary hover:shadow-zf-2',
     ghost: 'bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground',
-    destructive: 'bg-destructive text-destructive-foreground hover:brightness-110',
+    destructive: 'bg-destructive text-destructive-foreground shadow-zf-1 hover:brightness-110 hover:shadow-zf-2',
   };
   const sizes: Record<Size, string> = {
     sm: 'h-7 px-2.5 text-xs',
