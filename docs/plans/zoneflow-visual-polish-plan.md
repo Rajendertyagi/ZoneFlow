@@ -11,6 +11,50 @@
 ### Verification status (read this first)
 
 > **No visual inspection, screenshot comparison, contrast measurement, or manual browser/desktop verification has been performed at planning time.** Every screenshot and manual item in this plan is marked **NOT YET PERFORMED**. The automated checks described here are commands to be run during implementation, not results already obtained. Nothing in this document should be read as evidence that the visual polish has been applied or validated.
+>
+> See the [VWP6 implementation status](#vwp6-implementation-status-added-2026-11-24) section below for post-implementation factual status (automated gates, automated contrast calculation, partial screenshot comparison; manual verification remains **NOT YET PERFORMED**).
+
+### VWP6 implementation status (added 2026-11-24)
+
+> This is a factual status record appended after implementation. It does **not**
+> change the plan's design, acceptance criteria, or frozen constraints.
+
+- **Implementation complete, VWP0–VWP5**, on top of baseline `ba9b393`:
+  - VWP0 baseline screenshots + fixture — `cf1e711`
+  - VWP1 scrim token + dialog tokenization — `edfdf88`
+  - VWP2 low-chrome shell/nav/status — `3238a64`
+  - VWP3 low-chrome views/panels/inspector — `c39809e`
+  - VWP4 canvas state clarity — `33c0315`
+  - VWP5 preset distinctness + derived swatches — `a239def` (current HEAD at time of writing)
+- **Core CI-equivalent gates — all run locally, all PASS** (exact commands and
+  output in the VWP6 final report): `bun install --frozen-lockfile`,
+  `bun run check` (0 errors/0 warnings), `bun test` (264 pass/0 fail),
+  `bun run build`, `frontend/dist` → root `dist` mirror, `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo test` (264 unit + 3
+  integration, 0 fail), `cargo build --release`, `bun run themes:check`
+  (generated CSS current). The advisory `cargo audit` (`continue-on-error`) and
+  release artifact upload steps were **intentionally excluded and not run**.
+- **Contrast — automated calculation COMPLETED** (not visual verification):
+  every required text (4.5:1) and non-text/canvas-state (3:1) pair passes in all
+  four preset/mode combinations. Three exploratory dark-mode `input`-boundary
+  pairs fall just below 3:1 and are recorded as findings. Decorative
+  `border`/`canvas-grid` hairlines below 3:1 are documented as intentional
+  low-chrome exceptions. See [visual-contrast-report.md](../visual-contrast-report.md).
+- **Screenshot comparison — PERFORMED (partial).** 12 `after-*.png` images were
+  captured with browser automation from the built release app using the
+  documented fixture (1440×900, Visual QA profile, Duo template,
+  zone1=Editor/notepad++, zone2=Archive/7zFM), covering every baseline cell
+  except `01` (initial unassigned-zones state, not reproducible without
+  deviating from the fixture). Side-by-side observation confirms the intended
+  low-chrome changes (decorative borders replaced by surface steps + elevation;
+  status chips as tinted pills; presets visibly warmer/cooler). **Comparison is
+  not pixel-perfect**: the baseline was captured with a different applied
+  profile (`Website` vs `Visual QA`), and baseline `04` was in a dirty/unsaved
+  state; these deviations are recorded rather than claimed as identical.
+- **Manual visual/keyboard verification — NOT YET PERFORMED.** All manual items
+  in [manual-verification-checklist.md](../manual-verification-checklist.md)
+  remain unticked, including focus, reduced motion, 200% zoom, scrim readability
+  and canvas-state legibility. No false manual claims are made.
 
 ## Why this plan exists
 
@@ -364,11 +408,21 @@ Use a real contrast-checking tool/script over the normalized token pairs for eac
   | 8. Bottom crop / status bar and toasts | **Not captured as a separate cell** | Status bar is visible in the full editor captures, but no toast was active. Toast state is **deferred to manual verification** (requires an interactive session to trigger). |
   | 200% zoom / reduced motion (manual verification items) | **Not captured** | **Deferred to manual verification**: both require an interactive browser/OS session; see the manual verification section below. |
 
-- After VWP5, capture the identical **core subset** using the identical fixture
-  setup above and compare side by side. Record observations; do not claim
-  improvement without comparison. Deferred cells remain **NOT YET PERFORMED**
-  until an interactive session captures them. **After-captures are NOT YET
-  PERFORMED**; only the 13 VWP0 baseline PNGs listed in `fixture.md` exist.
+- After VWP5, the identical **core subset** was captured using the identical
+  fixture setup above and compared side by side. In VWP6, **12 after-images
+  (`after-02` … `after-13`) were captured** with browser automation from the
+  built release app, covering every baseline cell except `01` (the initial
+  unassigned-zones state, **not captured** — it cannot be reproduced without
+  deviating from the fixture by clearing the Visual QA zone assignments and
+  dirtying the draft). Observations were recorded in the
+  [VWP6 implementation status](#vwp6-implementation-status-added-2026-11-24)
+  section above. **The comparison is not pixel-perfect and is not manual visual
+  verification**: the baseline was captured with a different applied profile
+  (`Website` vs `Visual QA`), baseline cell `04` was in a dirty/unsaved state,
+  and the canvas grid is subtler after VWP4; these deviations are recorded
+  rather than claimed as identical. Deferred cells — drop / merge / handle
+  transient states, 200% zoom, reduced motion and toasts — remain **NOT YET
+  PERFORMED** until an interactive session captures them.
 
 ### Manual visual verification
 
@@ -378,18 +432,18 @@ Requires an interactive Windows/browser session. Items include: low-chrome appea
 
 | ID | Criterion | Verification method | Status |
 |---|---|---|---|
-| VAC1 | `scrim` is a required token in both presets/modes; `--color-scrim: var(--scrim);` present in `@theme inline`; `bg-scrim` is the canonical form (no `bg-black/70`, no `bg-[var(--scrim)]`); stale scrim-exception comment removed/rewritten in `ui/dialog.svelte` | `bun run themes:check`, `bun test`, static grep/inspection | Not yet run |
-| VAC2 | No hardcoded styling hex in `components/dialogs/*` except documented tints fallback | `frontend/tests/dialog-tokens.test.ts` | Not yet run |
-| VAC3 | Elevation tokens defined only in `app.css`, not in preset JSON | Static inspection + schema test | Not yet run |
-| VAC4 | Decorative borders removed from panels/cards/rows; functional borders/focus retained | Screenshot comparison + manual checklist | **NOT YET PERFORMED** |
-| VAC5 | Presets visibly distinct in surfaces, accent and canvas | Screenshot comparison + manual checklist | **NOT YET PERFORMED** |
-| VAC6 | Manifest swatches derived from the dark-mode token map in order `preset.dark.primary`, `preset.dark.background`, `preset.dark.muted-foreground` | Static inspection + unit test | Not yet run |
-| VAC7 | WCAG 2.2 AA contrast across all presets/modes | Contrast checker results recorded | **NOT YET PERFORMED** |
-| VAC8 | Visible focus, keyboard operation, reduced motion, 200% zoom | Manual keyboard/visual pass | **NOT YET PERFORMED** |
-| VAC9 | Canvas states distinguishable in every preset/mode | Contrast check + manual visual pass | **NOT YET PERFORMED** |
-| VAC10 | D1–D6 behavior, dirty/undo, overlay independence unchanged | `bun test`, `cargo test`, manual workflow spot-check | Automated not yet run; manual **NOT YET PERFORMED** |
-| VAC11 | Core CI-equivalent gates pass (advisory `cargo audit` and artifact upload intentionally excluded, not claimed run) | VWP6 command list | Not yet run |
-| VAC12 | Generated CSS current; docs updated; no false manual claims | `themes:check` + doc review | Not yet run |
+| VAC1 | `scrim` is a required token in both presets/modes; `--color-scrim: var(--scrim);` present in `@theme inline`; `bg-scrim` is the canonical form (no `bg-black/70`, no `bg-[var(--scrim)]`); stale scrim-exception comment removed/rewritten in `ui/dialog.svelte` | `bun run themes:check`, `bun test`, static grep/inspection | **Satisfied — automated/static** (`themes:check`, `bun test`, grep: mapping present, 7 `bg-scrim` uses, no `bg-black/70`/`bg-[var(--scrim)]`) |
+| VAC2 | No hardcoded styling hex in `components/dialogs/*` except documented tints fallback | `frontend/tests/dialog-tokens.test.ts` | **Satisfied — automated** (`dialog-tokens.test.ts` in `bun test`) |
+| VAC3 | Elevation tokens defined only in `app.css`, not in preset JSON | Static inspection + schema test | **Satisfied — static** (tokens in `app.css` only, dark in both modes, not in preset JSON) |
+| VAC4 | Decorative borders removed from panels/cards/rows; functional borders/focus retained | Screenshot comparison + manual checklist | **Manual-only** — screenshots give partial observation; manual **NOT YET PERFORMED** |
+| VAC5 | Presets visibly distinct in surfaces, accent and canvas | Screenshot comparison + manual checklist | **Manual-only** — screenshots show difference; manual **NOT YET PERFORMED** |
+| VAC6 | Manifest swatches derived from the dark-mode token map in order `preset.dark.primary`, `preset.dark.background`, `preset.dark.muted-foreground` | Static inspection + unit test | **Satisfied — static + unit test** (`manifest.ts` inspection + `bun test`) |
+| VAC7 | WCAG 2.2 AA contrast across all presets/modes | Contrast checker results recorded | **Automated calculation done** — required pairs pass; 3 exploratory dark `input`-boundary findings below 3:1 documented in [visual-contrast-report.md](../visual-contrast-report.md). Visual manual verification **NOT YET PERFORMED** |
+| VAC8 | Visible focus, keyboard operation, reduced motion, 200% zoom | Manual keyboard/visual pass | **Manual-only — NOT YET PERFORMED** |
+| VAC9 | Canvas states distinguishable in every preset/mode | Contrast check + manual visual pass | **Partial** — token pairs checked by automated contrast calculation; visual manual **NOT YET PERFORMED** |
+| VAC10 | D1–D6 behavior, dirty/undo, overlay independence unchanged | `bun test`, `cargo test`, manual workflow spot-check | **Automated satisfied** (`bun test`, `cargo test`); manual spot-check **NOT YET PERFORMED** |
+| VAC11 | Core CI-equivalent gates pass (advisory `cargo audit` and artifact upload intentionally excluded, not claimed run) | VWP6 command list | **Satisfied — all 10 core gates pass** |
+| VAC12 | Generated CSS current; docs updated; no false manual claims | `themes:check` + doc review | **Satisfied** (`themes:check` + doc review) |
 
 ## Risks, non-goals and safeguards
 

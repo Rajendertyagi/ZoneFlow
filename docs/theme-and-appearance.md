@@ -1,9 +1,17 @@
 # Theme, presets and appearance preferences
 
 This document describes the editor theme system delivered by WP1–WP4 of the
-[ZoneFlow Overlay UX + Theme plan](plans/zoneflow-overlay-ux-theme-plan.md). It is
+[ZoneFlow Overlay UX + Theme plan](plans/zoneflow-overlay-ux-theme-plan.md) and
+the low-chrome visual polish pass delivered by VWP0–VWP5 of the
+[ZoneFlow Visual Polish plan](plans/zoneflow-visual-polish-plan.md). It is
 documentation only — it does not change application behaviour. Bun is a
 **build-time tool only**; the installed app has no Node/Bun runtime.
+
+For the automated WCAG 2.2 AA contrast calculation recorded in VWP6, see
+[visual-contrast-report.md](visual-contrast-report.md). That report is an
+automated calculation, **not** visual verification; the manual visual pass
+remains NOT YET PERFORMED in
+[manual-verification-checklist.md](manual-verification-checklist.md).
 
 ## Where built-in presets live
 
@@ -59,11 +67,12 @@ Each preset file uses the registry-style shape used by tweakcn/shadcn theme JSON
   `muted-foreground`, `muted-foreground-faint`), actions/focus (`primary`,
   `primary-hover`, `primary-foreground`, `accent`, `accent-foreground`, `ring`),
   borders (`border`, `input`), status (`destructive`, `destructive-foreground`,
-  `success`, `success-foreground`, `warning`, `warning-foreground`) and the
-  canvas-specific tokens (`canvas-bg`, `canvas-grid`, `canvas-zone-stroke`,
-  `canvas-zone-selected`, `canvas-zone-drop`, `canvas-zone-merge`,
-  `canvas-handle-shared`, `canvas-handle-outer`, `canvas-preview`,
-  `canvas-label-bg`, `canvas-label-fg`). `chart-1`…`chart-5` are optional.
+  `success`, `success-foreground`, `warning`, `warning-foreground`), the dialog
+  scrim (`scrim`) and the canvas-specific tokens (`canvas-bg`, `canvas-grid`,
+  `canvas-zone-stroke`, `canvas-zone-selected`, `canvas-zone-drop`,
+  `canvas-zone-merge`, `canvas-handle-shared`, `canvas-handle-outer`,
+  `canvas-preview`, `canvas-label-bg`, `canvas-label-fg`). `chart-1`…`chart-5`
+  are optional.
 - ZoneFlow-only extensions to the base shadcn/tweakcn set are `primary-hover`,
   `success`/`success-foreground`, `warning`/`warning-foreground` and the
   `canvas-*` tokens. They are part of the schema, fixtures, generated CSS and tests.
@@ -104,6 +113,100 @@ stay tweakcn-compatible in shape.
 
 Invalid or unknown preset IDs always fall back to `zoneflow-amber` (both at
 runtime and in the bootstrap).
+
+## Visual direction and surface hierarchy (VWP0–VWP5)
+
+The VWP0–VWP5 visual polish pass applies a **polished, modern, LOW-CHROME**
+look without changing behaviour, workflow, or the frozen architecture
+decisions. "Low-chrome" removes *decorative* boxed chrome — the repeated
+`rounded-lg border border-zf-border bg-zf-surface` wrapper on every panel,
+card, chip and row — and replaces it with deliberate surface-contrast steps and
+subtle elevation shadows. It does **not** remove functional boundaries: input
+and select borders, focus rings, drag/resize handles, meaningful separators,
+status distinctions, and canvas zone strokes/handles/previews/guides are all
+preserved.
+
+Four surface levels are used, adjacent levels being distinguishable without a
+border:
+
+1. **App background** — `--background` (`bg-background` / `bg-zf-bg`).
+2. **Panel surface** — `--card` (`bg-card` / `bg-zf-surface`) with `--zf-shadow-1`.
+3. **Raised / interactive surface** — `--secondary` (`bg-secondary` / `bg-zf-raised`).
+4. **Overlay surface** — `--popover` (`bg-popover` / `bg-zf-panel`) with `--zf-shadow-3`.
+
+### The `scrim` token (new, required)
+
+`scrim` was added to `REQUIRED_LIGHT_DARK_KEYS` in `schema.ts` and to both
+modes of both preset JSON fixtures. It is mapped in `app.css` with
+`--color-scrim: var(--scrim);` inside the `@theme inline` block, which makes
+the `bg-scrim` Tailwind utility resolvable. `bg-scrim` is the **canonical**
+form used by all dialogs; `bg-[var(--scrim)]` arbitrary-value syntax is not
+used, and no `zf-*` alias exists for scrim. `var(--scrim)` is reserved for
+contexts where a Tailwind utility cannot be applied. The previous
+`bg-black/70` scrim and its stale exception comment were removed.
+
+Current values:
+
+| Preset | Light | Dark |
+|---|---|---|
+| `zoneflow-amber` | `rgba(7, 11, 20, 0.55)` | `rgba(0, 0, 0, 0.72)` |
+| `caffeine` | `rgba(41, 33, 26, 0.58)` | `rgba(0, 0, 0, 0.72)` |
+
+Dialog text sits on the opaque `popover` surface above the scrim, so dialog
+text legibility is governed by the `popover-foreground` / `popover` ratio (see
+the contrast report), not by the scrim value itself. Whether the scrim reads
+well in each preset/mode is a **visual** judgement and remains a manual item.
+
+### Elevation and hairline tokens (`app.css` only)
+
+Elevation is defined **only in `frontend/src/app.css`**, not in the preset JSON
+schema. This keeps shadows structural rather than per-preset identity and
+avoids a second source of truth. The shadow base is **dark in both modes** and
+is deliberately **not** derived from `--foreground` (which is near-white in
+dark mode and would produce light glows instead of natural shadows):
+
+| Token | Definition | Role |
+|---|---|---|
+| `--zf-shadow-color` | `:root { rgb(15 23 42 / 0.16) }` · `:root.dark { rgb(0 0 0 / 0.55) }` | Dark shadow base, mode-specific strength |
+| `--zf-shadow-1` | `0 1px 2px var(--zf-shadow-color)` | Resting elevation for panels/cards |
+| `--zf-shadow-2` | `0 4px 14px var(--zf-shadow-color)` | Hover / raised elevation |
+| `--zf-shadow-3` | `0 18px 48px var(--zf-shadow-color)` | Dialogs / menus / tooltips |
+| `--zf-hairline` | derived from `--foreground` via `color-mix` | Low-chrome visual separators (a light hairline in dark mode is intentional edge definition, **not** a shadow) |
+
+### Preset identities
+
+The two built-in presets are now meaningfully, but conservatively, distinct —
+in accent hue, surface temperature **and** canvas tokens, not just a button
+colour:
+
+- **`zoneflow-amber`** (default/fallback) — amber / deep-slate identity. Dark
+  background near `#070b14`, amber primary near `#f59e0b`, radius `0.5rem`.
+  Surface steps refined so the low-chrome hierarchy reads clearly.
+- **`caffeine`** — warmer **coffee / cream** identity. Warmer brown/cream
+  surfaces in light mode, warmer espresso surfaces in dark mode, a warmer
+  caramel/copper accent, and canvas tokens shifted to the same warm family.
+  Radius `0.375rem` (tighter, more "crafted" feel).
+
+All foreground/background pairs in both modes were checked with an automated
+WCAG 2.2 AA contrast calculation (see
+[visual-contrast-report.md](visual-contrast-report.md)); all required pairs
+pass. Whether the presets are *visibly* distinct to a user is a manual item.
+
+### Derived picker swatches
+
+Picker `swatches` are no longer a second hardcoded colour list. They are
+derived in `manifest.ts` from each normalized fixture's **dark-mode** token
+map, in this exact order: `preset.dark.primary`, `preset.dark.background`,
+`preset.dark['muted-foreground']`. This matches the previous hardcoded values
+(amber `#f59e0b` / `#070b14` / `#93a4bd`; caffeine `#d6a87c` / `#181512` /
+`#a8a29e`) so the picker preview stays visually consistent while the duplication
+is removed.
+
+### Documented colour exceptions
+
+The only hardcoded styling hex values that remain intentionally are the
+`zone_tints` overlay defaults (native overlay independence), the documented
+`ZoneCanvas.svelte` fallback, and test-fixture hex. These are not tokenized.
 
 ## Appearance preferences are per-browser-profile
 
@@ -163,7 +266,7 @@ DOM focus. A keyboard-only pass in a real browser is still required (AC8).
 
 | Criterion | Verified by automated / static evidence | Still requires manual verification |
 |---|---|---|
-| **AC7** — WCAG 2.2 AA contrast (4.5:1 normal text, 3:1 large text, 3:1 meaningful non-text UI/graphical objects) across all presets/modes | Fixture tests confirm every required token is present and well-formed for every preset and both modes; generated-CSS tests confirm complete token blocks. **No contrast-ratio checker was run in WP6**, so contrast compliance is **not** established by automated evidence. | Yes — run a contrast checker/tooling and review each preset/mode, including canvas states and focus rings. |
+| **AC7** — WCAG 2.2 AA contrast (4.5:1 normal text, 3:1 large text, 3:1 meaningful non-text UI/graphical objects) across all presets/modes | Fixture/generated-CSS tests confirm token completeness. In VWP6 an **automated contrast calculation** was run over every required pair for both presets and both modes; all required text (4.5:1) and non-text/canvas-state (3:1) pairs pass. Three exploratory `input`-boundary pairs in dark mode fall just below 3:1 and are reported as findings in [visual-contrast-report.md](visual-contrast-report.md). This is a calculation, **not** visual verification. | Yes — visual review of each preset/mode (including canvas states, focus rings, scrim readability and the reported boundary findings) in an interactive session. |
 | **AC8** — visible keyboard focus, keyboard operation, reduced motion | Unit tests cover the keyboard/focus math (`ui-a11y-helpers.test.ts`); `motion-reduce:transition-none` classes are present statically; `bun run check` and `bun test` pass. | Yes — keyboard-only pass (Tab/Shift+Tab, arrows, Home/End, Escape, Enter/Space), visible focus in light/dark, and reduced-motion behaviour with the OS/browser setting enabled. |
 
 ### Explicitly deferred / known limitations

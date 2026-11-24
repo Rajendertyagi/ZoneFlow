@@ -34,12 +34,68 @@ status note.
 ## Accessibility / visual (AC7–AC9)
 
 - [ ] **AC7 — WCAG 2.2 AA contrast.** Run a contrast checker/tooling and review every built-in preset and both modes: 4.5:1 normal text, 3:1 large text, 3:1 meaningful non-text UI components and graphical objects (including canvas states and focus rings). Document results per preset/mode.
-      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+      **Status: automated calculation COMPLETED** in VWP6 — see
+      [visual-contrast-report.md](visual-contrast-report.md). All required pairs
+      pass; three exploratory dark-mode `input`-boundary pairs fall just below
+      3:1 and are reported as findings. **Visual review of contrast in an
+      interactive session is still NOT YET PERFORMED** — this item stays open
+      until a human reviews each preset/mode on screen.
 
 - [ ] **AC8 — Keyboard focus, operation and reduced motion.** Keyboard-only pass (Tab/Shift+Tab, arrows, Home/End, Escape, Enter/Space) on modernized primitives; confirm visible focus in light/dark. Enable OS/browser "Reduce motion" / `prefers-reduced-motion` and confirm non-essential motion is reduced/disabled. Also check 200% zoom.
       **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
 
 - [ ] **AC9 — Canvas and views readable across presets/modes.** Visual QA matrix: canvas grid, zones, handles, previews, guides and labels readable in every built-in preset and both modes; selected/drop/merge/handle states distinguishable.
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+## Visual polish pass (VWP0–VWP6) — VAC4, VAC5, VAC8, VAC9
+
+These items cover the low-chrome visual polish delivered by VWP0–VWP5. They
+require an interactive Windows/browser session and are **all NOT YET
+PERFORMED**. Automated checks and the automated contrast calculation do **not**
+substitute for them.
+
+- [ ] **Low-chrome appearance (VAC4).** In each view (Home, Editor, Settings,
+      Hotkeys) confirm decorative boxed borders on panels, cards, chips and rows
+      are gone and grouping is conveyed by surface-contrast steps and subtle
+      elevation shadows. Confirm functional boundaries remain: input/select
+      borders, focus rings, drag/resize handles, meaningful separators, and
+      status distinctions (selected / dirty / error / success / disabled).
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+- [ ] **Preset distinctness (VAC5).** Switch between `zoneflow-amber` and
+      `caffeine` in both light and dark modes; confirm the change is immediately
+      visible in surfaces, accent and canvas (amber/deep-slate vs. warmer
+      coffee/cream), and that picker swatches match the active preset.
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+- [ ] **Dialog scrim readability.** Open the wizard, picker, confirm, prompt and
+      close dialogs in both presets and both modes; confirm dialog text is
+      readable over the scrim in light presets and the scrim is not crushing in
+      dark presets. Confirm focus trap, Escape dismiss and focus restore still
+      work.
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+- [ ] **Canvas states (VAC9).** In every preset and both modes, confirm the
+      canvas grid, zones, handles, previews, guides and labels are readable and
+      that selected / drop / merge / handle states are mutually distinguishable.
+      Include the transient drop and merge states (not captured in the VWP0
+      baseline).
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+- [ ] **Visible focus and keyboard operation (VAC8).** Keyboard-only pass
+      (Tab/Shift+Tab, arrows, Home/End, Escape, Enter/Space) on modernized
+      primitives; confirm visible focus rings in both light and dark modes and
+      that no focus ring was removed when a border was removed.
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+- [ ] **Reduced motion (VAC8).** Enable OS/browser `prefers-reduced-motion:
+      reduce` and confirm non-essential transitions on buttons, tabs, switch and
+      resizable are disabled.
+      **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
+
+- [ ] **200% zoom (VAC8).** At 200% browser zoom, confirm low-chrome surfaces
+      remain distinguishable and controls remain usable (including the 24 × 24
+      CSS-pixel minimum interactive target floor).
       **Status: NOT YET PERFORMED — requires interactive Windows/browser session.**
 
 ## Windows native overlay (AC10–AC12)
@@ -62,6 +118,16 @@ status note.
 
 - **Automated/static evidence exists** for AC5, AC6, AC10 (state-machine tests only), AC12 (test portion only) and AC13 — see the WP6 final report and
   [theme-and-appearance.md](theme-and-appearance.md#ac7--ac8-automatedstatic-evidence-vs-manual-verification). That evidence does **not** substitute for the manual items above.
-- **No manual item on this page has been performed.** In particular, AC7 contrast compliance is not established by any automated check run in WP6 (no contrast-ratio checker was run).
+- **Automated contrast calculation was run in VWP6** (see
+  [visual-contrast-report.md](visual-contrast-report.md)). It establishes the
+  measured token-pair ratios, not visual contrast compliance. Three exploratory
+  dark-mode `input`-boundary pairs fall below 3:1 and are reported as findings.
+- **After-images were captured in VWP6** for 12 of the 13 VWP0 baseline cells
+  (see the VWP6 status note in
+  [the visual polish plan](plans/zoneflow-visual-polish-plan.md)). Screenshot
+  capture and side-by-side observation are **not** a substitute for an
+  interactive manual visual/keyboard pass.
+- **No manual item on this page has been performed.** Every checkbox above
+  remains unticked.
 - Deferred limitations (resizable keyboard resize, DOM-level component tests, dialog `inert`/scroll-lock, native overlay label legibility, snap-success feedback, keyboard zone selection) are documented in
   [theme-and-appearance.md](theme-and-appearance.md#explicitly-deferred--known-limitations).
