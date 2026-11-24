@@ -236,11 +236,11 @@ One WP at a time, in order. Each has a reviewable checkpoint. Dependencies are s
 
 - **Scope**: capture baseline screenshots per the documented matrix; finalize token decisions; no application code changes.
 - **Files**: new screenshot artifacts under a documented location (e.g. `docs/screenshots/visual-polish/`); this plan file may be refined with confirmed values. **No app code.**
-- **Behavior**: capture the current UI at baseline `ba9b393` across the full matrix (see Screenshot comparison procedure). Confirm the five locked decisions and the surface hierarchy. Record exact preset values only after contrast validation.
+- **Behavior**: capture the current UI at baseline `ba9b393` across the core matrix subset listed in `fixture.md` (see Screenshot comparison procedure); remaining matrix cells are deferred to manual verification with rationale. Confirm the five locked decisions and the surface hierarchy. Record exact preset values only after contrast validation.
 - **Fixture setup (deterministic — existing app capabilities only, no new features)**: before any capture, fix the browser viewport (e.g. maximize to a recorded size such as 1440×900, zoom 100%) and record it. Create a profile named `Visual QA` via the existing New profile prompt. Apply the `Duo` template via the existing Layout wizard (deterministic 2 zones) — use this one fixed template choice everywhere. Assign fixed apps to zones via the existing picker/Browse flow; record the exact app labels and paths in a committed fixture manifest (e.g. `docs/screenshots/visual-polish/fixture.md`) so before/after use identical data; if a chosen app is unavailable on the machine, record the substitute used and keep it identical across captures. Selected state: click zone 1 to select it (deterministic). Drop state: drag the recorded app from the library over zone 2 and capture while hovering BEFORE release; document the exact interaction. Merge state: use the existing Merge toolbar action, click zone 1 as source then hover zone 2 as target; document the exact interaction. Set mode/preset via the existing Appearance controls before each capture; capture both presets × both modes. Commit the fixture manifest alongside screenshots; if any state cannot be reproduced identically, document the deviation rather than claiming a valid comparison. **NOT YET PERFORMED.**
 - **Tests**: none (documentation/screenshot only).
 - **Manual verification**: **NOT YET PERFORMED** — requires an interactive Windows/browser session and the documented capture procedure.
-- **Completion criteria**: baseline captures exist for every matrix cell; token decisions recorded; no app code modified.
+- **Completion criteria**: baseline captures exist for the core matrix subset listed in `fixture.md`; remaining matrix cells are explicitly marked N/A or deferred to manual verification with rationale; token decisions recorded; no app code modified.
 - **Regression risks**: none (no code changes).
 - **Dependencies**: none. Blocks VWP1–VWP5 (before/after comparison needs a baseline).
 
@@ -346,16 +346,29 @@ Use a real contrast-checking tool/script over the normalized token pairs for eac
   7. Merge state: use the existing Merge toolbar action, click zone 1 as source then hover zone 2 as target; document the exact interaction.
   8. Set mode/preset via the existing Appearance controls before each capture; capture both presets × both modes.
   9. Commit the fixture manifest alongside screenshots; if any state cannot be reproduced identically, document the deviation rather than claiming a valid comparison.
-- Capture matrix (each cell in both presets × both modes where applicable):
-  1. Home view (default and maximized)
-  2. Editor view — three-pane workspace, empty canvas
-  3. Editor view — canvas with zones, selected zone, drop/merge/handle states
-  4. Wizard dialog (with live preview)
-  5. Picker dialog
-  6. Settings view (including Appearance controls)
-  7. Hotkeys view
-  8. Bottom crop / status bar and toasts
-- After VWP5, capture the identical matrix using the identical fixture setup above and compare side by side. Record observations; do not claim improvement without comparison. **ALL CAPTURES NOT YET PERFORMED.**
+- Capture matrix (each cell in both presets × both modes where applicable). The
+  **VWP0 baseline** covers only the core subset listed in
+  `docs/screenshots/visual-polish/fixture.md`; every other cell is explicitly
+  marked **Deferred to manual verification** with a rationale. Deferred cells were
+  **not** captured in VWP0 and must not be reported as captured.
+
+  | Matrix cell | VWP0 baseline status | Notes / rationale |
+  |---|---|---|
+  | 1. Home view (default and maximized) | **Partially captured** — default Home in dark `zoneflow-amber` (`03`) and dark `caffeine` (`13`) | Maximized Home and light-mode Home are **deferred to manual verification** (non-core preset/mode combinations; lower priority, can be captured during VWP6 manual QA). |
+  | 2. Editor view — three-pane workspace, empty canvas | **Captured** in dark `zoneflow-amber` (`01`, initial 2 unassigned zones) | Other preset/mode combinations are **deferred to manual verification** (non-core combinations; VWP6 manual QA). |
+  | 3. Editor view — canvas with zones, selected zone, drop/merge/handle states | **Partially captured** — zones + selected zone in all four preset/mode combinations (`02`, `09`, `11`, `12`) | Drop / merge / handle transient states are **deferred to manual verification**: they require precise interactive pointer sessions that automation could not reliably hold for a screenshot. |
+  | 4. Wizard dialog (with live preview) | **Captured** in dark `zoneflow-amber` (`04`) | Other preset/mode combinations are **deferred to manual verification** (non-core combinations; VWP6 manual QA). |
+  | 5. Picker dialog | **Captured** in dark `zoneflow-amber` (`07`) | Other preset/mode combinations are **deferred to manual verification** (non-core combinations; VWP6 manual QA). |
+  | 6. Settings view (including Appearance controls) | **Captured** in dark `zoneflow-amber` (`05`), light `zoneflow-amber` (`08`), light `caffeine` (`10`) | Dark `caffeine` is **deferred to manual verification** (non-core combination; VWP6 manual QA). |
+  | 7. Hotkeys view | **Captured** in dark `zoneflow-amber` (`06`) | Other preset/mode combinations are **deferred to manual verification** (non-core combinations; VWP6 manual QA). |
+  | 8. Bottom crop / status bar and toasts | **Not captured as a separate cell** | Status bar is visible in the full editor captures, but no toast was active. Toast state is **deferred to manual verification** (requires an interactive session to trigger). |
+  | 200% zoom / reduced motion (manual verification items) | **Not captured** | **Deferred to manual verification**: both require an interactive browser/OS session; see the manual verification section below. |
+
+- After VWP5, capture the identical **core subset** using the identical fixture
+  setup above and compare side by side. Record observations; do not claim
+  improvement without comparison. Deferred cells remain **NOT YET PERFORMED**
+  until an interactive session captures them. **After-captures are NOT YET
+  PERFORMED**; only the 13 VWP0 baseline PNGs listed in `fixture.md` exist.
 
 ### Manual visual verification
 
