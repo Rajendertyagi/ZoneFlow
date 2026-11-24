@@ -84,6 +84,47 @@ describe('built-in preset fixtures', () => {
       expect('swatches' in fixture).toBe(false);
     }
   });
+
+  test('swatches are derived from the dark token map in the locked order', () => {
+    for (const entry of PRESET_MANIFEST) {
+      expect(entry.swatches).toEqual([
+        entry.preset.dark.primary,
+        entry.preset.dark.background,
+        entry.preset.dark['muted-foreground'],
+      ]);
+    }
+    // Guard the documented picker-preview values against accidental drift.
+    expect(getPreset('zoneflow-amber').swatches).toEqual(['#f59e0b', '#070b14', '#93a4bd']);
+    expect(getPreset('caffeine').swatches).toEqual(['#d6a87c', '#181512', '#a8a29e']);
+  });
+
+  test('presets are meaningfully distinct in accent, surfaces and canvas', () => {
+    const amber = getPreset('zoneflow-amber').preset;
+    const caffeine = getPreset('caffeine').preset;
+    for (const mode of ['light', 'dark'] as const) {
+      expect(amber[mode].primary, `${mode} accent`).not.toBe(caffeine[mode].primary);
+      expect(amber[mode].background, `${mode} background`).not.toBe(caffeine[mode].background);
+      expect(amber[mode].card, `${mode} card`).not.toBe(caffeine[mode].card);
+      expect(amber[mode].secondary, `${mode} secondary`).not.toBe(caffeine[mode].secondary);
+      expect(amber[mode]['canvas-bg'], `${mode} canvas-bg`).not.toBe(
+        caffeine[mode]['canvas-bg'],
+      );
+      expect(amber[mode]['canvas-zone-selected'], `${mode} canvas-zone-selected`).not.toBe(
+        caffeine[mode]['canvas-zone-selected'],
+      );
+      expect(amber[mode]['canvas-handle-outer'], `${mode} canvas-handle-outer`).not.toBe(
+        caffeine[mode]['canvas-handle-outer'],
+      );
+    }
+  });
+
+  test('caffeine surfaces read warm and zoneflow-amber surfaces read cool', () => {
+    const channels = (hex: string): number[] => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const [amberR, , amberB] = channels(getPreset('zoneflow-amber').preset.light.background);
+    const [caffeineR, , caffeineB] = channels(getPreset('caffeine').preset.light.background);
+    expect(amberB).toBeGreaterThan(amberR); // cool slate-leaning
+    expect(caffeineR).toBeGreaterThan(caffeineB); // warm cream-leaning
+  });
 });
 
 describe('normalization', () => {

@@ -1,7 +1,10 @@
 /**
  * Built-in preset manifest. The JSON fixtures are the source of truth for
- * token values; `label` and `swatches` are ZoneFlow-only presentation metadata
- * and intentionally live here rather than in the tweakcn-compatible fixtures.
+ * token values; `label` is ZoneFlow-only presentation metadata and
+ * intentionally lives here rather than in the tweakcn-compatible fixtures.
+ * Picker `swatches` are derived from each normalized fixture's dark-mode token
+ * map (primary, background, muted-foreground) so the preview always matches
+ * the actual preset and there is no second hardcoded colour list to drift.
  */
 import amberFixture from './presets/zoneflow-amber.json';
 import caffeineFixture from './presets/caffeine.json';
@@ -14,28 +17,29 @@ export interface PresetManifestEntry {
   id: string;
   /** Human-readable label for appearance controls (manifest metadata only). */
   label: string;
-  /** Small colour chips for the preset picker. */
+  /** Small colour chips for the preset picker, derived from the dark token map. */
   swatches: readonly string[];
   /** Validated, normalized token maps for both modes. */
   preset: NormalizedThemePreset;
 }
 
-function entry(
-  id: string,
-  label: string,
-  swatches: readonly string[],
-  fixture: unknown,
-): PresetManifestEntry {
+function entry(id: string, label: string, fixture: unknown): PresetManifestEntry {
   const preset = normalizePreset(fixture);
   if (preset.name !== id) {
     throw new Error(`Preset fixture name "${preset.name}" does not match manifest id "${id}".`);
   }
+  // Locked order: primary, background, muted-foreground from the DARK map.
+  const swatches = [
+    preset.dark.primary,
+    preset.dark.background,
+    preset.dark['muted-foreground'],
+  ] as const;
   return { id, label, swatches, preset };
 }
 
 export const PRESET_MANIFEST: readonly PresetManifestEntry[] = Object.freeze([
-  entry('zoneflow-amber', 'ZoneFlow Amber', ['#f59e0b', '#070b14', '#93a4bd'], amberFixture),
-  entry('caffeine', 'Caffeine', ['#d6a87c', '#181512', '#a8a29e'], caffeineFixture),
+  entry('zoneflow-amber', 'ZoneFlow Amber', amberFixture),
+  entry('caffeine', 'Caffeine', caffeineFixture),
 ]);
 
 export const PRESET_IDS: readonly string[] = Object.freeze(PRESET_MANIFEST.map((item) => item.id));
