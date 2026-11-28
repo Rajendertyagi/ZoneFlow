@@ -463,7 +463,27 @@ fn load_config_from(path: &Path) -> AppConfig {
     }
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
-        Err(_) => return default_config(),
+        Err(e) => {
+            // Preserve the unreadable original for recovery instead of silently
+            // falling back to defaults. Use a distinct suffix from the
+            // JSON-parse branch (`.json.bad`) so the two recovery paths cannot
+            // collide. If preservation fails, leave the original untouched —
+            // never delete user data on a best-effort recovery path.
+            let preserved = path.with_extension("json.bad.read");
+            match fs::rename(path, &preserved) {
+                Ok(()) => tracing::warn!(
+                    error = %e,
+                    preserved = %preserved.display(),
+                    "Config file was unreadable; preserved for recovery and using defaults"
+                ),
+                Err(preserve_err) => tracing::warn!(
+                    error = %e,
+                    preserve_error = %preserve_err,
+                    "Config file was unreadable and could not be preserved; using defaults"
+                ),
+            }
+            return default_config();
+        }
     };
     let cfg: AppConfig = match serde_json::from_str(&text) {
         Ok(c) => c,
@@ -833,6 +853,35 @@ mod tests {
         assert!(
             in_original == invalid || in_bad == invalid,
             "unreadable config content must not be lost"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_config_read_error_is_preserved_and_defaults_returned() {
+        // B2: a config that exists but cannot be read must be preserved under a
+        // distinct `.json.bad.read` suffix (not silently dropped, and not
+        // colliding with the JSON-parse branch's `.json.bad`). A directory at
+        // the config path is a portable way to force `read_to_string` to fail.
+        let dir =
+            std::env::temp_dir().join(format!("zoneflow_unreadable_cfg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ScreenLayout.json");
+        fs::create_dir(&path).unwrap();
+        let preserved = path.with_extension("json.bad.read");
+
+        let cfg = load_config_from(&path);
+
+        assert_eq!(cfg.schema_version, SCHEMA_VERSION);
+        assert_eq!(cfg.gap, 8);
+        assert_eq!(cfg.active_profile, "Website");
+        assert!(!path.exists(), "unreadable config must be moved away");
+        assert!(preserved.exists(), "unreadable config must be preserved");
+        assert!(
+            !path.with_extension("json.bad").exists(),
+            "read-error recovery must not collide with the parse-error suffix"
         );
 
         let _ = fs::remove_dir_all(&dir);

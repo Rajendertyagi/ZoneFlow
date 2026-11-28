@@ -7,6 +7,8 @@
   }
   let { onclose }: Props = $props();
 
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
+
   const items: Array<{ view: View; label: string; icon: typeof Home }> = [
     { view: 'home', label: 'Home', icon: Home },
     { view: 'editor', label: 'Editor', icon: LayoutDashboard },
@@ -26,7 +28,7 @@
           type="button"
           aria-current={ui.view === item.view ? 'page' : undefined}
           onclick={() => navigate(item.view)}
-          class="inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-sm font-medium transition-colors aria-[current=page]:bg-zf-accent aria-[current=page]:text-zf-accent-ink text-zf-muted hover:text-zf-text"
+          class={`inline-flex h-7 items-center gap-1.5 rounded px-2.5 text-sm font-medium transition-colors aria-[current=page]:bg-zf-accent aria-[current=page]:text-zf-accent-ink text-zf-muted hover:text-zf-text ${focusRing}`}
         >
           <item.icon size={13} /> {item.label}
         </button>
@@ -39,7 +41,7 @@
       type="button"
       title="Close editor"
       aria-label="Close editor"
-      class="rounded p-1.5 text-zf-faint hover:bg-zf-raised hover:text-zf-text"
+      class={`rounded p-1.5 text-zf-faint hover:bg-zf-raised hover:text-zf-text ${focusRing}`}
       onclick={onclose}
     >
       <X size={15} />

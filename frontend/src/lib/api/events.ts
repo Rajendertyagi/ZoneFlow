@@ -90,11 +90,16 @@ function onOpen(): void {
 }
 
 function onError(): void {
-  noteSseFailure();
   // EventSource reconnects automatically while CONNECTING/OPEN. Only when the
-  // browser has given up (CLOSED) do we drive our own backoff loop.
+  // browser has given up (CLOSED) is this a real failure: count it and drive
+  // our own backoff loop. A transient error during auto-reconnect must NOT
+  // increment sseFailures — three such blips would otherwise flip the UI to
+  // "Connection lost" while the browser is reconnecting normally.
   if (source?.readyState === EventSource.CLOSED) {
+    noteSseFailure();
     scheduleReconnect();
+  } else {
+    setConnection('reconnecting');
   }
 }
 
@@ -109,6 +114,9 @@ function scheduleReconnect(): void {
 
 function connect(): void {
   if (stopped) return;
+  // Idempotent start/stop: never leak a previous stream when reconnecting or
+  // when startEvents() is called twice.
+  source?.close();
   source = new EventSource('/api/events');
   source.onopen = onOpen;
   source.onmessage = onMessage;

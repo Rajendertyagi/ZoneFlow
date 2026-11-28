@@ -172,7 +172,7 @@
       </div>
       <Dialog.Close>
         {#snippet child({ props })}
-          <Button variant="ghost" size="icon" title="Close" class={`h-9 w-9 p-0 ${focusRing}`} {...props}>×</Button>
+          <Button variant="ghost" size="icon" title="Close" aria-label="Close" class={`h-9 w-9 p-0 ${focusRing}`} {...props}>×</Button>
         {/snippet}
       </Dialog.Close>
     </Dialog.Header>

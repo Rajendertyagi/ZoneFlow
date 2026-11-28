@@ -116,10 +116,9 @@
           <p class="p-3 text-sm text-zf-faint">No applications found.</p>
         {:else}
           {#each filtered as app (app.id)}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               draggable="true"
-              role="button"
-              tabindex="0"
               title={`Drag ${app.label} onto a zone`}
               ondragstart={(event) => onDragStart(event, app)}
               class={`group flex min-h-9 cursor-grab items-center gap-3 border-b border-[color:var(--zf-hairline)] px-3 py-2 transition-colors last:border-0 hover:bg-zf-raised active:cursor-grabbing ${focusRing}`}

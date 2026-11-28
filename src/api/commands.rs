@@ -829,15 +829,27 @@ pub fn handle(
                 .iter_mut()
                 .find(|z| z.id == id)
                 .ok_or_else(|| not_found("zone"))?;
+            // D3: an unassigned zone must be *fully* clean. Reset every
+            // automation field to its `Zone::default()` value, mirroring
+            // `ZoneAssign` above. A leftover launcher_path would still make
+            // `engine_core::launch_spec` return `LaunchSpec::Script` and could
+            // execute that script on Apply/hotkey even though the zone shows as
+            // unassigned.
+            let defaults = crate::config::Zone::default();
             z.label.clear();
             z.exe.clear();
             z.path.clear();
+            z.launcher_path = defaults.launcher_path;
+            z.launcher_show_console = defaults.launcher_show_console;
+            z.launch_mode = crate::config::LaunchMode::default();
             z.url.clear();
             z.title_match.clear();
+            z.tab_behavior = crate::config::TabBehavior::default();
             z.macro_enabled = false;
             z.trigger_title.clear();
             z.macro_text.clear();
             z.notes.clear();
+            z.key_delay = defaults.key_delay;
             inner.push_history();
             inner.log("info", format!("Cleared assignment on zone {id}"));
             ok()
@@ -1661,6 +1673,73 @@ mod tests {
         assert!(!z.launcher_show_console);
         // The EXE override is stored for window identification only.
         assert_eq!(z.path, r"C:\App\app.exe");
+    }
+
+    #[test]
+    fn zone_unassign_clears_all_automation_fields_including_launcher() {
+        let (mut inner, queue, shutdown, mut cache) = setup();
+        inner
+            .draft
+            .active_mut()
+            .zones
+            .push(Zone::new(1, "Old", "old.exe", 0.0, 0.0, 50.0, 100.0));
+        let mut ctx = test_context(&queue, &shutdown, &mut cache);
+        // Assign a script launcher plus non-default rules first.
+        handle(
+            CommandPayload::ZoneAssign {
+                id: 1,
+                spec: AssignDto {
+                    label: "Script app".into(),
+                    exe: "app.exe".into(),
+                    path: r"C:\App\app.exe".into(),
+                    launcher_path: r"C:\Scripts\run.bat".into(),
+                    launcher_show_console: false,
+                },
+            },
+            &mut inner,
+            &mut ctx,
+        )
+        .unwrap();
+        {
+            let z = &mut inner.draft.active_mut().zones[0];
+            assert!(matches!(
+                crate::engine_core::launch_spec(z),
+                crate::engine_core::LaunchSpec::Script(_)
+            ));
+            z.launch_mode = crate::config::LaunchMode::Attach;
+            z.tab_behavior = crate::config::TabBehavior::Ignore;
+            z.key_delay = 999;
+            z.url = "https://old".into();
+            z.title_match = "Old title".into();
+            z.macro_enabled = true;
+            z.trigger_title = "Trigger".into();
+            z.macro_text = "^t".into();
+            z.notes = "note".into();
+        }
+        handle(CommandPayload::ZoneUnassign { id: 1 }, &mut inner, &mut ctx).unwrap();
+        let z = &inner.draft.active().zones[0];
+        let defaults = crate::config::Zone::default();
+        assert_eq!(z.label, "");
+        assert_eq!(z.exe, "");
+        assert_eq!(z.path, "");
+        assert_eq!(z.launcher_path, defaults.launcher_path);
+        assert_eq!(z.launcher_show_console, defaults.launcher_show_console);
+        assert_eq!(z.launch_mode, defaults.launch_mode);
+        assert_eq!(z.url, "");
+        assert_eq!(z.title_match, "");
+        assert_eq!(z.tab_behavior, defaults.tab_behavior);
+        assert!(!z.macro_enabled);
+        assert_eq!(z.trigger_title, "");
+        assert_eq!(z.macro_text, "");
+        assert_eq!(z.notes, "");
+        assert_eq!(z.key_delay, defaults.key_delay);
+        // Geometry and identity are untouched (D3).
+        assert_eq!((z.id, z.x, z.y, z.w, z.h), (1, 0.0, 0.0, 50.0, 100.0));
+        // The decisive regression: no leftover script can execute on Apply.
+        assert!(!matches!(
+            crate::engine_core::launch_spec(z),
+            crate::engine_core::LaunchSpec::Script(_)
+        ));
     }
 
     #[test]

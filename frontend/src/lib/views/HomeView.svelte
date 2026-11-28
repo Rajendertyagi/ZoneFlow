@@ -174,7 +174,7 @@
       <div class="overflow-hidden rounded-lg bg-zf-surface shadow-zf-1">
         {#each profiles as profile (profile.name)}
           <div class="flex flex-wrap items-center gap-3 border-b border-[color:var(--zf-hairline)] px-4 py-3 transition-colors last:border-0 hover:bg-zf-raised motion-reduce:transition-none {profile.selected ? 'bg-zf-accent/10' : ''}">
-            <button type="button" class="flex min-w-0 flex-1 items-center gap-3 text-left" onclick={() => void select(profile.name)} title="Select this profile without applying it">
+            <button type="button" class={`flex min-w-0 flex-1 items-center gap-3 text-left ${focusRing}`} onclick={() => void select(profile.name)} title="Select this profile without applying it">
               <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-zf-raised font-mono text-xs text-zf-accent">
                 {profile.name.slice(0, 2).toUpperCase()}
               </span>
@@ -194,7 +194,7 @@
               <Button size="sm" variant="ghost" title="Edit in the layout editor" class={`h-7 text-xs ${focusRing}`} onclick={() => void edit(profile.name)}>
                 <Pencil size={13} /> Edit
               </Button>
-              <Button size="icon" variant="ghost" title="Duplicate" class={`h-9 w-9 p-0 ${focusRing}`} onclick={() => void duplicate(profile.name)}>
+              <Button size="icon" variant="ghost" title="Duplicate" aria-label={`Duplicate ${profile.name}`} class={`h-9 w-9 p-0 ${focusRing}`} onclick={() => void duplicate(profile.name)}>
                 <Copy size={13} />
               </Button>
               <Button size="sm" variant="ghost" title="Rename" class={`h-7 text-xs ${focusRing}`} onclick={() => void rename(profile.name)}>

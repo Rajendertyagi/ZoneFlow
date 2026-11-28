@@ -246,7 +246,13 @@ impl Inner {
     /// behaviour. Applied/selected names are repaired if the reloaded config no
     /// longer contains them.
     pub fn reload_from_disk(&mut self) {
-        let cfg = crate::config::load_config();
+        self.apply_reloaded_config(crate::config::load_config());
+    }
+
+    /// Apply an already-loaded config as the new authoritative baseline.
+    /// Factored out of [`Self::reload_from_disk`] so the history/zone reset is
+    /// unit-testable without touching the real config file.
+    fn apply_reloaded_config(&mut self, cfg: AppConfig) {
         if !cfg.profiles.contains_key(&self.applied_profile) {
             self.applied_profile = cfg.active_profile.clone();
         }
@@ -255,6 +261,18 @@ impl Inner {
         }
         self.draft = cfg.clone();
         self.last_saved_json = serde_json::to_string(&cfg).unwrap_or_default();
+        // `selected_zone` indexes the zones shown in the editor. Keep it only
+        // while it still addresses a real zone in the reloaded draft; otherwise
+        // clear it to the same -1 sentinel a fresh `Inner` uses.
+        let zone_count = self.draft.active().zones.len();
+        if self.selected_zone < 0 || self.selected_zone as usize >= zone_count {
+            self.selected_zone = -1;
+        }
+        // A reload replaces the whole draft. Any pre-reload undo/redo entry
+        // would restore a stale snapshot over the freshly loaded config, so
+        // start a brand-new history at this (now coherent) baseline.
+        self.history = vec![self.snapshot()];
+        self.hindex = 0;
     }
 
     /// Authoritative zone geometry + short labels for the selected profile.
@@ -456,6 +474,52 @@ mod tests {
         s.push_history();
         s.push_history(); // no change since last push
         assert_eq!(s.history.len(), 2);
+    }
+
+    #[test]
+    fn reload_resets_history_so_undo_cannot_restore_a_stale_draft() {
+        let mut s = Inner::new(cfg());
+        s.draft.gap = 10;
+        s.push_history();
+        s.draft.gap = 20;
+        s.push_history();
+        assert!(s.can_undo());
+        assert!(s.undo()); // step back so both undo and redo are available
+        assert!(s.can_undo());
+        assert!(s.can_redo());
+        s.selected_zone = 0; // no zones in the default config -> stale
+
+        let mut reloaded = cfg();
+        reloaded.gap = 77;
+        s.apply_reloaded_config(reloaded);
+
+        assert_eq!(s.draft.gap, 77);
+        assert!(!s.can_undo());
+        assert!(!s.can_redo());
+        assert_eq!(s.history.len(), 1);
+        assert_eq!(s.hindex, 0);
+        assert_eq!(s.selected_zone, -1);
+        assert!(!s.undo(), "undo must not restore the pre-reload draft");
+        assert_eq!(
+            s.draft.gap, 77,
+            "the reloaded draft must remain authoritative"
+        );
+    }
+
+    #[test]
+    fn reload_keeps_a_still_valid_zone_selection() {
+        let mut s = Inner::new(cfg());
+        let mut reloaded = cfg();
+        reloaded
+            .active_mut()
+            .zones
+            .push(Zone::new(0, "A", "a.exe", 0.0, 0.0, 50.0, 100.0));
+        s.selected_zone = 0;
+
+        s.apply_reloaded_config(reloaded);
+
+        assert_eq!(s.selected_zone, 0);
+        assert_eq!(s.draft.active().zones.len(), 1);
     }
 
     #[test]

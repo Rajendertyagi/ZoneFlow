@@ -83,7 +83,7 @@
       >
         <button
           type="button"
-          class="flex w-full items-center gap-2 text-left"
+          class={`flex w-full items-center gap-2 text-left ${focusRing}`}
           onclick={() => void load(profile.name)}
           title="Load ${profile.name} into the draft"
         >
@@ -98,13 +98,13 @@
             <Badge class="bg-transparent border border-input text-muted-foreground !px-1.5 !py-0 !text-xs">selected</Badge>
           {/if}
           <span class="ml-auto flex gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
-            <button type="button" title="Rename" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void rename(profile.name)}>
+            <button type="button" title="Rename" aria-label={`Rename ${profile.name}`} class={`inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text ${focusRing}`} onclick={() => void rename(profile.name)}>
               <Pencil size={12} />
             </button>
-            <button type="button" title="Duplicate" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void duplicate(profile.name)}>
+            <button type="button" title="Duplicate" aria-label={`Duplicate ${profile.name}`} class={`inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text ${focusRing}`} onclick={() => void duplicate(profile.name)}>
               <Copy size={12} />
             </button>
-            <button type="button" title="Delete" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-error/15 hover:text-zf-error" onclick={() => void deleteProfile(profile.name)}>
+            <button type="button" title="Delete" aria-label={`Delete ${profile.name}`} class={`inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-error/15 hover:text-zf-error ${focusRing}`} onclick={() => void deleteProfile(profile.name)}>
               <Trash2 size={12} />
             </button>
           </span>
