@@ -26,7 +26,10 @@ function block(css: string, selector: string): string {
 
 describe('generated/presets.css', () => {
   test('committed output is current with the fixtures', () => {
-    const committed = readFileSync(GENERATED_CSS_PATH, 'utf8');
+    // Git may check this file out with CRLF on Windows (core.autocrlf), while
+    // the generator always emits LF. Normalize line endings before comparing
+    // so the check is about CSS content, not the checkout's newline style.
+    const committed = readFileSync(GENERATED_CSS_PATH, 'utf8').replace(/\r\n/g, '\n');
     expect(committed).toBe(generateCss());
   });
 

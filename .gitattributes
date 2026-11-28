@@ -1,0 +1,5 @@
+# The generated theme CSS is compared byte-for-byte against generator output
+# in frontend/src/themes/generated-css.test.ts. The generator always emits LF;
+# force LF on checkout so Windows runners (core.autocrlf=true) don't turn the
+# committed file into CRLF and break that comparison.
+frontend/src/themes/generated/presets.css text eol=lf
