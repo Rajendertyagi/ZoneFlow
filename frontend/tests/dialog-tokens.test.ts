@@ -1,13 +1,14 @@
 /**
- * VWP1 — static guard for dialog & scrim tokenization.
+ * VWP1 / WP-O4 — static guard for dialog & scrim tokenization.
  *
  * No DOM harness and no new dependencies: this reads the dialog sources as
  * text and asserts (a) no hardcoded hex colours remain outside the single
- * documented overlay exception, (b) every dialog scrim uses the canonical
- * `bg-scrim` utility (never `bg-black/70` or `bg-[var(--scrim)]`), (c) the stale
- * scrim-exception comment is gone, (d) `app.css` maps `--color-scrim` in
- * `@theme inline`, and (e) the generated CSS exposes `--scrim` in EVERY
- * preset/mode selector block so `bg-scrim` resolves in every built-in preset.
+ * documented overlay exception, (b) the generated `dialog-overlay.svelte`
+ * uses the canonical `bg-scrim` utility (never `bg-black/*`), (c) `dialogs/*`
+ * contain no hand-rolled scrim button or `role="dialog"` markup, (d) `app.css`
+ * maps `--color-scrim` in `@theme inline`, and (e) the generated CSS exposes
+ * `--scrim` in EVERY preset/mode selector block so `bg-scrim` resolves in
+ * every built-in preset.
  */
 /// <reference types="node" />
 // @ts-ignore - bun:test types are provided by the Bun runtime, not @types/node.
@@ -19,7 +20,16 @@ import { PRESET_IDS } from '../src/themes/manifest';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dialogsDir = resolve(here, '..', 'src', 'lib', 'components', 'dialogs');
-const uiDialogPath = resolve(here, '..', 'src', 'lib', 'components', 'ui', 'dialog.svelte');
+const dialogOverlayPath = resolve(
+  here,
+  '..',
+  'src',
+  'lib',
+  'components',
+  'ui',
+  'dialog',
+  'dialog-overlay.svelte',
+);
 const appCssPath = resolve(here, '..', 'src', 'app.css');
 const generatedCssPath = resolve(here, '..', 'src', 'themes', 'generated', 'presets.css');
 
@@ -83,29 +93,31 @@ describe('VWP1 dialog & scrim tokenization', () => {
     expect(source).not.toContain('#e6edf7');
   });
 
-  test('no bg-black/70 or bg-[var(--scrim)] remains in dialogs', () => {
-    const sources = [...files.map((file) => read(resolve(dialogsDir, file))), read(uiDialogPath)];
-    for (const source of sources) {
-      expect(source).not.toContain('bg-black/70');
-      expect(source).not.toContain('bg-[var(--scrim)]');
-    }
-  });
-
-  test('every dialog scrim uses the canonical bg-scrim utility', () => {
+  test('no bg-black/* or bg-[var(--scrim)] remains in dialogs', () => {
     for (const file of files) {
-      expect(read(resolve(dialogsDir, file)), `${file} scrim must use bg-scrim`).toContain(
-        'bg-scrim',
-      );
+      const source = read(resolve(dialogsDir, file));
+      expect(source, `${file} must not use bg-black/*`).not.toMatch(/bg-black\//);
+      expect(source, `${file} must not use bg-[var(--scrim)]`).not.toContain('bg-[var(--scrim)]');
     }
-    expect(read(uiDialogPath)).toContain('bg-scrim');
   });
 
-  test('stale bg-black/70 scrim-exception comment is gone from ui/dialog.svelte', () => {
-    const source = read(uiDialogPath);
-    expect(source).not.toContain('bg-black/70');
-    expect(source).not.toContain('preset schema has no scrim token');
-    expect(source).toContain('bg-scrim');
-    expect(source).toContain('zone_tints');
+  test('generated dialog-overlay.svelte uses bg-scrim with no bg-black default', () => {
+    const overlay = read(dialogOverlayPath);
+    expect(overlay).toContain('bg-scrim');
+    expect(overlay).not.toMatch(/bg-black\//);
+  });
+
+  test('dialogs/* contain no hand-rolled scrim button or role="dialog" markup', () => {
+    for (const file of files) {
+      const source = read(resolve(dialogsDir, file));
+      expect(source, `${file} must not declare role="dialog"`).not.toContain('role="dialog"');
+      expect(source, `${file} must not use bg-scrim`).not.toContain('bg-scrim');
+      expect(source, `${file} must not use bg-black/*`).not.toMatch(/bg-black\//);
+      expect(
+        source,
+        `${file} must not contain a hand-rolled scrim button`,
+      ).not.toMatch(/<button\b[^>]*\bbg-(?:scrim|black\/)/);
+    }
   });
 
   test('app.css @theme inline maps --color-scrim to var(--scrim)', () => {

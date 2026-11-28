@@ -11,8 +11,10 @@
   import { getProfiles, isDirty, store } from '$lib/state/app.svelte';
   import { compactProfileLoadOptions } from '$lib/state/profile-switch';
   import { prompt } from '$lib/state/ui.svelte';
-  import Badge from '$lib/components/ui/badge.svelte';
-  import Button from '$lib/components/ui/button.svelte';
+  import { Badge } from '$lib/components/ui/badge/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
 
   const profiles = $derived(getProfiles());
   const selected = $derived(store.snapshot?.selected ?? '');
@@ -59,15 +61,15 @@
   <div class="flex items-center justify-between border-b border-zf-border px-3 py-2">
     <div>
       <h3 class="text-xs font-semibold uppercase tracking-wider text-zf-text">Profiles</h3>
-      <p class="text-[0.65rem] text-zf-faint">Click to load a draft for editing</p>
+      <p class="text-xs text-zf-faint">Click to load a draft for editing</p>
     </div>
-    <Button variant="ghost" size="icon" title="New profile" onclick={() => void newProfile()}>
+    <Button variant="ghost" size="icon" title="New profile" class={`h-9 w-9 p-0 ${focusRing}`} onclick={() => void newProfile()}>
       <Plus size={14} />
     </Button>
   </div>
 
   {#if isDirty()}
-    <div class="mx-3 mt-2 rounded border border-zf-warn/30 bg-zf-warn/10 px-2 py-1 text-[0.65rem] text-zf-warn">
+    <div class="mx-3 mt-2 rounded border border-zf-warn/30 bg-zf-warn/10 px-2 py-1 text-xs text-zf-warn">
       Unsaved draft — switching will ask before discarding.
     </div>
   {/if}
@@ -86,14 +88,14 @@
           title="Load ${profile.name} into the draft"
         >
           <span class="min-w-0 flex-1 truncate text-sm font-medium text-zf-text">{profile.name}</span>
-          <span class="shrink-0 font-mono text-[0.65rem] text-zf-faint">{profile.zone_count}z</span>
+          <span class="shrink-0 font-mono text-xs text-zf-faint">{profile.zone_count}z</span>
         </button>
         <div class="mt-1.5 flex items-center gap-1">
           {#if profile.applied}
-            <Badge variant="success" class="!px-1.5 !py-0 !text-[0.6rem]">applied</Badge>
+            <Badge class="bg-success/15 text-success !px-1.5 !py-0 !text-xs">applied</Badge>
           {/if}
           {#if profile.selected}
-            <Badge variant="outline" class="!px-1.5 !py-0 !text-[0.6rem]">selected</Badge>
+            <Badge class="bg-transparent border border-input text-muted-foreground !px-1.5 !py-0 !text-xs">selected</Badge>
           {/if}
           <span class="ml-auto flex gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
             <button type="button" title="Rename" class="inline-flex h-6 w-6 items-center justify-center rounded p-1 text-zf-faint hover:bg-zf-raised hover:text-zf-text" onclick={() => void rename(profile.name)}>

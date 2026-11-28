@@ -13,9 +13,12 @@
     templateRects,
     type TemplateId,
   } from '$lib/components/Canvas/templates';
-  import Button from '$lib/components/ui/button.svelte';
-  import Label from '$lib/components/ui/label.svelte';
-  import Switch from '$lib/components/ui/switch.svelte';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Label } from '$lib/components/ui/label/index.js';
+  import { Switch } from '$lib/components/ui/switch/index.js';
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
 
   interface Props {
     open: boolean;
@@ -88,32 +91,29 @@
   }
 </script>
 
-{#if open}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-    <button
-      type="button"
-      aria-label="Close wizard"
-      class="absolute inset-0 cursor-default bg-scrim"
-      onclick={onclose}
-    ></button>
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Layout wizard"
-      class="relative z-10 flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-zf-border-strong bg-zf-panel shadow-2xl"
-    >
-      <div class="flex items-center gap-2 border-b border-zf-border px-6 py-4">
-        <Sparkles size={18} class="text-zf-accent" />
-        <div>
-          <h2 class="text-base font-semibold text-zf-text">Layout wizard</h2>
-          <p class="text-xs text-zf-muted">Start from a template, or draw zones yourself.</p>
-        </div>
+<Dialog.Root
+  open={open}
+  onOpenChange={(next) => {
+    if (!next) onclose();
+  }}
+>
+  <Dialog.Content
+    showCloseButton={false}
+    aria-label="Layout wizard"
+    class="flex max-h-[90vh] max-w-3xl flex-col gap-0 overflow-hidden rounded-lg border border-zf-border-strong bg-zf-panel p-0 shadow-2xl ring-0 sm:max-w-3xl"
+  >
+    <Dialog.Header class="flex flex-row items-center gap-2 border-b border-zf-border px-6 py-4">
+      <Sparkles size={18} class="text-zf-accent" />
+      <div class="min-w-0">
+        <Dialog.Title class="text-base font-semibold text-zf-text">Layout wizard</Dialog.Title>
+        <Dialog.Description class="text-xs text-zf-muted">Start from a template, or draw zones yourself.</Dialog.Description>
       </div>
+    </Dialog.Header>
 
       <div class="grid min-h-0 flex-1 gap-5 overflow-auto p-6 md:grid-cols-[1fr_260px]">
         <!-- Template picker -->
         <div class="flex flex-col gap-2">
-          <Label>Templates</Label>
+          <Label class="text-xs text-muted-foreground">Templates</Label>
           <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {#each TEMPLATE_OPTIONS as option (option.id)}
               <button
@@ -125,7 +125,7 @@
                 <span class="block text-sm font-medium {template === option.id ? 'text-zf-accent' : 'text-zf-text'}">
                   {option.label}
                 </span>
-                <span class="mt-0.5 block text-[0.7rem] text-zf-faint">{option.hint}</span>
+                <span class="mt-0.5 block text-xs text-zf-faint">{option.hint}</span>
               </button>
             {/each}
           </div>
@@ -133,7 +133,7 @@
           {#if template === 'grid'}
             <div class="mt-3 flex items-end gap-3">
               <div class="flex-1">
-                <Label for="wizard-cols">Columns</Label>
+                <Label for="wizard-cols" class="text-xs text-muted-foreground">Columns</Label>
                 <input
                   id="wizard-cols"
                   type="number"
@@ -144,7 +144,7 @@
                 />
               </div>
               <div class="flex-1">
-                <Label for="wizard-rows">Rows</Label>
+                <Label for="wizard-rows" class="text-xs text-muted-foreground">Rows</Label>
                 <input
                   id="wizard-rows"
                   type="number"
@@ -159,13 +159,13 @@
 
           <div class="mt-4 flex items-center justify-between rounded-md border border-zf-border bg-zf-surface px-3 py-2">
             <span class="text-xs text-zf-muted">Replace the current zones</span>
-            <Switch checked={replace} label="Replace current zones" onchange={(v) => (replace = v)} />
+            <Switch bind:checked={replace} aria-label="Replace current zones" class={focusRing} />
           </div>
         </div>
 
         <!-- Live preview -->
         <div class="flex flex-col gap-2">
-          <Label>Live preview · {rects.length} zones</Label>
+          <Label class="text-xs text-muted-foreground">Live preview · {rects.length} zones</Label>
           <div class="aspect-video w-full overflow-hidden rounded-md border border-zf-border bg-zf-bg">
             <svg viewBox="0 0 100 100" preserveAspectRatio="none" class="h-full w-full" role="img" aria-label="Template preview">
               {#each rects as rect, i (i)}
@@ -193,23 +193,24 @@
               {/each}
             </svg>
           </div>
-          <p class="text-[0.7rem] leading-relaxed text-zf-faint">
+          <p class="text-xs leading-relaxed text-zf-faint">
             Geometry is stored as percentages, so the layout adapts to any resolution.
           </p>
         </div>
       </div>
 
-      <div class="flex flex-wrap items-center justify-between gap-2 border-t border-zf-border px-6 py-4">
-        <Button variant="ghost" size="sm" onclick={draw}>
-          <PenTool size={14} /> Draw manually instead
+    <Dialog.Footer
+      class="mx-0 mb-0 flex flex-wrap items-center justify-between gap-2 rounded-none border-zf-border bg-transparent p-0 px-6 py-4 sm:justify-between"
+    >
+      <Button variant="ghost" size="sm" class={`h-7 text-xs ${focusRing}`} onclick={draw}>
+        <PenTool size={14} /> Draw manually instead
+      </Button>
+      <div class="flex gap-2">
+        <Button variant="ghost" size="sm" class={`h-7 text-xs ${focusRing}`} onclick={onclose}>Cancel</Button>
+        <Button size="sm" disabled={busy || rects.length === 0} class={`h-9 px-4 ${focusRing}`} onclick={() => void apply()}>
+          Apply template
         </Button>
-        <div class="flex gap-2">
-          <Button variant="ghost" size="sm" onclick={onclose}>Cancel</Button>
-          <Button size="sm" disabled={busy || rects.length === 0} onclick={() => void apply()}>
-            Apply template
-          </Button>
-        </div>
       </div>
-    </div>
-  </div>
-{/if}
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

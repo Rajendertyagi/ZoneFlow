@@ -2,7 +2,14 @@
   /** Dismissible per-zone results panel (Finding 3). Aggregate toast is unchanged. */
   import { X } from '@lucide/svelte';
   import { applyResults, dismissApplyResults } from '$lib/state/apply-results.svelte';
-  import Badge from '$lib/components/ui/badge.svelte';
+  import { Badge } from '$lib/components/ui/badge/index.js';
+
+  // Official Badge has no success/warning/error variants; keep the tinted pills.
+  const toneClass: Record<'success' | 'warning' | 'error', string> = {
+    success: 'bg-success/15 text-success',
+    warning: 'bg-warning/15 text-warning',
+    error: 'bg-destructive/15 text-destructive',
+  };
 </script>
 
 {#if applyResults.visible}
@@ -11,7 +18,7 @@
     aria-label="Per-zone apply results"
   >
     <div class="mb-1.5 flex items-center justify-between gap-2">
-      <p class="text-[0.7rem] font-semibold uppercase tracking-wider text-zf-muted">
+      <p class="text-xs font-semibold uppercase tracking-wider text-zf-muted">
         Zone results · {applyResults.profile}
         {#if applyResults.intent === 'launch_arrange'}
           <span class="font-normal normal-case tracking-normal text-zf-faint">(Launch &amp; Arrange)</span>
@@ -30,7 +37,7 @@
       {#each applyResults.rows as row (row.zoneId)}
         <div class="flex flex-wrap items-start gap-x-2 gap-y-0.5 text-xs">
           <span class="min-w-0 font-medium text-zf-text">{row.name}</span>
-          <Badge variant={row.tone}>{row.outcome}</Badge>
+          <Badge class={`rounded-full text-xs ${toneClass[row.tone]}`}>{row.outcome}</Badge>
           {#if row.reason}
             <span class="min-w-0 flex-1 text-zf-muted">{row.reason}</span>
           {/if}

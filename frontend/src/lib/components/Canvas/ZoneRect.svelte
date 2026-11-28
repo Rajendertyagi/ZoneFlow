@@ -6,6 +6,9 @@
     zone: ZoneDto;
     index: number;
     workArea: { w: number; h: number };
+    /** Grid dimensions for the grid-cell readout (12×8 fallback from ZoneCanvas). */
+    gridCols: number;
+    gridRows: number;
     selected: boolean;
     dropTarget: boolean;
     mergeSource: boolean;
@@ -30,6 +33,8 @@
     zone,
     index,
     workArea,
+    gridCols,
+    gridRows,
     selected,
     dropTarget,
     mergeSource,
@@ -60,6 +65,39 @@
   const barH = $derived(Math.max(3, workArea.h * 0.006));
   // Wider grab strips improve discoverability; still display-only geometry.
   const handleSize = $derived(Math.max(12, workArea.w * 0.0075));
+
+  // Dedicated 12px-step font for the zone info readout (best practice #3):
+  // subSize (~9px) was too small and sat off the type scale.
+  const infoFont = $derived(Math.max(12, workArea.h * 0.022));
+  const infoLineH = $derived(infoFont * 1.3);
+  const infoPad = 8; // 8pt internal padding (best practice #1)
+
+  // Per-zone info readout (V3). Uses the authoritative zone percentages (not
+  // the display-only `inset`) so the numbers reflect the real layout.
+  const pxW = $derived((zone.w / 100) * workArea.w);
+  const pxH = $derived((zone.h / 100) * workArea.h);
+  const infoLines = $derived.by((): string[] => {
+    const px = `${Math.round(pxW)} × ${Math.round(pxH)} px`;
+    const pct = `${Math.round(zone.w * 10) / 10}% × ${Math.round(zone.h * 10) / 10}%`;
+    const pos = `x ${Math.round(zone.x * 10) / 10} · y ${Math.round(zone.y * 10) / 10}`;
+    const cells = `${Math.max(1, Math.round((zone.w / 100) * gridCols))} × ${Math.max(1, Math.round((zone.h / 100) * gridRows))}`;
+    // Priority order: px size first. If vertical room is short, drop lines
+    // from the bottom rather than wrapping.
+    const all = [px, pct, pos, cells];
+    const fit = Math.max(1, Math.floor((h - pad * 2 - infoFont) / infoLineH));
+    return all.slice(0, Math.min(4, fit));
+  });
+  const showInfo = $derived(w >= 180 && h >= 140 && infoLines.length > 0);
+
+  // Backing rect geometry: sized to the widest line and the visible line count,
+  // with 8px internal padding. The last text baseline keeps a full line of
+  // clearance from the zone edge so it is never clipped.
+  const infoLastY = $derived(y + h - pad - infoFont);
+  const infoFirstY = $derived(infoLastY - (infoLines.length - 1) * infoLineH);
+  const infoBoxW = $derived(Math.max(0, ...infoLines.map((l) => l.length)) * infoFont * 0.6 + infoPad * 2);
+  const infoBoxH = $derived((infoLines.length - 1) * infoLineH + infoFont * 1.25 + infoPad * 2);
+  const infoBoxX = $derived(x + w - pad + infoPad - infoBoxW);
+  const infoBoxY = $derived(infoFirstY - infoFont - infoPad);
 
   interface RenderHandle {
     handle: ResizeHandle;
@@ -208,6 +246,40 @@
       {zone.exe || 'unassigned'}
     </text>
   </g>
+
+  <!-- Per-zone info readout (V3): px size, percentage, x/y, grid cells.
+       Bottom-right anchored on the 12px type step, tabular numerics, two
+       weights, with a subtle translucent backing. pointer-events-none keeps
+       hit-testing and drag/resize unchanged. Hidden on small zones. -->
+  {#if showInfo}
+    <g class="pointer-events-none" text-anchor="end">
+      <!-- Backing rect first so the text renders on top of it. -->
+      <rect
+        x={infoBoxX}
+        y={infoBoxY}
+        width={infoBoxW}
+        height={infoBoxH}
+        rx={4}
+        fill="var(--canvas-label-bg)"
+        fill-opacity={0.7}
+      />
+      {#each infoLines as line, i (i)}
+        <text
+          x={x + w - pad}
+          y={infoLastY - (infoLines.length - 1 - i) * infoLineH}
+          fill={i === 0 ? 'var(--canvas-label-fg)' : 'var(--muted-foreground)'}
+          font-size={infoFont}
+          font-family="var(--font-mono)"
+          style="font-variant-numeric: tabular-nums"
+          font-weight={i === 0 ? 600 : 400}
+          stroke="var(--canvas-label-bg)"
+          stroke-width={Math.max(1.5, infoFont * 0.18)}
+          stroke-linejoin="round"
+          paint-order="stroke">{line}</text
+        >
+      {/each}
+    </g>
+  {/if}
 
   {#if mergeSource}
     <g class="pointer-events-none" transform={`translate(${x + w - pad}, ${y + pad})`}>

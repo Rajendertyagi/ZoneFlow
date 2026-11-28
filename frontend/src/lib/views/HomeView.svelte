@@ -27,8 +27,10 @@
   import { getProfiles, isDirty, store } from '$lib/state/app.svelte';
   import { navigate, prompt } from '$lib/state/ui.svelte';
   import { actionEligibility } from '$lib/state/workflow';
-  import Badge from '$lib/components/ui/badge.svelte';
-  import Button from '$lib/components/ui/button.svelte';
+  import { Badge } from '$lib/components/ui/badge/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
   import ApplyResults from '$lib/components/ApplyResults.svelte';
 
   const profiles = $derived(getProfiles());
@@ -38,6 +40,9 @@
   const enabled = $derived(store.snapshot?.enabled ?? false);
   const workArea = $derived(store.snapshot?.status.work_area ?? null);
   const eligibility = $derived(actionEligibility(dirty, enabled));
+  const enabledBadgeClass = $derived(
+    enabled ? 'bg-success/15 text-success' : 'bg-destructive/15 text-destructive',
+  );
 
   async function newProfile(): Promise<void> {
     const name = await prompt({
@@ -108,7 +113,7 @@
       <div class="absolute inset-y-0 left-0 w-1 bg-zf-accent"></div>
       <div class="flex flex-wrap items-end justify-between gap-6 px-6 py-5">
         <div>
-          <p class="text-[0.7rem] uppercase tracking-[0.18em] text-zf-faint">Applied profile</p>
+          <p class="text-xs uppercase tracking-[0.18em] text-zf-faint">Applied profile</p>
           <h2 class="mt-1 text-3xl font-semibold tracking-tight text-zf-text">{applied}</h2>
           <p class="mt-1 text-xs text-zf-muted">
             Selected: <span class="font-mono text-zf-text">{selected}</span>
@@ -117,31 +122,31 @@
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <Badge variant={enabled ? 'success' : 'error'}>{enabled ? 'Layout enabled' : 'Layout disabled'}</Badge>
-          {#if dirty}<Badge variant="warning">Unsaved draft</Badge>{/if}
-          <Button size="sm" onclick={() => navigate('editor')}>
+          <Badge class={`rounded-full text-xs ${enabledBadgeClass}`}>{enabled ? 'Layout enabled' : 'Layout disabled'}</Badge>
+          {#if dirty}<Badge class="bg-warning/15 text-warning">Unsaved draft</Badge>{/if}
+          <Button size="sm" class={`h-7 text-xs ${focusRing}`} onclick={() => navigate('editor')}>
             <LayoutDashboard size={14} /> Open editor <ArrowRight size={13} />
           </Button>
         </div>
       </div>
 
       <div class="flex flex-wrap items-center gap-2 border-t border-zf-border bg-zf-bg/40 px-6 py-3">
-        <Button size="sm" variant="outline" disabled={!eligibility.allowed} title={eligibility.reason ?? 'Arrange running apps'} onclick={() => void doApply(false)}>
+        <Button size="sm" variant="outline" disabled={!eligibility.allowed} title={eligibility.reason ?? 'Arrange running apps'} class={`h-7 text-xs ${focusRing}`} onclick={() => void doApply(false)}>
           <Play size={14} /> Apply
         </Button>
-        <Button size="sm" variant="outline" disabled={!eligibility.allowed} title={eligibility.reason ?? 'Launch missing apps and arrange'} onclick={() => void doApply(true)}>
+        <Button size="sm" variant="outline" disabled={!eligibility.allowed} title={eligibility.reason ?? 'Launch missing apps and arrange'} class={`h-7 text-xs ${focusRing}`} onclick={() => void doApply(true)}>
           <Rocket size={14} /> Launch &amp; Arrange
         </Button>
-        <Button size="sm" variant="ghost" onclick={() => void doPreview()}>
+        <Button size="sm" variant="ghost" class={`h-7 text-xs ${focusRing}`} onclick={() => void doPreview()}>
           <Eye size={14} /> Preview
         </Button>
         <span class="mx-1 h-5 w-px bg-zf-border"></span>
         {#if enabled}
-          <Button size="sm" variant="ghost" onclick={() => void doDisable()}>
+          <Button size="sm" variant="ghost" class={`h-7 text-xs ${focusRing}`} onclick={() => void doDisable()}>
             <Power size={14} /> Disable layout
           </Button>
         {:else}
-          <Button size="sm" variant="default" onclick={() => void doEnable()}>
+          <Button size="sm" variant="default" class={`h-7 text-xs ${focusRing}`} onclick={() => void doEnable()}>
             <Power size={14} /> Enable layout
           </Button>
         {/if}
@@ -159,9 +164,9 @@
       <div class="mb-2 flex items-center justify-between">
         <div>
           <h3 class="text-sm font-semibold text-zf-text">Saved profiles</h3>
-          <p class="text-[0.7rem] text-zf-faint">Select changes only the selection · Apply arranges now</p>
+          <p class="text-xs text-zf-faint">Select changes only the selection · Apply arranges now</p>
         </div>
-        <Button size="sm" variant="outline" onclick={() => void newProfile()}>
+        <Button size="sm" variant="outline" class={`h-7 text-xs ${focusRing}`} onclick={() => void newProfile()}>
           <Plus size={14} /> New profile
         </Button>
       </div>
@@ -175,27 +180,27 @@
               </span>
               <span class="min-w-0">
                 <span class="block truncate text-sm font-medium text-zf-text">{profile.name}</span>
-                <span class="block text-[0.7rem] text-zf-faint">{profile.zone_count} zone{profile.zone_count === 1 ? '' : 's'}</span>
+                <span class="block text-xs text-zf-faint">{profile.zone_count} zone{profile.zone_count === 1 ? '' : 's'}</span>
               </span>
             </button>
             <div class="flex items-center gap-1.5">
-              {#if profile.applied}<Badge variant="success" class="!text-[0.6rem]">applied</Badge>{/if}
-              {#if profile.selected}<Badge variant="outline" class="!text-[0.6rem]">selected</Badge>{/if}
+              {#if profile.applied}<Badge class="bg-success/15 text-success !text-xs">applied</Badge>{/if}
+              {#if profile.selected}<Badge class="bg-transparent border border-input text-muted-foreground !text-xs">selected</Badge>{/if}
             </div>
             <div class="flex items-center gap-1">
-              <Button size="sm" variant="outline" title="Apply this profile" onclick={() => void applyProfile(profile.name)}>
+              <Button size="sm" variant="outline" title="Apply this profile" class={`h-7 text-xs ${focusRing}`} onclick={() => void applyProfile(profile.name)}>
                 <Play size={13} /> Apply
               </Button>
-              <Button size="sm" variant="ghost" title="Edit in the layout editor" onclick={() => void edit(profile.name)}>
+              <Button size="sm" variant="ghost" title="Edit in the layout editor" class={`h-7 text-xs ${focusRing}`} onclick={() => void edit(profile.name)}>
                 <Pencil size={13} /> Edit
               </Button>
-              <Button size="icon" variant="ghost" title="Duplicate" onclick={() => void duplicate(profile.name)}>
+              <Button size="icon" variant="ghost" title="Duplicate" class={`h-9 w-9 p-0 ${focusRing}`} onclick={() => void duplicate(profile.name)}>
                 <Copy size={13} />
               </Button>
-              <Button size="sm" variant="ghost" title="Rename" onclick={() => void rename(profile.name)}>
+              <Button size="sm" variant="ghost" title="Rename" class={`h-7 text-xs ${focusRing}`} onclick={() => void rename(profile.name)}>
                 <Type size={13} />
               </Button>
-              <Button size="sm" variant="ghost" title="Delete" onclick={() => void deleteProfile(profile.name)}>
+              <Button size="sm" variant="ghost" title="Delete" class={`h-7 text-xs ${focusRing}`} onclick={() => void deleteProfile(profile.name)}>
                 <Trash2 size={13} />
               </Button>
             </div>

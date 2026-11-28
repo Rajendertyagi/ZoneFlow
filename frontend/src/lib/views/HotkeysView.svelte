@@ -7,8 +7,10 @@
   import { toast } from '$lib/state/ui.svelte';
   import { hotkeyLabel } from '$lib/state/hotkey-labels';
   import { errorMessage } from '$lib/state/workflow';
-  import Button from '$lib/components/ui/button.svelte';
-  import Input from '$lib/components/ui/input.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
 
   let bindings = $state<Record<string, string>>({});
   let lastSnapshotHotkeys = '';
@@ -58,10 +60,10 @@
         </p>
       </div>
       <div class="flex gap-2">
-        <Button variant="ghost" size="sm" disabled={!changed} onclick={reset}>
+        <Button variant="ghost" size="sm" disabled={!changed} class={`h-7 text-xs ${focusRing}`} onclick={reset}>
           <RotateCcw size={14} /> Reset
         </Button>
-        <Button size="sm" disabled={!changed} onclick={() => void save()}>
+        <Button size="sm" disabled={!changed} class={`h-9 px-4 ${focusRing}`} onclick={() => void save()}>
           <Save size={14} /> Save hotkeys
         </Button>
       </div>
@@ -80,13 +82,12 @@
       {#each Object.keys(bindings).sort() as name (name)}
         <div class="flex items-center gap-4 border-b border-[color:var(--zf-hairline)] px-4 py-2.5 transition-colors last:border-0 hover:bg-zf-raised motion-reduce:transition-none">
           <span class="min-w-0 flex-1 text-sm text-zf-text">{hotkeyLabel(name)}</span>
-          <span class="hidden font-mono text-[0.65rem] text-zf-faint sm:block">{name}</span>
+          <span class="hidden font-mono text-xs text-zf-faint sm:block">{name}</span>
           <Input
             id={`hk-${name}`}
-            ariaLabel={hotkeyLabel(name)}
-            value={bindings[name]}
-            class="h-8 w-52 font-mono text-xs"
-            oninput={(e) => (bindings[name] = (e.currentTarget as HTMLInputElement).value)}
+            aria-label={hotkeyLabel(name)}
+            bind:value={bindings[name]}
+            class="h-8 w-52 border border-border font-mono text-xs focus-visible:border-primary"
           />
         </div>
       {:else}
@@ -94,7 +95,7 @@
       {/each}
     </div>
 
-    <p class="mt-3 text-[0.7rem] leading-relaxed text-zf-faint">
+    <p class="mt-3 text-xs leading-relaxed text-zf-faint">
       Use AHK-style modifiers: <span class="font-mono text-zf-muted">Ctrl</span>,
       <span class="font-mono text-zf-muted">Alt</span>,
       <span class="font-mono text-zf-muted">Shift</span>,

@@ -16,8 +16,8 @@
   import { setMode, setTheme, theme, userPrefersMode } from 'mode-watcher';
   import { PRESET_MANIFEST, resolvePresetId } from '../../themes/manifest';
   import type { AppearanceMode } from '$lib/theme/preference';
-  import Label from '$lib/components/ui/label.svelte';
-  import Select from '$lib/components/ui/select.svelte';
+  import { Label } from '$lib/components/ui/label/index.js';
+  import * as NativeSelect from '$lib/components/ui/native-select/index.js';
 
   const MODES: readonly { value: AppearanceMode; label: string }[] = [
     { value: 'system', label: 'System' },
@@ -42,10 +42,10 @@
     selectedMode = value;
   }
 
+  // `bind:value` owns the local mirror; this callback preserves the only side
+  // effect (writing ModeWatcher's persisted theme). No double state set.
   function choosePreset(value: string): void {
-    const id = resolvePresetId(value);
-    setTheme(id);
-    selectedPreset = id;
+    setTheme(resolvePresetId(value));
   }
 </script>
 
@@ -74,25 +74,30 @@
           </button>
         {/each}
       </div>
-      <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+      <p class="text-xs leading-relaxed text-zf-faint">
         System follows your Windows color setting; Light and Dark override it.
       </p>
     </div>
 
     <div class="flex flex-col gap-1.5">
-      <Label for="appearance-preset">Color preset</Label>
-      <Select
+      <Label for="appearance-preset" class="text-xs text-muted-foreground">Color preset</Label>
+      <NativeSelect.Root
         id="appearance-preset"
-        value={selectedPreset}
-        options={PRESET_MANIFEST.map((item) => ({ value: item.id, label: item.label }))}
-        onchange={choosePreset}
-      />
-      <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+        bind:value={selectedPreset}
+        aria-label="Color preset"
+        class="h-9 border border-border focus-visible:border-primary"
+        onchange={(e) => choosePreset((e.currentTarget as HTMLSelectElement).value)}
+      >
+        {#each PRESET_MANIFEST as item (item.id)}
+          <NativeSelect.Option value={item.id}>{item.label}</NativeSelect.Option>
+        {/each}
+      </NativeSelect.Root>
+      <p class="text-xs leading-relaxed text-zf-faint">
         Applies instantly to the editor. Native overlay zone colors are controlled separately above.
       </p>
     </div>
 
-    <p class="rounded-md border border-zf-border bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
+    <p class="rounded-md border border-zf-border bg-zf-bg px-3 py-2 text-xs leading-relaxed text-zf-faint">
       Appearance is stored in this browser profile only (localStorage). It is not part of your
       workspace draft, does not affect Save/Discard or undo/redo, and does not sync across devices
       or browser profiles.

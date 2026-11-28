@@ -291,3 +291,76 @@ described as accessibility-complete:
 
 See the [plan's Accessibility Limitations section](plans/zoneflow-overlay-ux-theme-plan.md#accessibility-limitations-explicit)
 for the authoritative scope statement.
+
+## Official shadcn-svelte component CSS additions (O1–O6)
+
+The migration of the hand-rolled `ui/*` primitives to official shadcn-svelte /
+Bits UI components required a few **additive** rules in
+`frontend/src/app.css`. These are base/scaffolding additions only — **no preset
+JSON value and no generated CSS (`src/themes/generated/presets.css`) was
+changed**, and the existing token documentation above is unaffected:
+
+- `@import "tw-animate-css";` — provides the `animate-in`, `fade-in-0`,
+  `zoom-in-95` and `slide-in-*` utilities used by generated overlay components.
+- `@custom-variant dark (&:is(.dark *));` — makes generated `dark:` utilities
+  follow the app's `:root.dark` class (mode-watcher) instead of the OS
+  `prefers-color-scheme`.
+- A radius scale in `@theme inline` (`--radius-sm` … `--radius-4xl`) derived
+  from the existing `--radius`; generated nova components reference
+  `var(--radius-md)`.
+- Sidebar token aliases in `@theme inline` (`--color-sidebar`,
+  `--color-sidebar-foreground`, `--color-sidebar-primary`,
+  `--color-sidebar-primary-foreground`, `--color-sidebar-accent`,
+  `--color-sidebar-accent-foreground`, `--color-sidebar-border`,
+  `--color-sidebar-ring`) mapped to existing semantic tokens, for forward
+  compatibility. Sidebar is **not** adopted by this migration.
+- A `@layer base` cursor rule (`button:not(:disabled)`,
+  `[role="button"]:not(:disabled) { cursor: pointer; }`) to restore the pointer
+  cursor under Tailwind v4.
+- A global `@media (prefers-reduced-motion: reduce)` rule in `@layer base`
+  covering transitions/animations inside the official components.
+
+The generated dialog overlay uses `bg-scrim` (the generated `bg-black/10`
+default was replaced), so the scrim remains the canonical token described in
+[The `scrim` token](#the-scrim-token-new-required) above. Visual verification
+of these additions in an interactive session is **NOT YET PERFORMED** — see the
+[official-components migration section](manual-verification-checklist.md#official-components-migration-o1o6--manual-items).
+
+## Directional shadow tokens (visual implementation V4)
+
+The visual implementation added five **named directional shadow tokens** in
+`frontend/src/app.css` to replace decorative borders with surface/shadow
+separation. They are defined in `:root` and `:root.dark` (following the existing
+`--zf-shadow-color` light/dark pattern) and mapped in `@theme` so the Tailwind
+utilities exist:
+
+| Token | `@theme` mapping | Utility | Role |
+|---|---|---|---|
+| `--zf-shadow-topbar` | `--shadow-zf-topbar` | `shadow-zf-topbar` | Top bar and tool rows |
+| `--zf-shadow-rail` | `--shadow-zf-rail` | `shadow-zf-rail` | Left rail |
+| `--zf-shadow-inspector` | `--shadow-zf-inspector` | `shadow-zf-inspector` | Inspector wrapper |
+| `--zf-shadow-status` | `--shadow-zf-status` | `shadow-zf-status` | Status bar |
+| `--zf-shadow-inset-ring` | `--shadow-zf-inset-ring` | `shadow-zf-inset-ring` | Nav/segmented groups and inspector empty state |
+
+These are structural additions in `app.css` only. **No preset JSON value and no
+generated CSS (`src/themes/generated/presets.css`) was changed**; the existing
+token documentation above is unaffected. `bun run themes:check` confirms the
+generated CSS is current. Visual verification of these shadows in an
+interactive session is **NOT YET PERFORMED** — see the visual implementation
+section of
+[manual-verification-checklist.md](manual-verification-checklist.md).
+
+## Typography (UI polish fix P6)
+
+The UI polish fix standardises typography on a dense-interface type scale —
+**12px metadata, 14px body/secondary, 16px primary and 20px section heading**,
+with two weights (400/600) and body line-height 1.4–1.6. These are applied with
+the existing Tailwind text steps (`text-xs` / `text-sm` / `text-base` /
+`text-xl`) and the existing semantic colour tokens (`--zf-faint` / `--zf-muted`
+for secondary text); off-scale font-size literals were eliminated. **No preset
+JSON value and no generated CSS (`src/themes/generated/presets.css`) was
+changed**, and no new colour token was introduced — the existing token
+documentation above is unaffected. `bun run themes:check` confirms the generated
+CSS is current. Visual verification of typography and contrast in both modes is
+**NOT YET PERFORMED** — see the UI polish fix section of
+[manual-verification-checklist.md](manual-verification-checklist.md).

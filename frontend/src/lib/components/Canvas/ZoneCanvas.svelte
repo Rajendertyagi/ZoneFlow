@@ -7,7 +7,7 @@
    * committed through the typed client on `pointerup` — never per pointermove.
    */
   import { onMount } from 'svelte';
-  import ContextMenu from '$lib/components/ui/context-menu.svelte';
+  import * as ContextMenu from '$lib/components/ui/context-menu/index.js';
   import {
     registerCanvasCommands,
     unregisterCanvasCommands,
@@ -105,6 +105,9 @@
   let mergeMode = $state(false);
   let mergeSourceId = $state<number | null>(null);
   let contextZoneId = $state<number | null>(null);
+  let menuOpen = $state(false);
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
   let dropTargetId = $state<number | null>(null);
   let preview = $state<PreviewState | null>(null);
   let interaction: Interaction | null = null;
@@ -539,6 +542,16 @@
 
   /* ------------------------------ context menu ----------------------------- */
 
+  // Keyboard opening uses the official bindable `open` state on ContextMenu.Root.
+  // Bits UI positions the menu from the trigger, so setting `menuOpen` opens it
+  // at the same anchor as a native right-click. Native right-click still works
+  // through Bits UI's own `oncontextmenu` handler — no synthetic event needed.
+  function onTriggerKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    menuOpen = true;
+  }
+
   const menuItems = $derived.by(() => {
     const zone = contextZoneId !== null ? zones.find((z) => z.id === contextZoneId) : null;
     const items: Array<{ label: string; onselect?: () => void; disabled?: boolean }> = [];
@@ -594,147 +607,162 @@
   });
 </script>
 
-<ContextMenu items={menuItems} class="relative h-full w-full">
-  <svg
-    bind:this={svgEl}
-    class="block h-full w-full select-none"
-    viewBox={`0 0 ${workArea.w} ${workArea.h}`}
-    preserveAspectRatio="xMidYMid meet"
-    role="application"
-    aria-label="Zone layout canvas"
-    onpointermove={onPointerMove}
-    onpointerup={onPointerUp}
-    onpointercancel={onPointerCancel}
-    oncontextmenu={(event) => {
-      // Letterboxed area outside the viewBox: no zone under the cursor.
-      if (event.target === svgEl) contextZoneId = null;
-    }}
+<ContextMenu.Root bind:open={menuOpen}>
+  <ContextMenu.Trigger
+    tabindex={0}
+    class={`relative block h-full w-full ${focusRing}`}
+    onkeydown={onTriggerKeydown}
   >
-    <defs>
-      <pattern
-        id="zf-grid"
-        width={workArea.w / Math.max(1, settings.grid_cols)}
-        height={workArea.h / Math.max(1, settings.grid_rows)}
-        patternUnits="userSpaceOnUse"
-      >
-        <path
-          d={`M ${workArea.w / Math.max(1, settings.grid_cols)} 0 L 0 0 0 ${workArea.h / Math.max(1, settings.grid_rows)}`}
-          fill="none"
-          stroke="var(--canvas-grid)"
-          stroke-opacity={mode === 'draw' ? 0.5 : 0.14}
-          stroke-width="1"
-        />
-      </pattern>
-    </defs>
-
-    <!-- Background / draw surface -->
-    <rect
-      x={0}
-      y={0}
-      width={workArea.w}
-      height={workArea.h}
-      fill="var(--canvas-bg)"
-      onpointerdown={onBackgroundPointerDown}
-      oncontextmenu={() => (contextZoneId = null)}
-      role="presentation"
-    />
-    <rect x={0} y={0} width={workArea.w} height={workArea.h} fill="url(#zf-grid)" class="pointer-events-none" />
-
-    {#if zones.length === 0}
-      {@const cx = workArea.w / 2}
-      {@const cy = workArea.h / 2}
-      {@const cardW = Math.min(workArea.w * 0.5, 720)}
-      {@const cardH = Math.min(workArea.h * 0.22, 180)}
-      {@const cardX = cx - cardW / 2}
-      {@const cardY = cy - cardH / 2}
-      {@const iconY = cy - cardH * 0.2}
-      {@const iconR = Math.max(16, cardH * 0.13)}
-      <g class="pointer-events-none" text-anchor="middle">
-        <!-- Quiet placeholder card. Canvas tokens only — no new colours. -->
-        <rect
-          x={cardX}
-          y={cardY}
-          width={cardW}
-          height={cardH}
-          rx={Math.max(8, cardH * 0.09)}
-          fill="var(--canvas-label-bg)"
-          fill-opacity={0.6}
-          stroke="var(--canvas-zone-stroke)"
-          stroke-opacity={0.9}
-          stroke-width={1.5}
-          stroke-dasharray={`${Math.max(8, workArea.w * 0.008)} ${Math.max(6, workArea.w * 0.006)}`}
-        />
-        <!-- "Add" affordance drawn from the preview token. -->
-        <circle
-          cx={cx}
-          cy={iconY}
-          r={iconR}
-          fill="var(--canvas-preview)"
-          fill-opacity={0.12}
-          stroke="var(--canvas-preview)"
-          stroke-opacity={0.75}
-          stroke-width={1.5}
-        />
-        <line x1={cx - iconR * 0.45} y1={iconY} x2={cx + iconR * 0.45} y2={iconY} stroke="var(--canvas-preview)" stroke-width={2.5} stroke-linecap="round" />
-        <line x1={cx} y1={iconY - iconR * 0.45} x2={cx} y2={iconY + iconR * 0.45} stroke="var(--canvas-preview)" stroke-width={2.5} stroke-linecap="round" />
-        <text
-          x={cx}
-          y={cy + cardH * 0.14}
-          fill="var(--canvas-label-fg)"
-          font-size={Math.max(16, workArea.h * 0.028)}
-          font-weight="600">No zones yet</text
+    <svg
+      bind:this={svgEl}
+      class="block h-full w-full select-none"
+      viewBox={`0 0 ${workArea.w} ${workArea.h}`}
+      preserveAspectRatio="xMidYMid meet"
+      role="application"
+      aria-label="Zone layout canvas"
+      onpointermove={onPointerMove}
+      onpointerup={onPointerUp}
+      onpointercancel={onPointerCancel}
+      oncontextmenu={(event) => {
+        // Letterboxed area outside the viewBox: no zone under the cursor.
+        if (event.target === svgEl) contextZoneId = null;
+      }}
+    >
+      <defs>
+        <pattern
+          id="zf-grid"
+          width={workArea.w / Math.max(1, settings.grid_cols)}
+          height={workArea.h / Math.max(1, settings.grid_rows)}
+          patternUnits="userSpaceOnUse"
         >
-        <text
-          x={cx}
-          y={cy + cardH * 0.34}
-          fill="var(--muted-foreground-faint)"
-          font-size={Math.max(12, workArea.h * 0.015)}>Create your first zone with Add or Draw</text
-        >
-      </g>
-    {/if}
-
-    <SnapGuides
-      {workArea}
-      points={settings.snap_points}
-      active={preview?.snap ?? null}
-      emphasized={mode === 'draw' || preview !== null}
-    />
-
-    {#each zones as zone, index (zone.id)}
-      <ZoneRect
-        {zone}
-        {index}
-        {workArea}
-        selected={selectedId === zone.id}
-        dropTarget={dropTargetId === zone.id}
-        mergeSource={mergeSourceId === zone.id}
-        {boundaries}
-        {outerHandles}
-        tolerance={settings.boundary_tolerance_pct}
-        inset={showGap ? gapWidth / 2 : 0}
-        tint={settings.zone_tints[index % Math.max(1, settings.zone_tints.length)] ?? 'var(--primary)'}
-        onBodyPointerDown={onBodyPointerDown}
-        onResizeStart={onResizeStart}
-        onZoneContextMenu={(z, event) => {
-          event.preventDefault();
-          contextZoneId = z.id;
-          // Do not overwrite `selectedId` here: "Merge into selected" needs the
-          // previously selected zone to remain the merge target. All other
-          // context actions operate on `contextZoneId` directly.
-        }}
-        onZoneDragOver={onZoneDragOver}
-        onZoneDragLeave={onZoneDragLeave}
-        onZoneDrop={onZoneDrop}
+          <path
+            d={`M ${workArea.w / Math.max(1, settings.grid_cols)} 0 L 0 0 0 ${workArea.h / Math.max(1, settings.grid_rows)}`}
+            fill="none"
+            stroke="var(--canvas-grid)"
+            stroke-opacity={mode === 'draw' ? 0.5 : 0.14}
+            stroke-width="1"
+          />
+        </pattern>
+      </defs>
+  
+      <!-- Background / draw surface -->
+      <rect
+        x={0}
+        y={0}
+        width={workArea.w}
+        height={workArea.h}
+        fill="var(--canvas-bg)"
+        onpointerdown={onBackgroundPointerDown}
+        oncontextmenu={() => (contextZoneId = null)}
+        role="presentation"
       />
+      <rect x={0} y={0} width={workArea.w} height={workArea.h} fill="url(#zf-grid)" class="pointer-events-none" />
+  
+      {#if zones.length === 0}
+        {@const cx = workArea.w / 2}
+        {@const cy = workArea.h / 2}
+        {@const cardW = Math.min(workArea.w * 0.5, 720)}
+        {@const cardH = Math.min(workArea.h * 0.22, 180)}
+        {@const cardX = cx - cardW / 2}
+        {@const cardY = cy - cardH / 2}
+        {@const iconY = cy - cardH * 0.2}
+        {@const iconR = Math.max(16, cardH * 0.13)}
+        <g class="pointer-events-none" text-anchor="middle">
+          <!-- Quiet placeholder card. Canvas tokens only — no new colours. -->
+          <rect
+            x={cardX}
+            y={cardY}
+            width={cardW}
+            height={cardH}
+            rx={Math.max(8, cardH * 0.09)}
+            fill="var(--canvas-label-bg)"
+            fill-opacity={0.6}
+            stroke="var(--canvas-zone-stroke)"
+            stroke-opacity={0.9}
+            stroke-width={1.5}
+            stroke-dasharray={`${Math.max(8, workArea.w * 0.008)} ${Math.max(6, workArea.w * 0.006)}`}
+          />
+          <!-- "Add" affordance drawn from the preview token. -->
+          <circle
+            cx={cx}
+            cy={iconY}
+            r={iconR}
+            fill="var(--canvas-preview)"
+            fill-opacity={0.12}
+            stroke="var(--canvas-preview)"
+            stroke-opacity={0.75}
+            stroke-width={1.5}
+          />
+          <line x1={cx - iconR * 0.45} y1={iconY} x2={cx + iconR * 0.45} y2={iconY} stroke="var(--canvas-preview)" stroke-width={2.5} stroke-linecap="round" />
+          <line x1={cx} y1={iconY - iconR * 0.45} x2={cx} y2={iconY + iconR * 0.45} stroke="var(--canvas-preview)" stroke-width={2.5} stroke-linecap="round" />
+          <text
+            x={cx}
+            y={cy + cardH * 0.14}
+            fill="var(--canvas-label-fg)"
+            font-size={Math.max(16, workArea.h * 0.028)}
+            font-weight="600">No zones yet</text
+          >
+          <text
+            x={cx}
+            y={cy + cardH * 0.34}
+            fill="var(--muted-foreground-faint)"
+            font-size={Math.max(12, workArea.h * 0.015)}>Create your first zone with Add or Draw</text
+          >
+        </g>
+      {/if}
+  
+      <SnapGuides
+        {workArea}
+        points={settings.snap_points}
+        active={preview?.snap ?? null}
+        emphasized={mode === 'draw' || preview !== null}
+      />
+  
+      {#each zones as zone, index (zone.id)}
+        <ZoneRect
+          {zone}
+          {index}
+          {workArea}
+          gridCols={settings.grid_cols}
+          gridRows={settings.grid_rows}
+          selected={selectedId === zone.id}
+          dropTarget={dropTargetId === zone.id}
+          mergeSource={mergeSourceId === zone.id}
+          {boundaries}
+          {outerHandles}
+          tolerance={settings.boundary_tolerance_pct}
+          inset={showGap ? gapWidth / 2 : 0}
+          tint={settings.zone_tints[index % Math.max(1, settings.zone_tints.length)] ?? 'var(--primary)'}
+          onBodyPointerDown={onBodyPointerDown}
+          onResizeStart={onResizeStart}
+          onZoneContextMenu={(z, event) => {
+            event.preventDefault();
+            contextZoneId = z.id;
+            // Do not overwrite `selectedId` here: "Merge into selected" needs the
+            // previously selected zone to remain the merge target. All other
+            // context actions operate on `contextZoneId` directly.
+          }}
+          onZoneDragOver={onZoneDragOver}
+          onZoneDragLeave={onZoneDragLeave}
+          onZoneDrop={onZoneDrop}
+        />
+      {/each}
+  
+      {#if preview}
+        <DragPreview
+          {workArea}
+          zones={preview.zones}
+          draw={preview.draw}
+          tints={settings.zone_tints}
+        />
+      {/if}
+    </svg>
+  </ContextMenu.Trigger>
+  <ContextMenu.Content aria-label="Context menu">
+    {#each menuItems as item (item.label)}
+      <ContextMenu.Item disabled={item.disabled} onSelect={() => item.onselect?.()}>
+        {item.label}
+      </ContextMenu.Item>
     {/each}
-
-    {#if preview}
-      <DragPreview
-        {workArea}
-        zones={preview.zones}
-        draw={preview.draw}
-        tints={settings.zone_tints}
-      />
-    {/if}
-  </svg>
-</ContextMenu>
+  </ContextMenu.Content>
+</ContextMenu.Root>

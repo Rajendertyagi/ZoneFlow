@@ -1,17 +1,19 @@
 <script lang="ts">
   import { RotateCcw, Save, Settings2 } from '@lucide/svelte';
-  import { api, type AppOptionsDto, type CloseAction, type SettingsDto } from '$lib/api/client';
+  import { api, type AppOptionsDto, type SettingsDto } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
   import { store } from '$lib/state/app.svelte';
   import { isValidHexColor } from '$lib/state/settings-helpers';
   import { toast } from '$lib/state/ui.svelte';
   import { errorMessage } from '$lib/state/workflow';
   import AppearanceSettings from '$lib/components/AppearanceSettings.svelte';
-  import Button from '$lib/components/ui/button.svelte';
-  import Input from '$lib/components/ui/input.svelte';
-  import Label from '$lib/components/ui/label.svelte';
-  import Select from '$lib/components/ui/select.svelte';
-  import Switch from '$lib/components/ui/switch.svelte';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { Label } from '$lib/components/ui/label/index.js';
+  import * as NativeSelect from '$lib/components/ui/native-select/index.js';
+  import { Switch } from '$lib/components/ui/switch/index.js';
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
 
   // Non-nullable so event handlers stay type-safe; `loaded` gates rendering
   // until the authoritative snapshot has seeded these values. Fields without a
@@ -116,16 +118,16 @@
         </p>
       </div>
       <div class="flex gap-2">
-        <Button variant="ghost" size="sm" onclick={reset}>
+        <Button variant="ghost" size="sm" class={`h-7 text-xs ${focusRing}`} onclick={reset}>
           <RotateCcw size={14} /> Reload
         </Button>
-        <Button size="sm" disabled={!loaded || busy} onclick={() => void save()}>
+        <Button size="sm" disabled={!loaded || busy} class={`h-9 px-4 ${focusRing}`} onclick={() => void save()}>
           <Save size={14} /> Apply settings
         </Button>
       </div>
     </div>
 
-    <p class="text-[0.7rem] leading-relaxed text-zf-muted">
+    <p class="text-xs leading-relaxed text-zf-muted">
       Settings are part of your draft. Use Save in the editor to persist them to disk.
     </p>
 
@@ -142,54 +144,54 @@
           <div class="flex flex-col gap-3">
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1.5">
-                <Label for="set-cols">Grid columns</Label>
+                <Label class="text-xs text-muted-foreground" for="set-cols">Grid columns</Label>
                 <input id="set-cols" type="number" min="1" max="24" value={settings.grid_cols}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.grid_cols = num((e.currentTarget as HTMLInputElement).value, settings.grid_cols))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">Number of vertical columns in the snapping grid.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">Number of vertical columns in the snapping grid.</p>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="set-rows">Grid rows</Label>
+                <Label class="text-xs text-muted-foreground" for="set-rows">Grid rows</Label>
                 <input id="set-rows" type="number" min="1" max="24" value={settings.grid_rows}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.grid_rows = num((e.currentTarget as HTMLInputElement).value, settings.grid_rows))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">Number of horizontal rows in the snapping grid.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">Number of horizontal rows in the snapping grid.</p>
               </div>
             </div>
             <div class="flex flex-col gap-1.5">
-              <Label for="set-snap">Snap points (% · comma separated)</Label>
-              <Input id="set-snap" bind:value={snapText} class="font-mono text-xs" />
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">Percent positions where dragged edges snap, separated by commas.</p>
+              <Label class="text-xs text-muted-foreground" for="set-snap">Snap points (% · comma separated)</Label>
+              <Input id="set-snap" bind:value={snapText} class="border border-border font-mono text-xs focus-visible:border-primary" />
+              <p class="text-xs leading-relaxed text-zf-faint">Percent positions where dragged edges snap, separated by commas.</p>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div class="flex flex-col gap-1.5">
-                <Label for="set-min">Min zone %</Label>
+                <Label class="text-xs text-muted-foreground" for="set-min">Min zone %</Label>
                 <input id="set-min" type="number" min="1" max="50" step="0.5" value={settings.min_zone_pct}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.min_zone_pct = num((e.currentTarget as HTMLInputElement).value, settings.min_zone_pct))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">Smallest zone allowed, as a percent of the work area.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">Smallest zone allowed, as a percent of the work area.</p>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="set-gap">Zone gap %</Label>
+                <Label class="text-xs text-muted-foreground" for="set-gap">Zone gap %</Label>
                 <input id="set-gap" type="number" min="0" max="20" value={options.gap}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (options.gap = num((e.currentTarget as HTMLInputElement).value, options.gap))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">Space left between neighboring zones, as a percent of the work area.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">Space left between neighboring zones, as a percent of the work area.</p>
               </div>
             </div>
             <div class="flex flex-col gap-1.5">
-              <Label for="set-tol">Boundary tolerance %</Label>
+              <Label class="text-xs text-muted-foreground" for="set-tol">Boundary tolerance %</Label>
               <input id="set-tol" type="number" min="0" max="10" step="0.1" value={settings.boundary_tolerance_pct}
                 class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                 onchange={(e) => (settings.boundary_tolerance_pct = num((e.currentTarget as HTMLInputElement).value, settings.boundary_tolerance_pct))} />
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">How close an edge must be to a guide before it snaps.</p>
+              <p class="text-xs leading-relaxed text-zf-faint">How close an edge must be to a guide before it snaps.</p>
             </div>
             <div class="flex flex-col gap-1.5">
-              <Label for="set-undo">Undo depth</Label>
+              <Label class="text-xs text-muted-foreground" for="set-undo">Undo depth</Label>
               <input id="set-undo" type="number" min="1" max="200" value={settings.undo_depth}
                 class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                 onchange={(e) => (settings.undo_depth = num((e.currentTarget as HTMLInputElement).value, settings.undo_depth))} />
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">Maximum number of edits you can undo.</p>
+              <p class="text-xs leading-relaxed text-zf-faint">Maximum number of edits you can undo.</p>
             </div>
           </div>
         </section>
@@ -201,28 +203,28 @@
             <div class="flex items-center justify-between rounded-md bg-zf-bg px-3 py-2">
               <div>
                 <p class="text-xs font-medium text-zf-text">Start with Windows</p>
-                <p class="text-[0.65rem] text-zf-faint">Start ZoneFlow automatically when you sign in to Windows.</p>
+                <p class="text-xs text-zf-faint">Start ZoneFlow automatically when you sign in to Windows.</p>
               </div>
-              <Switch checked={options.auto_start} label="Start with Windows" onchange={(v) => (options.auto_start = v)} />
+              <Switch bind:checked={options.auto_start} aria-label="Start with Windows" class={focusRing} />
             </div>
-            <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+            <p class="text-xs leading-relaxed text-zf-faint">
               Automatic launching of assigned apps at startup is not available in this version.
             </p>
             <div class="flex flex-col gap-1.5">
-              <Label for="set-close">When closing the editor</Label>
-              <Select
+              <Label class="text-xs text-muted-foreground" for="set-close">When closing the editor</Label>
+              <NativeSelect.Root
                 id="set-close"
-                value={options.close_action}
-                options={[
-                  { value: 'ask', label: 'Ask every time' },
-                  { value: 'minimize', label: 'Minimize to tray' },
-                  { value: 'exit', label: 'Exit ZoneFlow' },
-                ]}
-                onchange={(v) => (options.close_action = v as CloseAction)}
-              />
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">Choose what happens when you close this browser window.</p>
+                bind:value={options.close_action}
+                aria-label="When closing the editor"
+                class="h-9 border border-border focus-visible:border-primary"
+              >
+                <NativeSelect.Option value="ask">Ask every time</NativeSelect.Option>
+                <NativeSelect.Option value="minimize">Minimize to tray</NativeSelect.Option>
+                <NativeSelect.Option value="exit">Exit ZoneFlow</NativeSelect.Option>
+              </NativeSelect.Root>
+              <p class="text-xs leading-relaxed text-zf-faint">Choose what happens when you close this browser window.</p>
             </div>
-            <p class="rounded-md bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
+            <p class="rounded-md bg-zf-bg px-3 py-2 text-xs leading-relaxed text-zf-faint">
               Closing the browser editor never stops the background process. Exit is the only action that shuts ZoneFlow down.
             </p>
           </div>
@@ -233,22 +235,22 @@
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zf-accent">Overlay</h3>
           <div class="flex flex-col gap-3">
             <div class="flex flex-col gap-1.5">
-              <Label for="set-alpha-idle">Inactive alpha ({settings.overlay_inactive_alpha})</Label>
+              <Label class="text-xs text-muted-foreground" for="set-alpha-idle">Inactive alpha ({settings.overlay_inactive_alpha})</Label>
               <input id="set-alpha-idle" type="range" min="0" max="255" value={settings.overlay_inactive_alpha}
                 class="h-1.5 w-full cursor-pointer accent-zf-accent"
                 oninput={(e) => (settings.overlay_inactive_alpha = num((e.currentTarget as HTMLInputElement).value, settings.overlay_inactive_alpha))} />
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">Transparency of zone outlines when you are not dragging.</p>
+              <p class="text-xs leading-relaxed text-zf-faint">Transparency of zone outlines when you are not dragging.</p>
             </div>
             <div class="flex flex-col gap-1.5">
-              <Label for="set-alpha-active">Active alpha ({settings.overlay_active_alpha})</Label>
+              <Label class="text-xs text-muted-foreground" for="set-alpha-active">Active alpha ({settings.overlay_active_alpha})</Label>
               <input id="set-alpha-active" type="range" min="0" max="255" value={settings.overlay_active_alpha}
                 class="h-1.5 w-full cursor-pointer accent-zf-accent"
                 oninput={(e) => (settings.overlay_active_alpha = num((e.currentTarget as HTMLInputElement).value, settings.overlay_active_alpha))} />
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">Transparency of zone outlines while you drag a window.</p>
+              <p class="text-xs leading-relaxed text-zf-faint">Transparency of zone outlines while you drag a window.</p>
             </div>
             <div class="flex flex-col gap-1.5">
-              <Label>Zone colors</Label>
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">Colors used for zones in the editor and wizard.</p>
+              <Label class="text-xs text-muted-foreground">Zone colors</Label>
+              <p class="text-xs leading-relaxed text-zf-faint">Colors used for zones in the editor and wizard.</p>
               <div class="grid grid-cols-6 gap-2">
                 {#each settings.zone_tints as tint, i (i)}
                   <label class="flex flex-col items-center gap-1">
@@ -259,7 +261,7 @@
                       class="h-8 w-full cursor-pointer rounded border border-zf-border bg-zf-bg p-0.5"
                       onchange={(e) => setTint(i, (e.currentTarget as HTMLInputElement).value)}
                     />
-                    <span class="text-[0.6rem] text-zf-faint">Zone {i + 1}</span>
+                    <span class="text-xs text-zf-faint">Zone {i + 1}</span>
                   </label>
                 {/each}
               </div>
@@ -273,37 +275,37 @@
             <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-zf-accent">
               Advanced
             </summary>
-            <p class="mt-2 text-[0.65rem] leading-relaxed text-zf-faint">
+            <p class="mt-2 text-xs leading-relaxed text-zf-faint">
               Low-level engine tuning. The defaults work for most setups — change these only if you know what they do.
             </p>
             <div class="mt-3 flex flex-col gap-3">
               <div class="flex flex-col gap-1.5">
-                <Label for="set-retries">DWM snap retries</Label>
+                <Label class="text-xs text-muted-foreground" for="set-retries">DWM snap retries</Label>
                 <input id="set-retries" type="number" min="0" max="20" value={settings.dwm_snap_retries}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.dwm_snap_retries = num((e.currentTarget as HTMLInputElement).value, settings.dwm_snap_retries))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">How many times Windows is asked to place a window before giving up.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">How many times Windows is asked to place a window before giving up.</p>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="set-minwin">Minimum window size (px)</Label>
+                <Label class="text-xs text-muted-foreground" for="set-minwin">Minimum window size (px)</Label>
                 <input id="set-minwin" type="number" min="0" max="500" value={settings.min_window_px}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.min_window_px = num((e.currentTarget as HTMLInputElement).value, settings.min_window_px))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">Windows smaller than this are ignored when arranging.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">Windows smaller than this are ignored when arranging.</p>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="set-cap">App list cap</Label>
+                <Label class="text-xs text-muted-foreground" for="set-cap">App list cap</Label>
                 <input id="set-cap" type="number" min="10" max="2000" value={settings.app_list_cap}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.app_list_cap = num((e.currentTarget as HTMLInputElement).value, settings.app_list_cap))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">Maximum number of installed apps shown in the library.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">Maximum number of installed apps shown in the library.</p>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="set-ttl">Running apps cache (seconds)</Label>
+                <Label class="text-xs text-muted-foreground" for="set-ttl">Running apps cache (seconds)</Label>
                 <input id="set-ttl" type="number" min="0" max="600" value={settings.running_apps_ttl_secs}
                   class="h-9 rounded-md border border-zf-border bg-zf-bg px-3 text-sm text-zf-text focus-visible:border-zf-accent focus-visible:outline-none"
                   onchange={(e) => (settings.running_apps_ttl_secs = num((e.currentTarget as HTMLInputElement).value, settings.running_apps_ttl_secs))} />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">How long the running-app list is reused before it is refreshed.</p>
+                <p class="text-xs leading-relaxed text-zf-faint">How long the running-app list is reused before it is refreshed.</p>
               </div>
             </div>
           </details>

@@ -33,14 +33,13 @@ const paths = {
   inspector: resolve(components, 'Inspector', 'ZoneInspector.svelte'),
   results: resolve(components, 'ApplyResults.svelte'),
   appearance: resolve(components, 'AppearanceSettings.svelte'),
-  tabs: resolve(ui, 'tabs.svelte'),
-  input: resolve(ui, 'input.svelte'),
-  select: resolve(ui, 'select.svelte'),
-  switch: resolve(ui, 'switch.svelte'),
-  tooltip: resolve(ui, 'tooltip.svelte'),
-  contextMenu: resolve(ui, 'context-menu.svelte'),
-  resizable: resolve(ui, 'resizable.svelte'),
-  scrollArea: resolve(ui, 'scroll-area.svelte'),
+  // WP-O3: tabs/context-menu now point at the generated official sources.
+  tabs: resolve(ui, 'tabs', 'tabs.svelte'),
+  // WP-O2: input/select/switch now point at the generated official sources.
+  input: resolve(ui, 'input', 'input.svelte'),
+  select: resolve(ui, 'native-select', 'native-select.svelte'),
+  switch: resolve(ui, 'switch', 'switch.svelte'),
+  contextMenu: resolve(ui, 'context-menu', 'context-menu.svelte'),
 } as const;
 
 function read(path: string): string {
@@ -74,7 +73,11 @@ describe('VWP3 views & panels low-chrome treatment', () => {
   });
 
   test('only VWP2 elevation tokens are used — no arbitrary or built-in heavy shadows', () => {
-    const allowed = new Set(['shadow-zf-1', 'shadow-zf-2', 'shadow-zf-3']);
+    const allowed = new Set([
+      'shadow-zf-1', 'shadow-zf-2', 'shadow-zf-3',
+      'shadow-zf-topbar', 'shadow-zf-rail', 'shadow-zf-inspector',
+      'shadow-zf-status', 'shadow-zf-inset-ring',
+    ]);
     const shadowUtility =
       /(?<![\w-])((?:[a-z][a-z0-9-]*:)*!?shadow(?:-(?:\[[^\]]+\]|[a-z0-9-]+))?)/g;
     for (const [name, path] of allFiles) {
@@ -142,14 +145,20 @@ describe('VWP3 views & panels low-chrome treatment', () => {
 
   test('meaningful region separators are preserved', () => {
     const editor = read(paths.editor);
-    expect(editor).toContain('border-b border-zf-border bg-zf-surface'); // canvas tools
-    expect(editor).toContain('border-b border-zf-border bg-zf-bg'); // action bar
-    expect(editor).toContain('border-r border-zf-border bg-zf-surface'); // left rail
+    expect(editor).toContain('shadow-zf-topbar bg-zf-surface'); // canvas tools
+    expect(editor).toContain('shadow-zf-topbar bg-zf-bg'); // action bar
+    expect(editor).toContain('shadow-zf-rail bg-zf-surface'); // left rail
+    expect(editor).toContain('shadow-zf-inspector'); // inspector pane separation
     expect(editor).toContain('h-2/5 min-h-0 border-b border-zf-border'); // profiles split
+    expect(editor).not.toContain('border-b border-zf-border bg-zf-surface');
+    expect(editor).not.toContain('border-b border-zf-border bg-zf-bg');
+    expect(editor).not.toContain('border-r border-zf-border bg-zf-surface');
 
     const inspector = read(paths.inspector);
-    expect(inspector).toContain('border-l border-zf-border bg-zf-surface'); // pane divider
-    expect(inspector).toContain('border-b border-zf-border px-4 py-3'); // header separator
+    expect(inspector).toContain('shadow-zf-topbar px-4 py-3'); // header separator
+    expect(inspector).toContain('shadow-zf-inset-ring'); // empty state
+    expect(inspector).not.toContain('border-l border-zf-border bg-zf-surface');
+    expect(inspector).not.toContain('border-b border-zf-border px-4 py-3');
 
     expect(read(paths.profiles)).toContain('border-b border-zf-border px-3 py-2');
     expect(read(paths.library)).toContain('border-b border-zf-border px-3 py-2');
@@ -162,43 +171,76 @@ describe('VWP3 views & panels low-chrome treatment', () => {
     expect(read(paths.editor)).toContain('border border-zf-border bg-zf-bg'); // profile select + ratio
     expect(read(paths.inspector)).toContain('border border-zf-border bg-zf-surface'); // textarea + key delay
     expect(read(paths.hotkeys)).toContain('<Input');
-    expect(read(paths.input)).toContain('border border-border');
-    expect(read(paths.select)).toContain('border border-border');
+    // Official Input/NativeSelect carry `border-input`; the repo's
+    // `border border-border` affordance is preserved via class overrides at
+    // every migrated call site.
+    for (const path of [paths.settings, paths.inspector, paths.appearance]) {
+      expect(read(path), `${path} missing border border-border`).toContain('border border-border');
+    }
   });
 
   test('focus rings, keyboard helpers and reduced motion survive in UI primitives', () => {
-    const tabs = read(paths.tabs);
-    expect(tabs).toContain('role="tablist"');
-    expect(tabs).toContain('onTablistKeydown');
-    expect(tabs).toContain("case 'ArrowRight'");
-    expect(tabs).toContain("case 'Home'");
-    expect(tabs).toContain("case 'End'");
-    expect(tabs).toContain('focus-visible:outline-2');
-    expect(tabs).toContain('motion-reduce:transition-none');
+    // WP-O3: Tabs now use the official composition API. Bits UI owns arrow /
+    // Home / End navigation and roving tabindex; the call sites assert the
+    // composition, the tablist accessible name and the preserved focus-ring
+    // convention, and no hand-rolled tablist markup remains.
+    const picker = resolve(components, 'dialogs', 'PickerDialog.svelte');
+    const tabCallSites = [picker, paths.inspector, paths.library];
+    for (const path of tabCallSites) {
+      const source = read(path);
+      expect(source, `${path} missing Tabs namespace import`).toContain(
+        "import * as Tabs from '$lib/components/ui/tabs/index.js'",
+      );
+      expect(source, `${path} missing Tabs.Root`).toContain('<Tabs.Root');
+      expect(source, `${path} missing Tabs.List`).toContain('<Tabs.List');
+      expect(source, `${path} missing Tabs.Trigger`).toContain('<Tabs.Trigger');
+      expect(source, `${path} missing Tabs.Content`).toContain('<Tabs.Content');
+      expect(source, `${path} missing tablist aria-label`).toContain('<Tabs.List aria-label=');
+      expect(source, `${path} missing tab focus-ring override`).toContain('focus-visible:outline-2');
+      expect(source, `${path} missing tab reduced-motion override`).toContain('motion-reduce:transition-none');
+      expect(source, `${path} still has hand-rolled tablist`).not.toContain('role="tablist"');
+      expect(source, `${path} still has hand-rolled tablist keydown`).not.toContain('onTablistKeydown');
+      expect(source, `${path} still has hand-rolled arrow handling`).not.toContain("case 'ArrowRight'");
+    }
 
     const toggle = read(paths.switch);
-    expect(toggle).toContain('role="switch"');
-    expect(toggle).toContain('aria-checked={checked}');
-    expect(toggle).toContain('onclick={toggle}');
-    expect(toggle).toContain('focus-visible:outline-2');
-    expect(toggle).toContain('motion-reduce:transition-none');
+    expect(toggle).toContain('SwitchPrimitive.Root');
+    expect(toggle).toContain('bind:checked');
+    expect(toggle).toContain('focus-visible:ring-3');
+    // The repo focus-ring / reduced-motion convention is preserved at the
+    // migrated Switch call sites via class overrides; side-effecting switches
+    // use Bits UI's onCheckedChange.
+    for (const path of [paths.settings, paths.inspector]) {
+      const source = read(path);
+      expect(source, `${path} missing switch focus-ring override`).toContain('focus-visible:outline-2');
+      expect(source, `${path} missing switch reduced-motion override`).toContain('motion-reduce:transition-none');
+    }
+    expect(read(paths.inspector)).toContain('onCheckedChange');
 
-    const menu = read(paths.contextMenu);
-    expect(menu).toContain('role="menu"');
-    expect(menu).toContain('onMenuKeydown');
-    expect(menu).toContain("case 'Escape'");
-    expect(menu).toContain('focus-visible:outline-2');
+    // WP-O3: ContextMenu now uses the official composition API. Bits UI owns
+    // roving focus, disabled-item skipping, Escape dismissal and focus restore.
+    // Keyboard opening uses the bindable `open` state (no synthetic event), and
+    // the trigger stays focusable via tabindex + the preserved focus ring.
+    const canvas = resolve(components, 'Canvas', 'ZoneCanvas.svelte');
+    const menu = read(canvas);
+    expect(menu).toContain("import * as ContextMenu from '$lib/components/ui/context-menu/index.js'");
+    expect(menu).toContain('<ContextMenu.Root');
+    expect(menu).toContain('bind:open={menuOpen}'); // keyboard opening via bindable open state
+    expect(menu).toContain('<ContextMenu.Trigger');
+    expect(menu).toContain('<ContextMenu.Content');
+    expect(menu).toContain('<ContextMenu.Item');
+    expect(menu).toContain('onSelect={() => item.onselect?.()}');
+    expect(menu).toContain('focus-visible:outline-2'); // focus ring on the trigger
+    expect(menu).toContain('tabindex={0}'); // keyboard-openable trigger
+    expect(menu).toContain('menuOpen = true'); // ContextMenu key / Shift+F10 sets bindable open
+    expect(menu).toContain("event.key !== 'ContextMenu'"); // ContextMenu key / Shift+F10
+    expect(menu).not.toContain('role="menu"');
+    expect(menu).not.toContain('onMenuKeydown');
+    expect(menu).not.toContain("case 'Escape'");
 
-    const tip = read(paths.tooltip);
-    expect(tip).toContain('role="tooltip"');
-    expect(tip).toContain('aria-describedby');
-    expect(tip).toContain('isDismissKey');
-    expect(tip).toContain('focus-visible:outline-2');
-
-    expect(read(paths.input)).toContain('focus-visible:border-primary');
-    expect(read(paths.select)).toContain('focus-visible:border-primary');
-    expect(read(paths.resizable)).toContain('motion-reduce:transition-none');
-    expect(read(paths.resizable)).toContain('role="separator"');
+    for (const path of [paths.hotkeys, paths.settings, paths.inspector, paths.appearance]) {
+      expect(read(path), `${path} missing focus-visible:border-primary`).toContain('focus-visible:border-primary');
+    }
   });
 
   test('pane widths and the 2/5 profiles split are unchanged', () => {

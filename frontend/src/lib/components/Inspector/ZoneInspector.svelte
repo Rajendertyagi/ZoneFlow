@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Ban, Terminal, X } from '@lucide/svelte';
+  import { Ban, MousePointer2, Terminal, X } from '@lucide/svelte';
   import { api, type ZoneDto } from '$lib/api/client';
   import { refreshState } from '$lib/api/events';
   import { unassignApp } from '$lib/actions';
@@ -11,13 +11,15 @@
     scriptPathErrorMessage,
     validateScriptPath,
   } from '$lib/state/launcher';
-  import Badge from '$lib/components/ui/badge.svelte';
-  import Button from '$lib/components/ui/button.svelte';
-  import Input from '$lib/components/ui/input.svelte';
-  import Label from '$lib/components/ui/label.svelte';
-  import Select from '$lib/components/ui/select.svelte';
-  import Switch from '$lib/components/ui/switch.svelte';
-  import Tabs from '$lib/components/ui/tabs.svelte';
+  import { Badge } from '$lib/components/ui/badge/index.js';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { Label } from '$lib/components/ui/label/index.js';
+  import * as NativeSelect from '$lib/components/ui/native-select/index.js';
+  import { Switch } from '$lib/components/ui/switch/index.js';
+  import * as Tabs from '$lib/components/ui/tabs/index.js';
+
+  const focusRing = 'focus-visible:outline-2 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:ring-0 motion-reduce:transition-none';
 
   interface Props {
     zone: ZoneDto | null;
@@ -76,18 +78,20 @@
   }
 </script>
 
-<aside class="flex h-full min-h-0 w-full flex-col border-l border-zf-border bg-zf-surface">
-  <div class="flex items-start justify-between border-b border-zf-border px-4 py-3">
+<aside class="flex h-full min-h-0 w-full flex-col bg-zf-surface">
+  <div class="flex items-start justify-between shadow-zf-topbar px-4 py-3">
     <div class="min-w-0">
       <div class="flex items-center gap-2">
         <h3 class="text-sm font-semibold text-zf-text">Inspector</h3>
         {#if zone}
-          <Badge variant="outline" class="!px-1.5 !py-0 !text-[0.6rem]">zone {zone.id}</Badge>
+          <Badge class="bg-transparent border border-input text-muted-foreground !px-1.5 !py-0 !text-xs">zone {zone.id}</Badge>
         {/if}
       </div>
-      <p class="mt-0.5 truncate text-[0.7rem] text-zf-faint">
-        {zone ? zone.label || 'Unnamed zone' : 'Select a zone on the canvas'}
-      </p>
+      {#if zone}
+        <p class="mt-0.5 truncate text-xs text-zf-muted">
+          {zone.label || 'Unnamed zone'}
+        </p>
+      {/if}
     </div>
     <button
       type="button"
@@ -100,32 +104,32 @@
   </div>
 
   {#if !zone}
-    <div class="flex flex-1 items-center justify-center px-6 text-center">
-      <p class="text-xs leading-relaxed text-zf-faint">
-        Click a zone to edit its process, browser and macro rules here. Changes are live but stay in the draft until you Save.
-      </p>
+    <div class="flex flex-1 items-center justify-center p-4 shadow-zf-inset-ring">
+      <div class="flex max-w-xs flex-col items-center gap-2 text-center">
+        <MousePointer2 size={20} class="text-zf-faint" />
+        <h4 class="text-base font-semibold text-zf-text">No zone selected</h4>
+        <p class="text-sm leading-relaxed text-zf-muted">
+          Click a zone on the canvas to edit its process, browser and macro rules. Changes stay in the draft until you Save.
+        </p>
+      </div>
     </div>
   {:else}
-    <Tabs
-      bind:value={tab}
-      items={[
-        { value: 'process', label: 'Process' },
-        { value: 'browser', label: 'Browser' },
-        { value: 'macro', label: 'Macro' },
-        { value: 'console', label: 'Console' },
-      ]}
-      class="min-h-0 flex-1"
-    >
-      {#snippet children(value)}
-        <div class="h-full overflow-auto px-4 pb-4">
-          {#if value === 'process'}
+    <Tabs.Root bind:value={tab} class="flex min-h-0 flex-1 flex-col">
+      <Tabs.List aria-label="Inspector sections" class="flex w-full shrink-0 gap-1 border-b border-border bg-transparent p-0">
+        <Tabs.Trigger value="process" class={`px-3 py-2 ${focusRing}`}>Process</Tabs.Trigger>
+        <Tabs.Trigger value="browser" class={`px-3 py-2 ${focusRing}`}>Browser</Tabs.Trigger>
+        <Tabs.Trigger value="macro" class={`px-3 py-2 ${focusRing}`}>Macro</Tabs.Trigger>
+        <Tabs.Trigger value="console" class={`px-3 py-2 ${focusRing}`}>Console</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="process" tabindex={-1} class="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-4">
             <div class="flex flex-col gap-4">
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-label">Zone label</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-label">Zone label</Label>
                 <Input
                   id="insp-label"
                   value={zone.label}
                   placeholder="e.g. Editor"
+                  class="border border-border focus-visible:border-primary"
                   onchange={(e) => void commit({ label: textValue(e) })}
                 />
               </div>
@@ -147,14 +151,14 @@
                   {zone.path || '—'}
                 </div>
               </div>
-              <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+              <p class="text-xs leading-relaxed text-zf-muted">
                 App identity is read-only here. Use <span class="text-zf-muted">Assign app…</span> to change it — reassigning resets this zone's rules after confirmation.
               </p>
 
               <!-- Launcher script: when set, it runs instead of the EXE above. -->
               <div class="flex flex-col gap-1.5 rounded-md bg-zf-bg p-3 shadow-zf-1">
                 <span class="text-xs font-medium text-zf-text">Launcher script (.bat/.cmd)</span>
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+                <p class="text-xs leading-relaxed text-zf-muted">
                   When set, this script is executed instead of the executable. The full path above
                   becomes an optional window-identification override only — it is never launched.
                 </p>
@@ -162,11 +166,11 @@
                   id="insp-launcher"
                   value={launcherValue}
                   placeholder="C:\Scripts\launch.bat (empty = launch the EXE)"
-                  class="font-mono text-xs"
+                  class="border border-border font-mono text-xs focus-visible:border-primary"
                   onchange={onLauncherChange}
                 />
                 {#if launcherError}
-                  <p class="text-[0.65rem] text-zf-error">
+                  <p class="text-xs text-zf-error">
                     Invalid launcher: {scriptPathErrorMessage(launcherError)}
                   </p>
                 {/if}
@@ -174,38 +178,41 @@
                   <span class="text-xs text-zf-muted">Show console when running script</span>
                   <Switch
                     checked={zone.launcher_show_console}
-                    label="Show console when running script"
-                    onchange={(v) => void commit({ launcher_show_console: v })}
+                    aria-label="Show console when running script"
+                    class={focusRing}
+                    onCheckedChange={(v) => void commit({ launcher_show_console: v })}
                   />
                 </div>
               </div>
 
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-mode">Launch mode</Label>
-                <Select
+                <Label class="text-xs text-muted-foreground" for="insp-mode">Launch mode</Label>
+                <NativeSelect.Root
                   id="insp-mode"
                   value={zone.launch_mode}
-                  options={[
-                    { value: 'launch', label: 'Launch — start the app if missing' },
-                    { value: 'attach', label: 'Attach — only arrange if already running' },
-                  ]}
-                  onchange={(v) => void commit({ launch_mode: v as ZoneDto['launch_mode'] })}
-                />
-                <p class="text-[0.65rem] leading-relaxed text-zf-faint">
+                  aria-label="Launch mode"
+                  class="h-9 border border-border focus-visible:border-primary"
+                  onchange={(e) => void commit({ launch_mode: (e.currentTarget as HTMLSelectElement).value as ZoneDto['launch_mode'] })}
+                >
+                  <NativeSelect.Option value="launch">Launch — start the app if missing</NativeSelect.Option>
+                  <NativeSelect.Option value="attach">Attach — only arrange if already running</NativeSelect.Option>
+                </NativeSelect.Root>
+                <p class="text-xs leading-relaxed text-zf-muted">
                   Attach mode never launches an application. Apply only arranges running windows.
                 </p>
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-title">Window title match</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-title">Window title match</Label>
                 <Input
                   id="insp-title"
                   value={zone.title_match}
                   placeholder="Optional title substring"
+                  class="border border-border focus-visible:border-primary"
                   onchange={(e) => void commit({ title_match: textValue(e) })}
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-notes">Notes</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-notes">Notes</Label>
                 <textarea
                   id="insp-notes"
                   value={zone.notes}
@@ -219,71 +226,77 @@
                 variant="outline"
                 size="sm"
                 disabled={!zone.exe}
+                class={`h-7 text-xs ${focusRing}`}
                 onclick={() => void unassignApp(zone)}
               >
                 <Ban size={14} /> Remove assignment
               </Button>
             </div>
-          {:else if value === 'browser'}
+      </Tabs.Content>
+      <Tabs.Content value="browser" tabindex={-1} class="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-4">
             <div class="flex flex-col gap-4">
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-url">URL</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-url">URL</Label>
                 <Input
                   id="insp-url"
                   value={zone.url}
                   placeholder="https://…"
-                  class="font-mono text-xs"
+                  class="border border-border font-mono text-xs focus-visible:border-primary"
                   onchange={(e) => void commit({ url: textValue(e) })}
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-tab">Tab behavior</Label>
-                <Select
+                <Label class="text-xs text-muted-foreground" for="insp-tab">Tab behavior</Label>
+                <NativeSelect.Root
                   id="insp-tab"
                   value={zone.tab_behavior}
-                  options={[
-                    { value: 'focus_or_new', label: 'Focus existing tab, or open a new one' },
-                    { value: 'reuse_blank', label: 'Reuse a blank tab' },
-                    { value: 'ignore', label: 'Ignore tab rules' },
-                  ]}
-                  onchange={(v) => void commit({ tab_behavior: v as ZoneDto['tab_behavior'] })}
-                />
+                  aria-label="Tab behavior"
+                  class="h-9 border border-border focus-visible:border-primary"
+                  onchange={(e) => void commit({ tab_behavior: (e.currentTarget as HTMLSelectElement).value as ZoneDto['tab_behavior'] })}
+                >
+                  <NativeSelect.Option value="focus_or_new">Focus existing tab, or open a new one</NativeSelect.Option>
+                  <NativeSelect.Option value="reuse_blank">Reuse a blank tab</NativeSelect.Option>
+                  <NativeSelect.Option value="ignore">Ignore tab rules</NativeSelect.Option>
+                </NativeSelect.Root>
               </div>
-              <p class="rounded-md bg-zf-bg px-3 py-2 text-[0.7rem] leading-relaxed text-zf-faint">
+              <p class="rounded-md bg-zf-bg px-3 py-2 text-xs leading-relaxed text-zf-muted">
                 Browser rules are zone-scoped, so they belong to this profile only. Some browsers control their own windows and may ignore placement.
               </p>
             </div>
-          {:else if value === 'macro'}
+      </Tabs.Content>
+      <Tabs.Content value="macro" tabindex={-1} class="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-4">
             <div class="flex flex-col gap-4">
               <div class="flex items-center justify-between rounded-md bg-zf-bg px-3 py-2">
                 <span class="text-xs text-zf-muted">Enable macro</span>
                 <Switch
                   checked={zone.macro_enabled}
-                  label="Enable macro"
-                  onchange={(v) => void commit({ macro_enabled: v })}
+                  aria-label="Enable macro"
+                  class={focusRing}
+                  onCheckedChange={(v) => void commit({ macro_enabled: v })}
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-trigger">Trigger window title</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-trigger">Trigger window title</Label>
                 <Input
                   id="insp-trigger"
                   value={zone.trigger_title}
                   placeholder="Title that activates the macro"
+                  class="border border-border focus-visible:border-primary"
                   onchange={(e) => void commit({ trigger_title: textValue(e) })}
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-keys">Keys (AHK syntax)</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-keys">Keys (AHK syntax)</Label>
                 <Input
                   id="insp-keys"
                   value={zone.macro_text}
                   placeholder="^t"
-                  class="font-mono text-xs"
+                  class="border border-border font-mono text-xs focus-visible:border-primary"
                   onchange={(e) => void commit({ macro_text: textValue(e) })}
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <Label for="insp-delay">Key delay (ms)</Label>
+                <Label class="text-xs text-muted-foreground" for="insp-delay">Key delay (ms)</Label>
                 <input
                   id="insp-delay"
                   type="number"
@@ -295,20 +308,22 @@
                 />
               </div>
             </div>
-          {:else}
-            <div class="flex h-full flex-col gap-2">
+      </Tabs.Content>
+      <Tabs.Content value="console" tabindex={-1} class="min-h-0 flex-1 overflow-auto px-4 pb-4 pt-4">
+        <div class="flex h-full flex-col gap-2">
               <div class="flex items-center justify-between">
-                <span class="text-[0.7rem] text-zf-faint">{logs.length} recent lines</span>
+                <span class="text-xs text-zf-faint">{logs.length} recent lines</span>
                 <Button
                   variant="ghost"
                   size="sm"
+                  class={`h-7 text-xs ${focusRing}`}
                   onclick={() => void refreshState()}
                   title="Refresh from backend"
                 >
                   <Terminal size={13} /> Refresh
                 </Button>
               </div>
-              <div class="min-h-0 flex-1 overflow-auto rounded-md bg-zf-bg p-2 font-mono text-[0.7rem] leading-relaxed shadow-zf-1">
+              <div class="min-h-0 flex-1 overflow-auto rounded-md bg-zf-bg p-2 font-mono text-xs leading-relaxed shadow-zf-1">
                 {#each logs as line (line.seq)}
                   <div class="flex gap-2">
                     <span class="shrink-0 text-zf-faint">{line.seq}</span>
@@ -321,11 +336,9 @@
                   <p class="text-zf-faint">No log lines yet.</p>
                 {/each}
               </div>
-              <p class="text-[0.65rem] text-zf-faint">Live output arrives over SSE as actions run.</p>
+              <p class="text-xs text-zf-muted">Live output arrives over SSE as actions run.</p>
             </div>
-          {/if}
-        </div>
-      {/snippet}
-    </Tabs>
+      </Tabs.Content>
+    </Tabs.Root>
   {/if}
 </aside>

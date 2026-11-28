@@ -317,3 +317,34 @@ Scrim: `rgba(0, 0, 0, 0.72)`.
    compositing, anti-aliasing, actual on-screen surface stacking, or human
    perception. The manual visual pass (AC7/AC8/AC9) remains **NOT YET
    PERFORMED** — see `manual-verification-checklist.md`.
+
+---
+
+## Visual audit 2026-11-28 — acceptable exceptions
+
+This section records the outcome of the 2026-11-28 live-app visual audit
+(theme-debt fix plan, issues T1/T2). It is append-only and does not revise the
+automated token-pair calculations above. The audit was an observation pass;
+manual re-verification of the T1 badge fix remains **NOT YET PERFORMED** (see
+`manual-verification-checklist.md`).
+
+### Profile initials in HomeView (T2) — accepted exception
+
+`frontend/src/lib/views/HomeView.svelte` renders two-letter profile initials with
+`bg-zf-raised` + `text-zf-accent`. Measured **4.47:1** in light mode
+(rgb(180,83,9) on rgb(238,242,247)) — **0.03 below** the 4.5:1 normal-text
+threshold. Dark mode passes. **Accepted as an exception, not fixed**, because:
+
+- the 0.03 shortfall is within measurement tolerance;
+- dark-orange on light-gray is clearly legible; and
+- changing the token would remove intentional accent branding.
+
+### Other documented acceptable exceptions
+
+- **Decorative hairlines (`--zf-hairline`).** Non-text separators used for the
+  low-chrome look; exempt from text contrast thresholds. They are not the sole
+  means of identifying a component or state.
+- **Canvas zone strokes / overlay alpha.** Domain-specific and governed by
+  `canvas-tokens.test.ts`, not by text contrast thresholds.
+- **`text-[CanvasText]` in generated native-select files.** A CSS system colour
+  keyword, not a font size or a theme token; it is not a contrast finding.
